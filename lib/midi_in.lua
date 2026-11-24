@@ -7,8 +7,8 @@
 -- and channel pressure, and MPE's per-note bend, pressure and slide
 -- (S.lib.expression). It listens, and hears of devices and claims,
 -- through S.lib.io_ports (lib/io/ports.lua), never on a port another name
--- claims. The note tap the zones editor
--- learns through, and the key and bend state (S.midi_device,
+-- claims. The note tap the zones editor learns through and the scale
+-- editor toggles its classes through (one owner at a time), and the key and bend state (S.midi_device,
 -- S.midi_state). The functions stay global. The MIDI constants are a
 -- field of this module's table (S.lib.midi_in.MIDI) for the MIDI params in
 -- lib/params_setup.lua. Registers the cleanup step that detaches MIDI.
@@ -51,8 +51,10 @@ return function(S)
   -- The plain modes' pressures: per channel the last channel pressure (nil
   -- before the first), per key its last poly aftertouch (until its note off)
   local plain_pressure = {channel = {}, key = {}}
-  -- The note tap (set_note_tap): nil, or a function every note on goes to first
+  -- The note tap (set_note_tap): nil, or a function every note on goes to
+  -- first, and its owner's name (3.9, #900: nil exactly while the tap is)
   local note_tap = nil
+  local note_tap_owner = nil
   local tap_errors = {}
 
   -- MIDI input. Notes, velocity and pitchbend address a voice by channel
@@ -171,13 +173,42 @@ return function(S)
     return MIDI.note_off_options[params:get("midi_note_off")]
   end
 
-  -- The note tap (the zones editor's learn): while fn is set, every note on,
-  -- in any mode, goes to fn(note) first and plays nothing when fn returns
-  -- true. fn may set another tap, or none, while it runs: that takes effect
-  -- from the next note. reset_midi_input and cleanup clear it
-  function M.set_note_tap(fn)
-    if fn ~= nil and type(fn) ~= "function" then error("midi_in.set_note_tap: fn is a function or nil", 2) end
-    note_tap = fn
+  -- The note tap (the zones editor's learn, the scale editor): while fn is
+  -- set, every note on, in any mode, goes to fn(note) first and plays
+  -- nothing when fn returns true. It has an owner (3.9, #900: a name): a
+  -- set by another owner while one holds it is refused (false), the owner's
+  -- own replaces its fn; only the owner clears it (clear_note_tap). fn may
+  -- set or clear the tap while it runs: that takes effect from the next
+  -- note. reset_midi_input and cleanup clear it and tell the owner, calling
+  -- fn(nil) (tell_tap_owner)
+  function M.set_note_tap(owner, fn)
+    if type(owner) ~= "string" or owner == "" then error("midi_in.set_note_tap: owner is a non-empty string", 2) end
+    if type(fn) ~= "function" then error("midi_in.set_note_tap: fn is a function", 2) end
+    if note_tap_owner ~= nil and note_tap_owner ~= owner then return false end
+    note_tap, note_tap_owner = fn, owner
+    return true
+  end
+
+  -- Clear the tap if owner holds it (true); another owner's clear does nothing
+  function M.clear_note_tap(owner)
+    if owner == nil or owner ~= note_tap_owner then return false end
+    note_tap, note_tap_owner = nil, nil
+    return true
+  end
+
+  -- The tap's owner, or nil (no tap)
+  function M.note_tap_owner()
+    return note_tap_owner
+  end
+
+  -- Tell a cleared tap's owner (reset_midi_input and cleanup clear the tap
+  -- whoever holds it, then call this with the tap they cleared): its
+  -- fn(nil), once, contained (one that raises is reported once); the owner
+  -- may set the tap again while it is told. Each caller clears note_tap
+  -- itself, so the name stays an upvalue of the global reset_midi_input,
+  -- which the tests read (local_value("note_tap"))
+  local function tell_tap_owner(told)
+    if told then S.lib.ui_frame.contained_call(tap_errors, 2, "midi note tap's owner told", told, nil) end
   end
 
   -- Release every MIDI note: the keys and the plain pressures forgotten,
@@ -216,9 +247,10 @@ return function(S)
     end
   end
 
-  -- Re-center every bent voice, clear the note tap and release every MIDI
-  -- note: called when the port or channel mode changes or the device goes
-  -- away, since the bend returns and note offs will not arrive
+  -- Re-center every bent voice, release every MIDI note and clear the note
+  -- tap, telling its owner (last, so it sees the notes released): called
+  -- when the port or channel mode changes or the device goes away, since
+  -- the bend returns and note offs will not arrive
   function reset_midi_input()
     for i = 1, NUM_VOICES do
       if S.midi_state.bend[i] ~= 1 then
@@ -226,8 +258,10 @@ return function(S)
         if S.voices[i].active then engine.setVoiceParam(i - 1, "bend", 1) end
       end
     end
-    note_tap = nil
     release_held_notes(false)
+    local told = note_tap
+    note_tap, note_tap_owner = nil, nil
+    tell_tap_owner(told)
   end
 
   -- All notes off (CC 123) and all sound off (CC 120): release every held
@@ -610,13 +644,16 @@ return function(S)
     end)
   end)
 
-  -- Stop listening to MIDI before the voices go off and clear the note tap
-  -- (S.lib.io_ports' own step, after this one, hands hot-plug back; SLEEP
+  -- Stop listening to MIDI before the voices go off and clear the note tap,
+  -- telling its owner (the editors' own steps, earlier, have cleared theirs;
+  -- S.lib.io_ports' own step, after this one, hands hot-plug back; SLEEP
   -- runs only cleanup(), #468)
   S.register_cleanup(S.constants.CLEANUP_ORDER.midi_handler, function()
     if listening_port then S.lib.io_ports.unlisten(listening_port, "midi_in") end
     listening_port = nil
-    note_tap = nil
+    local told = note_tap
+    note_tap, note_tap_owner = nil, nil
+    tell_tap_owner(told)
   end)
 
   -- A key is down on a voice exactly while some channel's note on lists the

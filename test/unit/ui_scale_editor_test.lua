@@ -131,16 +131,47 @@ test("a MIDI note toggles its class while the editor is open, and plays nothing"
   S.lib.notes.play = real_play
 end)
 
--- Fix round 1: reset_midi_input clears the note tap without telling the
--- editor; its next draw sets it again (every path that resets the input
--- also asks for a redraw: a port's removal, the MIDI params' actions)
-test("the note tap is set again at the next draw after reset_midi_input", function()
-  local context, S, editor = loaded()
+-- 3.9 (#900): reset_midi_input clears the note tap and tells its owner
+-- (fn(nil)); the open editor takes the tap back at once, with no draw
+-- (3.8's fix round 1 set it again at the next draw)
+test("a MIDI reset tells the scale editor, which takes its tap back at once", function()
+  local context, S = loaded()
+  local owner = S.lib.ui_scale_editor.SCALE_EDITOR.tap_owner
+  assert_equal(S.lib.midi_in.note_tap_owner(), owner, "open: the tap is the editor's")
   reset_midi_input()
-  request_redraw()
+  assert_equal(S.lib.midi_in.note_tap_owner(), owner, "told, it took the tap back")
+  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 1 })
+  assert_equal(params:get("scale_mask"), 4095 - 64, "F# toggled after the reset, with no draw between")
+end)
+
+-- 3.9 (#900): only the editor on top takes notes. SEQ's step editor (the
+-- one owner a grid pushes over it) covers it: a note then toggles no class
+-- the player cannot see and plays as with no tap; uncovered, the editor
+-- takes notes again, with nothing set at a draw
+test("a note while the step editor covers the scale editor toggles no scale class", function()
+  local context, S = loaded()
+  assert_true(S.lib.pages_seq.open_step_editor(1, 1, 1), "the step editor opens over the scale editor")
   next_frame(context)
   context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 1 })
-  assert_equal(params:get("scale_mask"), 4095 - 64, "F# toggled after the reset")
+  assert_equal(params:get("scale_mask"), 4095, "covered: F# is not toggled")
+  assert_true(params:string("scale") ~= "custom", "and the scale is not made custom")
+  assert_true(S.midi_state.held[1][1 * 128 + 66], "the note plays on voice 1, as with no tap: its key is down")
+  context.midi.send(1, { type = "note_off", note = 66, vel = 0, ch = 1 })
+  S.lib.pages_seq.close_step_editor(1)
+  context.midi.send(1, { type = "note_on", note = 66, vel = 100, ch = 1 })
+  assert_equal(params:get("scale_mask"), 4095 - 64, "uncovered: the editor takes the note again")
+end)
+
+-- 3.9 (#900): the tap is set once, at open; no draw sets it (a reset tells
+-- the editor, which takes it back then)
+test("the scale editor sets its note tap at open and at no draw", function()
+  local context, S = loaded()
+  local sets = 0
+  local real_set = S.lib.midi_in.set_note_tap
+  S.lib.midi_in.set_note_tap = function(...) sets = sets + 1; return real_set(...) end
+  for _ = 1, 3 do request_redraw(); next_frame(context) end
+  S.lib.midi_in.set_note_tap = real_set
+  assert_equal(sets, 0, "no draw sets the tap")
 end)
 
 test("in 19 equal the scale and notes rows show -- and change nothing", function()
@@ -290,11 +321,14 @@ end)
 test("cleanup closes the editor and clears the note tap", function()
   local _, S, editor = loaded()
   assert_true(editor.is_open(), "open")
-  local taps = {}
-  S.lib.midi_in.set_note_tap = function(fn) taps[#taps + 1] = fn == nil and "cleared" or "set" end
+  assert_equal(S.lib.midi_in.note_tap_owner(), editor.SCALE_EDITOR.tap_owner, "the note tap is the editor's")
+  local cleared = {}
+  local real_clear = S.lib.midi_in.clear_note_tap
+  S.lib.midi_in.clear_note_tap = function(owner) cleared[#cleared + 1] = owner; return real_clear(owner) end
   cleanup()
   assert_true(not editor.is_open(), "closed at cleanup")
   assert_equal(S.lib.ui_modal.top(), nil, "its owner is off the stack")
-  assert_equal(taps[#taps], "cleared", "the note tap cleared")
+  assert_equal(cleared[1], editor.SCALE_EDITOR.tap_owner, "the editor cleared its own tap")
+  assert_equal(S.lib.midi_in.note_tap_owner(), nil, "the note tap is no one's")
 end)
 end

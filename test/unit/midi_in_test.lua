@@ -1496,7 +1496,7 @@ test("a note tap consumes the notes it takes, and their note offs", function()
   local midi_in = S.lib.midi_in
   params:set("midi_note_off", 2)
   local seen = {}
-  midi_in.set_note_tap(function(note) table.insert(seen, note); return true end)
+  midi_in.set_note_tap("test", function(note) if note then table.insert(seen, note) end return note ~= nil end)
   context.clear_engine_calls()
   note_on(context, 3, 60)
   assert_equal(#seen, 1); assert_equal(seen[1], 60, "the tap gets the note")
@@ -1507,18 +1507,18 @@ test("a note tap consumes the notes it takes, and their note offs", function()
   assert_equal(#context.engine_calls, 0, "the note offs do nothing")
   assert_true(S.voices[1].active, "voice 1 runs on")
   -- a tap that takes nothing lets the note play
-  midi_in.set_note_tap(function() return false end)
+  midi_in.set_note_tap("test", function() return false end)
   note_on(context, 3, 60)
   assert_true(S.voices[3].active, "a refused note plays")
-  -- nil: every note plays
-  midi_in.set_note_tap(nil)
+  -- cleared: every note plays
+  midi_in.clear_note_tap("test")
   note_on(context, 4, 60)
   assert_true(S.voices[4].active)
   -- a tap that clears itself while it runs consumes its note; the next plays
   seen = {}
-  midi_in.set_note_tap(function(note)
+  midi_in.set_note_tap("test", function(note)
     table.insert(seen, note)
-    midi_in.set_note_tap(nil)
+    midi_in.clear_note_tap("test")
     return true
   end)
   context.clear_engine_calls()
@@ -1530,8 +1530,8 @@ test("a note tap consumes the notes it takes, and their note offs", function()
   assert_true(S.voices[5].active, "the consumed note's note off does nothing")
   -- a tap that sets another: the new one takes the next note
   local second = {}
-  midi_in.set_note_tap(function(note)
-    midi_in.set_note_tap(function(next_note) table.insert(second, next_note); return true end)
+  midi_in.set_note_tap("test", function(note)
+    midi_in.set_note_tap("test", function(next_note) if next_note then table.insert(second, next_note) end return next_note ~= nil end)
     return true
   end)
   note_on(context, 6, 60); note_on(context, 6, 61)
@@ -1542,7 +1542,7 @@ test("a note tap consumes the notes it takes, and their note offs", function()
   S.selected_voice = 7
   note_on(context, 2, 60)
   assert_true(S.voices[7].active, "the mode change cleared the tap")
-  midi_in.set_note_tap(function(note) table.insert(second, note); return true end)
+  midi_in.set_note_tap("test", function(note) if note then table.insert(second, note) end return note ~= nil end)
   note_on(context, 3, 64)
   assert_equal(second[2], 64, "mpe selected: the tap takes the note")
   assert_equal(S.lib.notes.held(7), 1)
@@ -1554,6 +1554,197 @@ test("a note tap consumes the notes it takes, and their note offs", function()
   cleanup()
   midi_event(midi.to_data({ type = "note_on", note = 71, vel = 100, ch = 9 }))
   assert_equal(#second, 3, "after cleanup the tap is gone")
+end)
+
+-- 3.9 (#900): the note tap's table (docs/notes/lua/midi.md, Machines, note
+-- tap). Both states start in mpe selected (its mode change is a reset, so
+-- it comes first), so the layout hook acts; the holder's tap records what
+-- it hears in context.heard ("told" for its fn(nil)) and takes a note while
+-- context.take is true. A note is channel 2's 60, routed to the selected voice
+local TAP_HOLDER, TAP_OTHER = "holder", "other"
+local function tap_enter(held)
+  return function(context)
+    local S = local_value("S")
+    params:set("midi_channel_mode", 3)
+    context.heard, context.take = {}, true
+    context.holder_tap = function(note)
+      context.heard[#context.heard + 1] = note == nil and "told" or note
+      return note ~= nil and context.take
+    end
+    if held then assert_true(S.lib.midi_in.set_note_tap(TAP_HOLDER, context.holder_tap), "the holder sets it") end
+  end
+end
+local function tap_note_key(S) return S.midi_state.held[S.selected_voice][key_of(2, 60)] end
+local function tap_checks(want)
+  return function(context)
+    local S = local_value("S")
+    local midi_in = S.lib.midi_in
+    if want.owner ~= nil then assert_equal(midi_in.note_tap_owner(), want.owner or nil, "the owner") end
+    if want.heard then
+      assert_equal(table.concat(context.heard, ","), want.heard, "what the holder's tap heard")
+    end
+    if want.key ~= nil then
+      assert_equal(tap_note_key(S) == true, want.key, "the note's key " .. (want.key and "is" or "is not") .. " down")
+    end
+    if want.next_note then
+      -- the tap in force now takes the next note (or none does)
+      context.heard = {}
+      note_on(context, 2, 62)
+      assert_equal(table.concat(context.heard, ","), want.next_note, "the next note goes to")
+    end
+  end
+end
+h.transition_table({
+  name = "note tap",
+  notes = {"docs/notes/lua/midi.md", "note tap"},
+  states = { none = tap_enter(false), set = tap_enter(true) },
+  events = {
+    ["set"] = function(context)
+      local midi_in = local_value("S").lib.midi_in
+      context.replaced = function(note) context.heard[#context.heard + 1] = "new " .. tostring(note); return note ~= nil end
+      context.set_result = midi_in.set_note_tap(TAP_HOLDER, context.replaced)
+    end,
+    ["set by another owner"] = function(context)
+      local midi_in = local_value("S").lib.midi_in
+      context.set_result = midi_in.set_note_tap(TAP_OTHER, function(note)
+        context.heard[#context.heard + 1] = "other " .. tostring(note); return note ~= nil
+      end)
+    end,
+    ["cleared by the holder"] = function(context)
+      context.clear_result = local_value("S").lib.midi_in.clear_note_tap(TAP_HOLDER)
+    end,
+    ["cleared by another owner"] = function(context)
+      context.clear_result = local_value("S").lib.midi_in.clear_note_tap(TAP_OTHER)
+    end,
+    ["note on, taken"] = function(context) context.take = true; note_on(context, 2, 60) end,
+    ["note on, not taken"] = function(context) context.take = false; note_on(context, 2, 60) end,
+    ["a reset"] = function() reset_midi_input() end,
+    ["the MPE layout hook"] = function() params:set("mpe_lower_members", 3) end,
+    ["cleanup"] = function() cleanup() end,
+  },
+  state_of = function()
+    local owner, tap = local_value("S").lib.midi_in.note_tap_owner(), local_value("note_tap")
+    if (owner == nil) ~= (tap == nil) then return "owner " .. tostring(owner) .. " and tap " .. tostring(tap) .. " disagree" end
+    return owner == nil and "none" or "set"
+  end,
+  rows = {
+    {"none", "set", "set", check = function(context)
+      assert_equal(context.set_result, true, "the set is taken")
+      tap_checks({owner = TAP_HOLDER, next_note = "new 62"})(context)
+    end},
+    {"none", "set by another owner", "set", check = function(context)
+      assert_equal(context.set_result, true, "taken: no owner held it")
+      tap_checks({owner = TAP_OTHER, next_note = "other 62"})(context)
+    end},
+    {"none", "cleared by the holder", "none", check = function(context)
+      assert_equal(context.clear_result, false, "nothing to clear")
+    end},
+    {"none", "cleared by another owner", "none", check = function(context)
+      assert_equal(context.clear_result, false, "nothing to clear")
+    end},
+    {"none", "note on, not taken", "none", check = tap_checks({heard = "", key = true})},
+    {"none", "a reset", "none", check = tap_checks({heard = ""})},
+    {"none", "the MPE layout hook", "none", check = tap_checks({heard = ""})},
+    {"none", "cleanup", "none", check = tap_checks({heard = ""})},
+    {"set", "set", "set", check = function(context)
+      assert_equal(context.set_result, true, "the holder's own set replaces its tap")
+      tap_checks({owner = TAP_HOLDER, heard = "", next_note = "new 62"})(context)
+    end},
+    {"set", "set by another owner", "set", check = function(context)
+      assert_equal(context.set_result, false, "refused")
+      tap_checks({owner = TAP_HOLDER, heard = "", next_note = "62"})(context)
+    end},
+    {"set", "cleared by the holder", "none", check = function(context)
+      assert_equal(context.clear_result, true, "cleared")
+      tap_checks({heard = "", next_note = ""})(context)
+    end},
+    {"set", "cleared by another owner", "set", check = function(context)
+      assert_equal(context.clear_result, false, "nothing cleared")
+      tap_checks({owner = TAP_HOLDER, heard = "", next_note = "62"})(context)
+    end},
+    {"set", "note on, taken", "set", check = tap_checks({heard = "60", key = false})},
+    {"set", "note on, not taken", "set", check = tap_checks({heard = "60", key = true})},
+    {"set", "a reset", "none", check = tap_checks({heard = "told", next_note = ""})},
+    {"set", "the MPE layout hook", "set", check = tap_checks({owner = TAP_HOLDER, heard = "", next_note = "62"})},
+    {"set", "cleanup", "none", check = tap_checks({heard = "told"})},
+  },
+  impossible = {
+    {"none", "note on, taken", "with no tap, tapped returns false before any function could take the note"},
+  },
+})
+
+-- 3.9 (#900): the tap has an owner. A clear by another owner does nothing,
+-- and a set by another owner is refused while one holds it
+test("the note tap is set and cleared by its owner only", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local midi_in = S.lib.midi_in
+  local mine = {}
+  assert_equal(midi_in.note_tap_owner(), nil, "no owner at the start")
+  assert_equal(midi_in.set_note_tap("mine", function(note) mine[#mine + 1] = note; return true end), true)
+  assert_equal(midi_in.note_tap_owner(), "mine")
+  assert_equal(midi_in.set_note_tap("other", function() return true end), false, "another owner's set is refused")
+  assert_equal(midi_in.clear_note_tap("other"), false, "another owner's clear does nothing")
+  assert_equal(midi_in.clear_note_tap(nil), false)
+  note_on(context, 3, 60)
+  assert_equal(mine[1], 60, "the owner's tap still takes the note")
+  assert_true(not S.voices[3].active, "and nothing plays")
+  assert_equal(midi_in.set_note_tap("mine", function() return false end), true, "the owner replaces its own tap")
+  note_on(context, 3, 61)
+  assert_true(S.voices[3].active, "the new tap takes nothing: the note plays")
+  assert_equal(midi_in.clear_note_tap("mine"), true, "the owner clears it")
+  assert_equal(midi_in.note_tap_owner(), nil)
+  assert_equal(midi_in.set_note_tap("other", function() return true end), true, "then another owner may set it")
+  for _, bad in ipairs({ { nil, function() end }, { "", function() end }, { 3, function() end }, { "x", nil },
+      { "x", 3 } }) do
+    assert_true(not pcall(midi_in.set_note_tap, bad[1], bad[2]), "refused: " .. tostring(bad[1]) .. ", " .. tostring(bad[2]))
+  end
+  assert_equal(midi_in.note_tap_owner(), "other", "a refused set changes nothing")
+end)
+
+-- 3.9 (#900): reset_midi_input clears the tap and tells its owner, calling
+-- its fn(nil) once, after the notes are released; the owner may take it
+-- back while told. Cleanup tells it too
+test("a MIDI reset tells the tap's owner", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local midi_in = S.lib.midi_in
+  local heard = {}
+  local function tap(note)
+    heard[#heard + 1] = note == nil and "told" or note
+    if note == nil then heard.owner_then, heard.held_then = midi_in.note_tap_owner(), next(S.midi_state.held[1]) end
+    return note ~= nil
+  end
+  params:set("midi_note_off", 2)
+  note_on(context, 1, 60)  -- a key down on voice 1, before the tap
+  midi_in.set_note_tap("mine", tap)
+  params:set("midi_channel_mode", 2)  -- a reset
+  assert_equal(#heard, 1, "told once"); assert_equal(heard[1], "told", "with fn(nil)")
+  assert_equal(heard.owner_then, nil, "the tap is cleared before the owner is told")
+  assert_equal(heard.held_then, nil, "and the notes released")
+  assert_equal(midi_in.note_tap_owner(), nil, "the tap is no one's after")
+  -- an owner told may take the tap back
+  heard = {}
+  midi_in.set_note_tap("mine", function(note)
+    if note == nil then midi_in.set_note_tap("mine", tap) end
+    return false
+  end)
+  reset_midi_input()
+  assert_equal(midi_in.note_tap_owner(), "mine", "taken back while told")
+  note_on(context, 2, 62)
+  assert_equal(heard[1], 62, "the tap it set takes the next note")
+  -- a told owner that raises is reported once, and the reset is done
+  midi_in.clear_note_tap("mine")
+  midi_in.set_note_tap("mine", function(note) if note == nil then error("told") end return false end)
+  reset_midi_input()
+  assert_equal(#context.take_script_errors(), 1, "the raise is reported")
+  assert_equal(midi_in.note_tap_owner(), nil, "and the tap cleared")
+  -- cleanup tells the owner too
+  heard = {}
+  midi_in.set_note_tap("mine", tap)
+  cleanup()
+  assert_equal(heard[1], "told", "cleanup told the owner")
+  assert_equal(midi_in.note_tap_owner(), nil)
 end)
 
 test("an old PSET's note off: 1 loads latch, 2 release, 3 release", function()

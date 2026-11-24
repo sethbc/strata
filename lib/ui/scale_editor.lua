@@ -6,7 +6,7 @@
 -- the tunings folder's files). E2 the row, E3 the value (on notes the class
 -- under the cursor, on tuning a dim pending choice), K3 toggles a class or
 -- applies the pending tuning, K2 closes. A MIDI note toggles its class
--- while it is open (the MIDI module's note tap, re-armed at each draw). In
+-- while it is open and on top (the MIDI module's note tap, its owner). In
 -- a tuning that is not twelve notes to an octave the scale and notes rows
 -- show -- and change nothing. Fields of this module's table: open, close,
 -- is_open, note, SCALE_EDITOR; cleanup closes it. See docs/notes/lua/ui/scale-editor.md.
@@ -26,7 +26,7 @@ return function(S)
   local SCALE_EDITOR = {visible = 6, first_y = 18, spacing = 7, value_right = 124,
     class_x = 28, class_spacing = 8, classes = 12, value_gap = 4,
     levels = {selected = 15, row = 8, other = 4, pending = 4},
-    absent = "--", sharp = "#", out = "."}
+    absent = "--", sharp = "#", out = ".", tap_owner = "scale editor"}
   M.SCALE_EDITOR = SCALE_EDITOR
 
   local ROWS = {
@@ -75,17 +75,27 @@ return function(S)
     return true
   end
 
-  -- The note tap: while the editor is open and the scale applies, a note on
-  -- toggles its class (its distance from degree 0's key, in semitones,
-  -- modulo twelve) and is taken (true), so it plays nothing
+  -- The note tap (its owner SCALE_EDITOR.tap_owner, 3.9's #900): while the
+  -- editor is open, on top and the scale applies, a note on toggles its
+  -- class (its distance from degree 0's key, in semitones, modulo twelve)
+  -- and is taken (true), so it plays nothing. While another owner covers it
+  -- (SEQ's step editor) it takes no note, which plays as with no tap.
+  -- nil is the MIDI module telling the owner it cleared the tap (a reset):
+  -- the open editor takes it back at once
+  local owner
+  local function arm_tap() S.lib.midi_in.set_note_tap(SCALE_EDITOR.tap_owner, M.note) end
+
   function M.note(note)
+    if note == nil then
+      if editor.open then arm_tap() end
+      return false
+    end
     if not editor.open or type(note) ~= "number" or not scale_rows() then return false end
+    if S.lib.ui_modal.top() ~= owner then return false end
     local class = (note - tuning().TUNING.root_key - variation().root()) % SCALE_EDITOR.classes
     toggle_class(class)
     return true
   end
-
-  local function arm_tap() S.lib.midi_in.set_note_tap(M.note) end
 
   ---------------------------------------------------------------------------
   -- The tuning row
@@ -138,10 +148,8 @@ return function(S)
   end
 
   ---------------------------------------------------------------------------
-  -- The modal owner
+  -- The modal owner (declared above M.note, which reads it)
   ---------------------------------------------------------------------------
-
-  local owner
 
   local function note_name(class)
     return musicutil.NOTE_NAMES[(variation().root() + class) % SCALE_EDITOR.classes + 1]
@@ -196,7 +204,6 @@ return function(S)
 
   local function draw()
     if not editor.open then return end
-    arm_tap()  -- reset_midi_input clears the tap: each draw sets it again
     field_list.draw(ROWS, editor.row, {visible = SCALE_EDITOR.visible, first_y = SCALE_EDITOR.first_y,
       spacing = SCALE_EDITOR.spacing, value_right = SCALE_EDITOR.value_right}, draw_row)
   end
@@ -259,7 +266,7 @@ return function(S)
   owner = {draw = draw, hints = hints, enc = enc, key = key}
 
   -- Open the editor over the page (from SETUP's scale & tuning row): the
-  -- tuning row's choices listed once, nothing pending, the note tap set;
+  -- tuning row's choices listed once, nothing pending, the note tap taken (refused while another owner holds it);
   -- already open, nothing
   function M.open()
     if editor.open then return end
@@ -276,7 +283,7 @@ return function(S)
     if not editor.open then return end
     editor.open = false
     editor.pending, editor.reason = nil, nil
-    S.lib.midi_in.set_note_tap(nil)
+    S.lib.midi_in.clear_note_tap(SCALE_EDITOR.tap_owner)
     S.lib.ui_modal.pop(owner)
   end
 

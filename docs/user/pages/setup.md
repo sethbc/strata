@@ -55,7 +55,7 @@ K2:back E3:value
 - **E2** - Move to the next or previous row
 - **E3** - Change the value under the cursor
 - **K3** - On a voice row, move to the next column (zone, lowest, highest)
-- **ALT+K3** - On a voice row, learn its range: play two notes within 10 seconds, the lowest and the highest (in either order). The header says `learn v3 low`, then `learn v3 high`, and the column waiting reads `learn`. The two notes only set the range: neither plays
+- **ALT+K3** - On a voice row, learn its range: play two notes within 10 seconds, the lowest and the highest (in either order). The header says `learn v3 low`, then `learn v3 high`, and the column waiting reads `learn`. The two notes only set the range: neither plays. While SEQ's step editor is open over the editor (from a grid) a note is not learned and plays as usual; a learn waiting ends when the MIDI input resets (a change of port, channel mode or note off mode, or the device unplugged)
 - **K2** - Back to SETUP (a learn still waiting ends)
 
 ## Scale and tuning
@@ -72,7 +72,7 @@ K2:back E3:note K3:F#
 ```
 
 - **root** and **scale** - E3 changes them, as PARAMETERS > scale does
-- **notes** - the scale's twelve notes from the root: a note's letter (or `#` for a sharp) when it is in the scale, `.` when it is not. E3 moves along them, K3 turns the one under the cursor in or out (the hint row names it). Under a built-in scale (or off) the first toggle copies the scale into **custom** and changes that; the last note cannot be turned out. While the editor is open a MIDI note toggles its note the same way and plays nothing
+- **notes** - the scale's twelve notes from the root: a note's letter (or `#` for a sharp) when it is in the scale, `.` when it is not. E3 moves along them, K3 turns the one under the cursor in or out (the hint row names it). Under a built-in scale (or off) the first toggle copies the scale into **custom** and changes that; the last note cannot be turned out. While the editor is open a MIDI note toggles its note the same way and plays nothing, but not while SEQ's step editor is open over it (from a grid): then the note plays as usual
 - **tuning** - E3 steps through the built-in tunings, then your `.scl` files in `data/strata/tunings/` (listed when the editor opens), shown dim until K3 applies the one shown. A file Strata cannot read is refused and the hint row says why
 - In a tuning that is not twelve notes to an octave, **scale** and **notes** show `--` and do nothing: every tone of the tuning is allowed, and MIDI notes play
 - **E2** - move between the rows
