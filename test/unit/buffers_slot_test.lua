@@ -42,13 +42,12 @@ local function wake(context, role)
   wake_buffer_clock(context, SLOT)
 end
 
--- Every state starts here: a file loaded and reported, a replace take of it
+-- Most states start here: a file loaded and reported, a replace take of it
 -- recorded (its "recording" report heard), stopped and settled from its
 -- length (its "ended" report and a failed write of it may still come),
 -- then a load the clear forgets in flight (its failure may still come).
--- So the slot is empty, its newest recording is take 1, and each event
--- that names an older load, an untracked one or a late report has a real
--- one to name
+-- The restoring states and `missing` start from a fresh script instead,
+-- as init's restore does
 local function prelude(context)
   load_buffer(SLOT, "/tmp/first.wav"); report(context, OLD_AUDIO)
   record_buffer(SLOT); record_report(context, RECORD_RECORDING)
@@ -82,7 +81,7 @@ local function high_tier(context)
 end
 
 -- buffers.data naming `path` for the slot, then the restore read again
--- (load_buffers_from_disk, as init's start step runs it)
+-- (load_buffers_from_disk, as init's start step runs it, on a fresh script)
 local function restore(context, path, exists, long)
   local S = S_()
   util.make_dir(S.lib.scenes.scene_data_dir)
@@ -97,6 +96,12 @@ local function restore(context, path, exists, long)
 end
 
 local function kept_path(context) return context.audio_dir .. "kept.wav" end
+
+local function dub(context) with_params({record_feedback = 50}, function() record_buffer(SLOT) end) end
+local function loop(context) with_params({record_loop = 2}, function() record_buffer(SLOT) end) end
+local function armed_dub(context)
+  with_params({record_feedback = 50, record_threshold = 2}, function() record_buffer(SLOT) end)
+end
 
 local STATES = {
   ["empty"] = prelude,
@@ -123,14 +128,37 @@ local STATES = {
     prelude(context); high_tier(context); load_file(context)
     load_buffer(SLOT, "/tmp/long1.wav"); load_buffer(SLOT, "/tmp/long2.wav")
   end,
-  ["loading, restoring"] = function(context)
-    prelude(context); restore(context, kept_path(context), true)
+  ["loading, checking, empty before"] = function(context)
+    prelude(context); high_tier(context)
+    load_buffer(SLOT, "/tmp/long1.wav"); load_buffer(SLOT, "/tmp/long2.wav")
   end,
-  ["loading, zero awaited, restoring"] = function(context)
-    prelude(context); load_file(context); restore(context, kept_path(context), true)
+  ["loading, restoring"] = function(context) restore(context, kept_path(context), true) end,
+  -- the restore, then a synced take, during which the restore's audio is
+  -- reported (6 s), then a bad load that cancels the take (engine row 9)
+  -- and fails: the take had not prepared the slot, so what it replaced
+  -- comes back, with no load tracked (the recording emptied the list)
+  ["loading, restoring, no load tracked"] = function(context)
+    restore(context, kept_path(context), true)
+    with_params({record_sync = 2}, function() record_buffer(SLOT) end)
+    report(context, AUDIO)
+    load_buffer(SLOT, "/tmp/bad.wav")
+    record_report(context, RECORD_CANCELED); report(context, AUDIO)
+    load_failed(context, buffer().loads_sent)
   end,
   ["loading, checking, restoring"] = function(context)
-    prelude(context); high_tier(context); load_file(context); restore(context, kept_path(context), true, true)
+    S_().performance.buffer_seconds = HIGH_SECONDS
+    restore(context, kept_path(context), true, true)
+  end,
+  -- the restore's check, then four bad loads (the fourth pushes the
+  -- restore's own out of the list, BUFFER_SETTLE.tracked_loads), failing
+  -- in the order sent: the last one's undo gives the check back, with no
+  -- load tracked, the restore's load forgotten in flight
+  ["loading, checking, restoring, no load tracked"] = function(context)
+    S_().performance.buffer_seconds = HIGH_SECONDS
+    restore(context, kept_path(context), true, true)
+    for index = 2, 5 do load_buffer(SLOT, "/tmp/bad" .. index .. ".wav") end
+    for number = 2, 5 do load_failed(context, number) end
+    context.forgotten_load = 1
   end,
   ["armed, unprepared"] = function(context)
     prelude(context); load_file(context)
@@ -140,19 +168,15 @@ local STATES = {
     prelude(context); load_file(context)
     with_params({record_threshold = 2}, function() record_buffer(SLOT) end)
   end,
-  ["armed, playable"] = function(context)
-    prelude(context); load_file(context)
-    with_params({record_feedback = 50, record_threshold = 2}, function() record_buffer(SLOT) end)
+  ["armed, playable"] = function(context) prelude(context); load_file(context); armed_dub(context) end,
+  ["armed, playable, stopped"] = function(context)
+    prelude(context); load_file(context); armed_dub(context); record_buffer(SLOT)
   end,
   ["recording"] = function(context) prelude(context); record_buffer(SLOT) end,
-  ["dub"] = function(context)
-    prelude(context); load_file(context)
-    with_params({record_feedback = 50}, function() record_buffer(SLOT) end)
-  end,
-  ["loop"] = function(context)
-    prelude(context); load_file(context)
-    with_params({record_loop = 2}, function() record_buffer(SLOT) end)
-  end,
+  ["dub"] = function(context) prelude(context); load_file(context); dub(context) end,
+  ["dub, stopped"] = function(context) prelude(context); load_file(context); dub(context); record_buffer(SLOT) end,
+  ["loop"] = function(context) prelude(context); load_file(context); loop(context) end,
+  ["loop, stopped"] = function(context) prelude(context); load_file(context); loop(context); record_buffer(SLOT) end,
   ["finishing, recorded"] = function(context)
     prelude(context); record_buffer(SLOT); wake(context, "take")
   end,
@@ -161,11 +185,18 @@ local STATES = {
     with_params({record_sync = 2}, function() record_buffer(SLOT) end)
     record_buffer(SLOT)
   end,
-  ["loaded"] = function(context) prelude(context); load_file(context) end,
-  ["unsettled"] = function(context)
-    prelude(context); load_buffer(SLOT, "/tmp/a.wav"); later(context); report(context, 0)
+  ["loaded"] = function(context)
+    prelude(context)
+    load_buffer(SLOT, "/tmp/z.wav"); load_buffer(SLOT, "/tmp/a.wav"); report(context, OLD_AUDIO)
   end,
-  ["missing"] = function(context) prelude(context); restore(context, context.audio_dir .. "gone.wav", false) end,
+  ["unsettled"] = function(context)
+    prelude(context)
+    load_buffer(SLOT, "/tmp/z.wav"); load_buffer(SLOT, "/tmp/a.wav"); later(context); report(context, 0)
+  end,
+  ["missing"] = function(context)
+    restore(context, context.audio_dir .. "gone.wav", false)
+    load_buffer(SLOT, "/tmp/bad.wav"); load_failed(context, 1)   -- a failed load puts it back
+  end,
 }
 
 local EVENTS = {
@@ -180,9 +211,20 @@ local EVENTS = {
   ["bufferState audio"] = function(context) report(context, AUDIO) end,
   ["bufferState 0 s"] = function(context) report(context, 0) end,
   ["another load's number"] = function(context) report(context, OTHER_AUDIO, buffer().loads_sent - 1) end,
-  ["bufferLoadFailed newest"] = function(context) load_failed(context, buffer().loads_sent) end,
-  ["bufferLoadFailed older"] = function(context) load_failed(context, buffer().loads_sent - 1) end,
-  ["bufferLoadFailed untracked"] = function(context) load_failed(context, LOST_LOAD) end,
+  -- the newest load the slot tracks, and the one tracked before it
+  ["bufferLoadFailed newest"] = function(context)
+    local pending = buffer().pending_loads
+    assert_true(#pending >= 1, "a load is tracked")
+    load_failed(context, pending[#pending].number)
+  end,
+  ["bufferLoadFailed older"] = function(context)
+    local pending = buffer().pending_loads
+    assert_true(#pending >= 2, "an older load is tracked")
+    load_failed(context, pending[#pending - 1].number)
+  end,
+  -- a load the slot does not track: the prelude's, forgotten in flight,
+  -- or the one a state's own way in forgot
+  ["bufferLoadFailed untracked"] = function(context) load_failed(context, context.forgotten_load or LOST_LOAD) end,
   ["takeWriteFailed"] = function(context)
     context.polls.fire("takeWriteFailed", buffer().records_sent * num_buffers() + SLOT - 1)
   end,
@@ -191,24 +233,41 @@ local EVENTS = {
 }
 
 -- The state the slot is in: its status (S.lib.buffers.status), and for
--- "empty", "loading", "armed" and "finishing" the sub-state its fields and
--- its take name
+-- "empty", "loading", "armed", "dub", "loop" and "finishing" the sub-state
+-- its fields, its take and its clock's role name
 local function state_of()
   local S = S_()
   local status, slot, take = S.lib.buffers.status(SLOT), buffer(), S.lib.record.state(SLOT)
+  local stopped = S.lib.record.clock_role(SLOT) == "fallback"
   if status == "empty" then
     if slot.kept_state ~= nil then return "empty, kept state awaited" end
     if slot.settled_empty == "take" then return "empty, adoptable" end
     return "empty"
   elseif status == "loading" then
-    local name = slot.checking_from ~= nil and "loading, checking" or (slot.awaiting_zero and "loading, zero awaited")
-      or "loading"
-    return slot.restoring and (name .. ", restoring") or name
+    -- a restore that tracks no load: its own was forgotten, or a recording
+    -- emptied the list before what it replaced came back
+    local unlisted = #slot.pending_loads == 0 and ", no load tracked" or ""
+    if slot.checking_from ~= nil then
+      -- a check over an empty slot waits for a length other than 0 s; a
+      -- restore's check over audio is no state of the table (the notes say
+      -- why), so its name is none of STATES
+      if slot.restoring then
+        return slot.checking_from == 0 and ("loading, checking, restoring" .. unlisted)
+          or "loading, checking over audio, restoring"
+      end
+      return slot.checking_from == 0 and "loading, checking, empty before" or "loading, checking"
+    end
+    if slot.restoring then
+      return slot.awaiting_zero and "loading, zero awaited, restoring" or ("loading, restoring" .. unlisted)
+    end
+    return slot.awaiting_zero and "loading, zero awaited" or "loading"
   elseif status == "armed" then
-    if take.kind == "playable" then return "armed, playable" end
+    if take.kind == "playable" then return stopped and "armed, playable, stopped" or "armed, playable" end
     -- a replace take's slot is prepared once the engine has emptied it
     -- (record.lua's take_started: at the send, a 0 s report or "recording")
     return take.unbound and "armed, prepared" or "armed, unprepared"
+  elseif status == "dub" or status == "loop" then
+    return stopped and (status .. ", stopped") or status
   elseif status == "finishing" then
     return take.phase == "armed" and "finishing, stopped armed" or "finishing, recorded"
   end
@@ -225,17 +284,6 @@ local function then_settles(expected)
     assert_equal(state_of(), expected, "a 0 s report past confirm_seconds")
   end
 end
--- The fallback runs now (a K3, or a dub's length that ran out): it ends the
--- recording from its last known length, on `path` (the scratch take, or nil)
-local function then_fallback(path_kind)
-  return function(context)
-    wake(context, "fallback")
-    assert_equal(state_of(), "loaded", "the fallback ended it")
-    assert_equal(buffer().name, "take " .. SLOT)
-    assert_equal(buffer().path, path_kind == "scratch" and scratch_take_path(SLOT) or nil, "its path")
-    assert_true(S_().lib.samples.is_bound(SLOT), "bound to its take")
-  end
-end
 local function named(name) return function() assert_equal(buffer().name, name, "name") end end
 local function unsaved() assert_true(buffer().take_unsaved, "take_unsaved") end
 local function no_clock() assert_equal(S_().lib.record.clock_role(SLOT), nil, "no clock") end
@@ -249,15 +297,37 @@ local function adopts_unsaved(context)
   unsaved(); report(context, AUDIO)
   assert_equal(state_of(), "loaded"); assert_equal(buffer().path, nil, "an unsaved take has no path")
 end
+-- The playable recording ended as a take: on the scratch path, or on none
+local function ended_take(path_kind)
+  return function()
+    assert_equal(buffer().name, "take " .. SLOT)
+    assert_equal(buffer().path, path_kind == "scratch" and scratch_take_path(SLOT) or nil, "its path")
+    assert_true(S_().lib.samples.is_bound(SLOT), "bound to its take")
+  end
+end
+-- A canceled playable recording: the file it recorded over plays on
+local function file_kept()
+  named("a.wav")(); assert_equal(buffer().path, "/tmp/a.wav", "the file's path")
+  assert_true(S_().lib.samples.is_bound(SLOT), "bound to the file")
+end
+local function role(expected) return function() assert_equal(S_().lib.record.clock_role(SLOT), expected, "clock") end end
 
 local ZERO_SETTLES = then_settles("unsettled")
+local STILL_CHECKING = then_settles("loading, checking, empty before")
+
+-- The rows a state whose slot holds no take has for the reports of a take
+-- a load, a clear or a settle has left (engine rows 12 and 13): ignored
+local function late_reports(rows, state, which)
+  for _, event in ipairs(which or {"recordState armed", "recordState recording", "recordState ended",
+      "recordState canceled"}) do
+    rows[#rows + 1] = {state, event, state}
+  end
+end
 
 local ROWS = {
-  -- empty: the prelude's take 1 has settled, its "ended" may come late
   {"empty", "load_buffer", "loading"},
   {"empty", "clear_buffer", "empty"},
   {"empty", "record_buffer", "recording"},
-  {"empty", "recordState ended", "empty"},
   {"empty", "bufferState audio", "empty"},
   {"empty", "bufferState 0 s", "empty"},
   {"empty", "another load's number", "empty"},
@@ -275,8 +345,6 @@ local ROWS = {
   {"empty, adoptable", "load_buffer", "loading"},
   {"empty, adoptable", "clear_buffer", "empty"},
   {"empty, adoptable", "record_buffer", "recording"},
-  {"empty, adoptable", "recordState recording", "empty, adoptable"},
-  {"empty, adoptable", "recordState ended", "empty, adoptable"},
   {"empty, adoptable", "bufferState audio", "loaded", check = named("take " .. SLOT)},
   {"empty, adoptable", "bufferState 0 s", "empty, adoptable"},
   {"empty, adoptable", "another load's number", "empty, adoptable"},
@@ -286,7 +354,6 @@ local ROWS = {
   {"loading", "load_buffer", "loading"},
   {"loading", "clear_buffer", "empty"},
   {"loading", "record_buffer", "recording"},
-  {"loading", "recordState ended", "loading"},
   {"loading", "bufferState audio", "loaded", check = named("b.wav")},
   {"loading", "bufferState 0 s", "loading", check = ZERO_SETTLES},
   {"loading", "another load's number", "loading"},
@@ -298,7 +365,6 @@ local ROWS = {
   {"loading, zero awaited", "load_buffer", "loading, zero awaited"},
   {"loading, zero awaited", "clear_buffer", "empty"},
   {"loading, zero awaited", "record_buffer", "recording"},
-  {"loading, zero awaited", "recordState ended", "loading, zero awaited"},
   {"loading, zero awaited", "bufferState audio", "loading, zero awaited"},
   {"loading, zero awaited", "bufferState 0 s", "loading", check = ZERO_SETTLES},
   {"loading, zero awaited", "another load's number", "loading, zero awaited"},
@@ -310,7 +376,6 @@ local ROWS = {
   {"loading, checking", "load_buffer", "loading, zero awaited", check = no_clock},
   {"loading, checking", "clear_buffer", "empty", check = no_clock},
   {"loading, checking", "record_buffer", "recording"},
-  {"loading, checking", "recordState ended", "loading, checking"},
   {"loading, checking", "bufferState audio", "loaded", check = no_clock},
   {"loading, checking", "bufferState 0 s", "loading", check = no_clock},
   {"loading, checking", "another load's number", "loading, checking"},
@@ -320,42 +385,72 @@ local ROWS = {
   {"loading, checking", "takeWriteFailed", "loading, checking"},
   {"loading, checking", "the notice", "loading, checking", check = noticed},
 
+  {"loading, checking, empty before", "load_buffer", "loading", check = no_clock},
+  {"loading, checking, empty before", "clear_buffer", "empty", check = no_clock},
+  {"loading, checking, empty before", "record_buffer", "recording"},
+  {"loading, checking, empty before", "bufferState audio", "loaded", check = no_clock},
+  {"loading, checking, empty before", "bufferState 0 s", "loading, checking, empty before", check = STILL_CHECKING},
+  {"loading, checking, empty before", "another load's number", "loading, checking, empty before"},
+  {"loading, checking, empty before", "bufferLoadFailed newest", "loading, checking, empty before",
+    check = function() named("long1.wav")(); role("notice")() end},
+  {"loading, checking, empty before", "bufferLoadFailed older", "loading, checking, empty before",
+    check = named("long2.wav")},
+  {"loading, checking, empty before", "bufferLoadFailed untracked", "loading, checking, empty before"},
+  {"loading, checking, empty before", "takeWriteFailed", "loading, checking, empty before"},
+  {"loading, checking, empty before", "the notice", "loading, checking, empty before", check = noticed},
+
   {"loading, restoring", "load_buffer", "loading"},
   {"loading, restoring", "clear_buffer", "empty"},
   {"loading, restoring", "record_buffer", "recording"},
-  {"loading, restoring", "recordState ended", "loading, restoring"},
   {"loading, restoring", "bufferState audio", "loaded", check = restored},
   {"loading, restoring", "bufferState 0 s", "loading, restoring", check = ZERO_SETTLES},
   {"loading, restoring", "another load's number", "loading, restoring"},
   {"loading, restoring", "bufferLoadFailed newest", "empty"},
-  {"loading, restoring", "bufferLoadFailed untracked", "loading, restoring"},
-  {"loading, restoring", "takeWriteFailed", "loading, restoring"},
 
-  {"loading, zero awaited, restoring", "load_buffer", "loading, zero awaited"},
-  {"loading, zero awaited, restoring", "clear_buffer", "empty"},
-  {"loading, zero awaited, restoring", "record_buffer", "recording"},
-  {"loading, zero awaited, restoring", "recordState ended", "loading, zero awaited, restoring"},
-  {"loading, zero awaited, restoring", "bufferState audio", "loading, zero awaited, restoring"},
-  {"loading, zero awaited, restoring", "bufferState 0 s", "loading, restoring"},
-  {"loading, zero awaited, restoring", "another load's number", "loading, zero awaited, restoring"},
-  {"loading, zero awaited, restoring", "bufferLoadFailed newest", "loaded", check = named("a.wav")},
-  {"loading, zero awaited, restoring", "bufferLoadFailed untracked", "loading, zero awaited, restoring"},
-  {"loading, zero awaited, restoring", "takeWriteFailed", "loading, zero awaited, restoring"},
+  -- a restore that a canceled take's undo gave back (6 s known, take 1
+  -- canceled by the failed load, engine row 9)
+  {"loading, restoring, no load tracked", "load_buffer", "loading, zero awaited"},
+  {"loading, restoring, no load tracked", "clear_buffer", "empty"},
+  {"loading, restoring, no load tracked", "record_buffer", "recording"},
+  {"loading, restoring, no load tracked", "bufferState audio", "loaded", check = restored},
+  {"loading, restoring, no load tracked", "bufferState 0 s", "loading, restoring, no load tracked",
+    check = ZERO_SETTLES},
+  {"loading, restoring, no load tracked", "another load's number", "loading, restoring, no load tracked"},
+  {"loading, restoring, no load tracked", "bufferLoadFailed untracked", "loading, restoring, no load tracked"},
+  {"loading, restoring, no load tracked", "takeWriteFailed", "loading, restoring, no load tracked",
+    check = function(context)
+      assert_equal(buffer().path, kept_path(context), "the restored file's path")
+      assert_true(not buffer().take_unsaved, "no unsaved take")
+    end},
 
-  {"loading, checking, restoring", "load_buffer", "loading, zero awaited", check = no_clock},
+  {"loading, checking, restoring", "load_buffer", "loading", check = no_clock},
   {"loading, checking, restoring", "clear_buffer", "empty", check = no_clock},
   {"loading, checking, restoring", "record_buffer", "recording"},
-  {"loading, checking, restoring", "recordState ended", "loading, checking, restoring"},
   {"loading, checking, restoring", "bufferState audio", "loaded", check = restored},
-  {"loading, checking, restoring", "bufferState 0 s", "loading, restoring", check = no_clock},
+  {"loading, checking, restoring", "bufferState 0 s", "loading, checking, restoring"},
   {"loading, checking, restoring", "another load's number", "loading, checking, restoring"},
-  {"loading, checking, restoring", "bufferLoadFailed newest", "loaded", check = named("a.wav")},
-  {"loading, checking, restoring", "bufferLoadFailed untracked", "loading, checking, restoring"},
-  {"loading, checking, restoring", "takeWriteFailed", "loading, checking, restoring"},
+  {"loading, checking, restoring", "bufferLoadFailed newest", "empty", check = no_clock},
   {"loading, checking, restoring", "the notice", "loading, checking, restoring", check = noticed},
 
+  -- the restore's check given back by the last of four failed loads; its
+  -- own load forgotten (it fell out of the tracked list)
+  {"loading, checking, restoring, no load tracked", "load_buffer", "loading", check = no_clock},
+  {"loading, checking, restoring, no load tracked", "clear_buffer", "empty", check = no_clock},
+  {"loading, checking, restoring, no load tracked", "record_buffer", "recording"},
+  {"loading, checking, restoring, no load tracked", "bufferState audio", "loaded", check = restored},
+  {"loading, checking, restoring, no load tracked", "bufferState 0 s", "loading, checking, restoring, no load tracked",
+    check = then_settles("loading, checking, restoring, no load tracked")},
+  {"loading, checking, restoring, no load tracked", "another load's number",
+    "loading, checking, restoring, no load tracked"},
+  -- the checked load's own failure finds nothing to undo: the slot checks
+  -- on until a report differs, or the player loads or clears (its notice)
+  {"loading, checking, restoring, no load tracked", "bufferLoadFailed untracked",
+    "loading, checking, restoring, no load tracked", check = role("notice")},
+  {"loading, checking, restoring, no load tracked", "the notice", "loading, checking, restoring, no load tracked",
+    check = noticed},
+
   -- armed: take 2, a replace take synced (unprepared), one by a threshold
-  -- (prepared at the send) or a dub by a threshold
+  -- (prepared at the send) or a dub by a threshold (stopped: K3 since)
   {"armed, unprepared", "load_buffer", "loading, zero awaited"},
   {"armed, unprepared", "clear_buffer", "empty"},
   {"armed, unprepared", "record_buffer", "finishing, stopped armed"},
@@ -380,18 +475,27 @@ local ROWS = {
 
   {"armed, playable", "load_buffer", "loading, zero awaited"},
   {"armed, playable", "clear_buffer", "empty"},
-  {"armed, playable", "record_buffer", "armed, playable", check = function(context)
-    then_fallback(nil)(context); unsaved()
-  end},
+  {"armed, playable", "record_buffer", "armed, playable, stopped"},
   {"armed, playable", "recordState armed", "armed, playable"},
-  {"armed, playable", "recordState recording", "dub", check = function(context)
-    wake(context, "take"); then_fallback("scratch")(context)
-  end},
+  {"armed, playable", "recordState recording", "dub", check = role("take")},
   {"armed, playable", "bufferState audio", "armed, playable"},
   {"armed, playable", "bufferState 0 s", "armed, playable"},
   {"armed, playable", "another load's number", "armed, playable"},
   {"armed, playable", "bufferLoadFailed untracked", "armed, playable"},
   {"armed, playable", "takeWriteFailed", "armed, playable", check = unsaved},
+
+  {"armed, playable, stopped", "load_buffer", "loading, zero awaited", check = no_clock},
+  {"armed, playable, stopped", "clear_buffer", "empty", check = no_clock},
+  {"armed, playable, stopped", "record_buffer", "armed, playable, stopped"},
+  {"armed, playable, stopped", "recordState armed", "armed, playable, stopped"},
+  {"armed, playable, stopped", "recordState recording", "dub, stopped"},
+  {"armed, playable, stopped", "recordState canceled", "loaded", check = file_kept},
+  {"armed, playable, stopped", "bufferState audio", "armed, playable, stopped"},
+  {"armed, playable, stopped", "bufferState 0 s", "armed, playable, stopped"},
+  {"armed, playable, stopped", "another load's number", "armed, playable, stopped"},
+  {"armed, playable, stopped", "bufferLoadFailed untracked", "armed, playable, stopped"},
+  {"armed, playable, stopped", "takeWriteFailed", "armed, playable, stopped", check = unsaved},
+  {"armed, playable, stopped", "the fallback", "loaded", check = function() ended_take(nil)(); unsaved() end},
 
   -- recording: take 2, a replace take with no delay (its timer from the send)
   {"recording", "load_buffer", "loading"},
@@ -409,26 +513,52 @@ local ROWS = {
   -- dub: take 2 over a.wav, with a length (its timer from the send)
   {"dub", "load_buffer", "loading, zero awaited"},
   {"dub", "clear_buffer", "empty"},
-  {"dub", "record_buffer", "dub", check = then_fallback("scratch")},
-  {"dub", "take timer", "dub", check = then_fallback("scratch")},
+  {"dub", "record_buffer", "dub, stopped"},
+  {"dub", "take timer", "dub, stopped"},
   {"dub", "recordState recording", "dub"},
-  {"dub", "recordState ended", "loaded", check = named("take " .. SLOT)},
+  {"dub", "recordState ended", "loaded", check = ended_take("scratch")},
   {"dub", "bufferState audio", "dub"},
   {"dub", "bufferState 0 s", "dub"},
   {"dub", "another load's number", "dub"},
   {"dub", "bufferLoadFailed untracked", "dub"},
   {"dub", "takeWriteFailed", "dub", check = unsaved},
 
+  {"dub, stopped", "load_buffer", "loading, zero awaited", check = no_clock},
+  {"dub, stopped", "clear_buffer", "empty", check = no_clock},
+  {"dub, stopped", "record_buffer", "dub, stopped"},
+  {"dub, stopped", "recordState recording", "dub, stopped"},
+  {"dub, stopped", "recordState ended", "loaded", check = ended_take("scratch")},
+  {"dub, stopped", "recordState canceled", "loaded", check = file_kept},
+  {"dub, stopped", "bufferState audio", "dub, stopped"},
+  {"dub, stopped", "bufferState 0 s", "dub, stopped"},
+  {"dub, stopped", "another load's number", "dub, stopped"},
+  {"dub, stopped", "bufferLoadFailed untracked", "dub, stopped"},
+  {"dub, stopped", "takeWriteFailed", "dub, stopped", check = unsaved},
+  {"dub, stopped", "the fallback", "loaded", check = ended_take("scratch")},
+
   -- loop: take 2 over a.wav, looping (no length: K3 alone ends it)
   {"loop", "load_buffer", "loading, zero awaited"},
   {"loop", "clear_buffer", "empty"},
-  {"loop", "record_buffer", "loop", check = then_fallback("scratch")},
+  {"loop", "record_buffer", "loop, stopped"},
   {"loop", "recordState recording", "loop"},
   {"loop", "bufferState audio", "loop"},
   {"loop", "bufferState 0 s", "loop"},
   {"loop", "another load's number", "loop"},
   {"loop", "bufferLoadFailed untracked", "loop"},
   {"loop", "takeWriteFailed", "loop", check = unsaved},
+
+  {"loop, stopped", "load_buffer", "loading, zero awaited", check = no_clock},
+  {"loop, stopped", "clear_buffer", "empty", check = no_clock},
+  {"loop, stopped", "record_buffer", "loop, stopped"},
+  {"loop, stopped", "recordState recording", "loop, stopped"},
+  {"loop, stopped", "recordState ended", "loaded", check = ended_take("scratch")},
+  {"loop, stopped", "recordState canceled", "loaded", check = file_kept},
+  {"loop, stopped", "bufferState audio", "loop, stopped"},
+  {"loop, stopped", "bufferState 0 s", "loop, stopped"},
+  {"loop, stopped", "another load's number", "loop, stopped"},
+  {"loop, stopped", "bufferLoadFailed untracked", "loop, stopped"},
+  {"loop, stopped", "takeWriteFailed", "loop, stopped", check = unsaved},
+  {"loop, stopped", "the fallback", "loaded", check = ended_take("scratch")},
 
   -- finishing: take 2's timer ran out (0 s known), or a synced take 2
   -- stopped while armed (a.wav's 4 s still reported)
@@ -437,6 +567,9 @@ local ROWS = {
   {"finishing, recorded", "record_buffer", "finishing, recorded"},
   {"finishing, recorded", "recordState recording", "finishing, recorded"},
   {"finishing, recorded", "recordState ended", "finishing, recorded"},
+  {"finishing, recorded", "recordState canceled", "empty, kept state awaited", check = function()
+    no_clock(); assert_equal(buffer().kept_state.name, "empty", "it keeps the empty slot it replaced")
+  end},
   {"finishing, recorded", "bufferState audio", "loaded", check = named("take " .. SLOT)},
   {"finishing, recorded", "bufferState 0 s", "finishing, recorded", check = then_settles("empty, adoptable")},
   {"finishing, recorded", "another load's number", "finishing, recorded"},
@@ -460,39 +593,45 @@ local ROWS = {
     named("a.wav")(); assert_equal(buffer().path, "/tmp/a.wav", "the file's path")
   end},
 
+  -- loaded: a.wav settled, z.wav (sent just before it) still tracked
   {"loaded", "load_buffer", "loading, zero awaited"},
   {"loaded", "clear_buffer", "empty"},
   {"loaded", "record_buffer", "recording"},
-  {"loaded", "recordState ended", "loaded"},
   {"loaded", "bufferState audio", "loaded"},
   {"loaded", "bufferState 0 s", "loaded"},
   {"loaded", "another load's number", "loaded"},
+  {"loaded", "bufferLoadFailed older", "loaded", check = named("a.wav")},
   {"loaded", "bufferLoadFailed untracked", "loaded"},
   {"loaded", "takeWriteFailed", "loaded"},
 
+  -- unsettled: a.wav settled empty, z.wav (sent just before it) still tracked
   {"unsettled", "load_buffer", "loading"},
   {"unsettled", "clear_buffer", "empty"},
   {"unsettled", "record_buffer", "recording"},
-  {"unsettled", "recordState ended", "unsettled"},
   {"unsettled", "bufferState audio", "loaded", check = named("a.wav")},
   {"unsettled", "bufferState 0 s", "unsettled"},
   {"unsettled", "another load's number", "unsettled"},
-  {"unsettled", "bufferLoadFailed newest", "empty"},
+  {"unsettled", "bufferLoadFailed newest", "loading", check = named("z.wav")},
+  {"unsettled", "bufferLoadFailed older", "unsettled", check = named("a.wav")},
   {"unsettled", "bufferLoadFailed untracked", "unsettled"},
   {"unsettled", "takeWriteFailed", "unsettled"},
 
+  -- missing: restored at start, a load over it failed and put it back
   {"missing", "load_buffer", "loading"},
   {"missing", "clear_buffer", "empty"},
   {"missing", "record_buffer", "recording"},
-  {"missing", "recordState ended", "missing"},
-  {"missing", "bufferState audio", "missing"},
   {"missing", "bufferState 0 s", "missing"},
   {"missing", "another load's number", "missing"},
-  {"missing", "bufferLoadFailed untracked", "missing"},
-  {"missing", "takeWriteFailed", "missing"},
 }
+-- the reports of a take a load, a clear or a settle left, in the states
+-- that hold no take of their own
+for _, state in ipairs({"empty", "loading", "loading, zero awaited", "loading, checking",
+    "loading, checking, empty before", "loading, restoring, no load tracked", "loaded", "unsettled"}) do
+  late_reports(ROWS, state)
+end
+late_reports(ROWS, "empty, adoptable", {"recordState recording", "recordState ended", "recordState canceled"})
 
--- The cells that cannot happen, by kind, each with its reason
+-- The cells that cannot happen, each with its reason
 local IMPOSSIBLE = {}
 local function impossible(states, events, reason)
   for _, state in ipairs(states) do
@@ -508,36 +647,98 @@ local function all_but(...)
   for _, state in ipairs(ALL) do if not skip[state] then kept[#kept + 1] = state end end
   return kept
 end
-local TAKE_1_DONE = {"empty", "loading", "loading, zero awaited", "loading, checking", "loading, restoring",
-  "loading, zero awaited, restoring", "loading, checking, restoring", "loaded", "unsettled", "missing"}
+local REPORTS = {"recordState armed", "recordState recording", "recordState ended", "recordState canceled"}
+local TAKES = {"armed, unprepared", "armed, prepared", "armed, playable", "armed, playable, stopped", "recording",
+  "dub", "dub, stopped", "loop", "loop, stopped", "finishing, recorded", "finishing, stopped armed"}
+local CHECKED_RESTORES = {"loading, checking, restoring", "loading, checking, restoring, no load tracked"}
+
+-- Each reason is a fact of the code (lib/buffers.lua, lib/record.lua, the
+-- engine's record.md and buffers.md), true by every way into the state: a
+-- key, a param, a grid key, MIDI, a scene, a PSET read, a late engine
+-- report or a timer
+
+-- the slot's one clock (S.lib.record.clock_role)
 impossible(all_but("recording", "dub"), {"take timer"},
-  "no take timer runs: only a replace take recording, or a dub with a length, has one")
-impossible(all_but("finishing, recorded", "finishing, stopped armed"), {"the fallback"},
-  "no fallback runs: only a finishing take has one as the state is entered (a K3 or a dub's length starts a playable one: those rows' checks run it)")
-impossible(all_but("loading, checking", "loading, checking, restoring"), {"the notice"},
-  "no check runs, so no notice")
-impossible(TAKE_1_DONE, {"recordState armed", "recordState recording", "recordState canceled"},
-  "the newest recording is the prelude's take 1, whose \"recording\" came and whose length settled it: only its \"ended\" can still come")
-impossible({"empty, kept state awaited"},
-  {"recordState armed", "recordState recording", "recordState ended", "recordState canceled"},
-  "the take's \"canceled\" was its last report")
-impossible({"empty, kept state awaited"}, {"takeWriteFailed"}, "a canceled take writes no scratch file")
-impossible({"empty, adoptable"}, {"recordState armed"}, "a take with no delay or threshold is never armed")
-impossible({"empty, adoptable", "recording", "dub", "finishing, recorded"}, {"recordState canceled"},
-  "the engine cancels a take only at a stopRecord of an armed take, a load or a clear, and none was sent")
-impossible({"armed, unprepared", "armed, prepared", "armed, playable", "loop", "finishing, stopped armed"},
-  {"recordState ended"},
-  "the engine sends a take's \"recording\" before its \"ended\" on the same poll, and a loop ends only at a stop")
-impossible({"armed, unprepared", "armed, prepared", "armed, playable", "loop"}, {"recordState canceled"},
-  "the engine cancels a take only at a stopRecord of an armed take, a load or a clear, and none was sent")
-impossible({"recording", "dub", "loop", "finishing, recorded"}, {"recordState armed"},
-  "a take that records was never armed, or has said so already")
-impossible(all_but("loading", "loading, zero awaited", "loading, checking", "loading, restoring",
-    "loading, zero awaited, restoring", "loading, checking, restoring", "unsettled"),
-  {"bufferLoadFailed newest"},
-  "no load in flight is tracked (a clear or a recording forgot them; a loaded slot's load reported its audio)")
-impossible(all_but("loading", "loading, zero awaited", "loading, checking"), {"bufferLoadFailed older"},
-  "no older load is in flight: a restore's load is the slot's only one, and an earlier tracked load reported its audio or was forgotten")
+  "the take timer runs only while a take with a length records: start_take_timer starts it at the send of a"
+  .. " replace take or a dub with no delay or threshold, or at an armed one's \"recording\"; a loop has none,"
+  .. " and K3, its own end, a load and a clear end it")
+impossible(all_but("finishing, recorded", "finishing, stopped armed", "armed, playable, stopped", "dub, stopped",
+    "loop, stopped"), {"the fallback"},
+  "the fallback runs only after a take ends or stops: finish_buffer_take (finishing) or start_playable_fallback"
+  .. " (a playable recording stopped by K3 or its length); the report, load, clear or recording that ends the"
+  .. " take ends it")
+impossible(all_but("loading, checking", "loading, checking, empty before", "loading, checking, restoring",
+    "loading, checking, restoring, no load tracked"), {"the notice"},
+  "a check's notice clock runs only while the slot checks a load (the \"buffer slots\" invariant: a load, a"
+  .. " clear, a recording, the check's end and a failure whose undo gives back no check each end it)")
+
+-- the recordState reports, of the slot's newest recording (records_sent)
+impossible({"missing"}, REPORTS,
+  "no recording since the start: missing_path is set only by init's restore and every recording clears it;"
+  .. " it comes back only as the state before a load sent while it was missing (a recording empties that"
+  .. " list) or as what a canceled take kept, which needs audio a missing file's slot never reports")
+impossible({"loading, restoring"}, REPORTS,
+  "no recording since the start: the restore's own load is still tracked, and a recording empties the"
+  .. " tracked loads for good (a restore loads only at init)")
+impossible(CHECKED_RESTORES, REPORTS,
+  "no recording since the start: a recording ends the check, and what a canceled take gives back is never"
+  .. " a check (state_before_take passes over every load still checked)")
+impossible({"empty, kept state awaited"}, REPORTS,
+  "kept_state rests only after the take's \"canceled\" (its fallback settles it at once), the engine's last"
+  .. " report of a take (stopRecording); its earlier ones came before it on the same poll")
+impossible({"empty, adoptable"}, {"recordState armed"},
+  "the slot settled empty for a take Lua saw record (phase \"recording\", set at a send the engine reports"
+  .. " no \"armed\" for, or by its \"recording\") or for one a failed load canceled: an armed take's"
+  .. " \"armed\" is the engine's first report of it, sent at the recordBuffer, before any of those")
+impossible({"recording", "dub", "loop", "finishing, recorded", "dub, stopped", "loop, stopped"}, {"recordState armed"},
+  "phase \"recording\": Lua set it at the send of a take with no delay or threshold, of which the engine"
+  .. " reports no \"armed\", or at its \"recording\", which comes after its \"armed\" on the same poll")
+impossible({"armed, unprepared", "armed, prepared", "armed, playable", "recording", "dub", "loop"},
+  {"recordState canceled"},
+  "the engine cancels a take only at a stopRecord, a load, a clear or a newer recordBuffer (stopRecording,"
+  .. " rows 6-13); Lua has sent none since the take: load_buffer and clear_buffer end the take, and"
+  .. " record_buffer on a recording slot is K3, whose stopRecord leaves a finishing or stopped state")
+impossible({"armed, unprepared", "armed, prepared", "armed, playable", "armed, playable, stopped",
+    "finishing, stopped armed"}, {"recordState ended"},
+  "phase \"armed\": Lua has not had the take's \"recording\", which the engine sends before its \"ended\""
+  .. " on the same poll (takeArmed, endTake)")
+impossible({"loop"}, {"recordState ended"},
+  "a loop ends only at a stop (its record synth wraps until gated off), and none was sent")
+
+-- takeWriteFailed, of the newest recording
+impossible({"missing", "loading, restoring", "loading, checking, restoring",
+    "loading, checking, restoring, no load tracked"}, {"takeWriteFailed"},
+  "no recording since the start (the recordState reports' reasons above), so no scratch write")
+impossible({"empty, kept state awaited"}, {"takeWriteFailed"},
+  "the newest recording was canceled, and the engine writes only a take that ended (endTake)")
+
+-- bufferLoadFailed: the newest load the slot tracks, one tracked before
+-- it, one it does not track
+impossible(TAKES, {"bufferLoadFailed newest", "bufferLoadFailed older"},
+  "no load is tracked while a take runs: record_buffer empties the list, and a load ends the take")
+impossible({"empty", "empty, kept state awaited", "empty, adoptable"},
+  {"bufferLoadFailed newest", "bufferLoadFailed older"},
+  "no tracked load's failure can still come: a clear, a recording and a take's end empty the list; a failure"
+  .. " that empties the slot comes after the failures of the loads before it (the server reads a slot's files"
+  .. " in order), and one that gives back an empty slot only once every later load has failed")
+impossible({"missing", "loading, restoring, no load tracked", "loading, checking, restoring, no load tracked"},
+  {"bufferLoadFailed newest", "bufferLoadFailed older"},
+  "no load is tracked: none at the start, and a failed load gives back the missing path only once every"
+  .. " later load has failed (the two no-load states are named for it)")
+impossible({"loaded"}, {"bufferLoadFailed newest"},
+  "the newest load tracked has taken effect (the slot settled from its report of audio, or is what a later"
+  .. " failed load replaced, which settled so), and a load that took effect fails no more")
+impossible({"loading, restoring", "loading, checking, restoring"}, {"bufferLoadFailed older"},
+  "a restoring slot tracks at most the restore's own load: a failed later load gives back the state from"
+  .. " before it, with only the loads before it")
+impossible({"loading, restoring", "loading, checking, restoring"}, {"bufferLoadFailed untracked"},
+  "every load since the restore's has failed or is tracked: four newer ones would push the restore's own"
+  .. " out of the list first (the no-load states), and a clear or a recording ends the restore")
+impossible({"missing"}, {"bufferLoadFailed untracked"},
+  "every load sent since the slot was missing has reported its failure (only that gives the missing path"
+  .. " back), and none came before it")
+impossible({"missing"}, {"bufferState audio"},
+  "the slot has held no audio since the start: init's restore found no file, and every load since failed")
 
 -- The table's states split every case of S.lib.buffers.status, none left out
 h.test("the buffer slot's states cover every status a slot can have", function()

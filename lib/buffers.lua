@@ -1163,8 +1163,9 @@ return function(S)
   -- once it no longer records, checks a load only while it awaits the
   -- engine's report, never settles empty while loaded, remembers a
   -- missing file only as a path (no file held, not loaded), restores only
-  -- a load that awaits the engine, runs a check's notice only while it
-  -- checks a load, and shows a start other than the last
+  -- a load that awaits the engine, names a path with an unsaved take only
+  -- while it records (a dub over a file keeps the file's until it ends),
+  -- runs a check's notice only while it checks a load, and shows a start other than the last
   -- sent one only while a start reload is pending
   S.register_invariant("buffer slots", function()
     for slot = 1, NUM_BUFFERS do
@@ -1185,6 +1186,9 @@ return function(S)
       end
       if buffer.restoring and buffer.confirm_since == nil then
         return "slot " .. slot .. " is restoring but awaits no report (confirm_since nil)"
+      end
+      if buffer.take_unsaved and buffer.path ~= nil and not buffer.recording then
+        return "slot " .. slot .. " has an unsaved take but names the path " .. tostring(buffer.path)
       end
       if S.lib.record.clock_role(slot) == "notice" and buffer.checking_from == nil then
         return "slot " .. slot .. " runs a check's notice clock but checks no load"
