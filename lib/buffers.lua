@@ -500,20 +500,22 @@ return function(S)
     -- not count in the bound: its failure must end its check (#980). The
     -- list holds those and at most tracked_loads others
     buffer.loads_sent = buffer.loads_sent + 1
-    local checked = {[buffer.checking_load or false] = true}
-    for _, load in ipairs(buffer.pending_loads) do checked[load.previous.checking_load or false] = true end
-    -- (the oldest others go until fewer than tracked_loads are left, so the
-    -- list comes back to its bound once a chain of checks has ended)
-    local others = 0
-    for _, load in ipairs(buffer.pending_loads) do if not checked[load.number] then others = others + 1 end end
-    local index = 1
-    while others >= BUFFER_SETTLE.tracked_loads do
-      if checked[buffer.pending_loads[index].number] then
-        index = index + 1
-      else
-        table.remove(buffer.pending_loads, index)
-        others = others - 1
+    -- (the oldest other goes, one at a time, until fewer than tracked_loads
+    -- are left, so the list comes back to its bound once a chain of checks
+    -- has ended; which loads are checked is worked out again after each
+    -- drop, since a dropped load's state may have been all that named one)
+    while true do
+      local checked = {[buffer.checking_load or false] = true}
+      for _, load in ipairs(buffer.pending_loads) do checked[load.previous.checking_load or false] = true end
+      local others, oldest = 0, nil
+      for index, load in ipairs(buffer.pending_loads) do
+        if not checked[load.number] then
+          others = others + 1
+          oldest = oldest or index
+        end
       end
+      if others < BUFFER_SETTLE.tracked_loads then break end
+      table.remove(buffer.pending_loads, oldest)
     end
     table.insert(buffer.pending_loads, {number = buffer.loads_sent, path = path, previous = buffer_state_before_load(slot)})
     -- loading cancels a recording in progress in the engine

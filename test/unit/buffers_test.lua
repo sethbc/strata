@@ -2751,6 +2751,26 @@ test("the tracked loads return to their bound after chained checks", function()
   assert_equal(numbers(), table.concat(newest, " "), "the oldest went")
 end)
 
+-- The bound is exact: a load kept only because a tracked snapshot names it
+-- goes once that snapshot is dropped. A long load, then short loads: the
+-- first short one's snapshot holds the check; once it is dropped, nothing
+-- names the long load, which goes too
+test("a check no tracked load would give back is dropped with the bound", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
+  load_buffer(1, "/tmp/long.wav")
+  assert_equal(buffers[1].checking_load, 1, "the long load is checked")
+  for _ = 1, tracked do load_buffer(1, "/tmp/short.wav") end
+  assert_equal(#buffers[1].pending_loads, tracked + 1, "the first short load's snapshot keeps the check")
+  load_buffer(1, "/tmp/short.wav")
+  assert_equal(#buffers[1].pending_loads, tracked, "dropping that snapshot drops the check it named")
+  assert_equal(buffers[1].pending_loads[1].number, 3, "the long load and the first short one are gone")
+end)
+
 -- The "buffer slots" invariant: a notice clock runs only while the slot
 -- checks a load
 test("the buffer slots invariant: a notice clock only while a load is checked (#903)", function()
