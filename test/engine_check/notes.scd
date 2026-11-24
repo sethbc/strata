@@ -283,43 +283,76 @@ checkRootNote = {
 
 // 3.9 (#958): a rootNote that moves the voice's root re-derives each held
 // buffer or input extra note's rate from its kept note (absoluteNoteRate)
-// and sets it on the note's synth, with no node created, cut or struck:
-// buffer voice 1 holds notes 64 and 67 and input voice 2 note 64 at root
-// 60, then each root moves by 9. A rootNote of the root the voice has
-// sends nothing, and a synth voice's note (it plays its freq) is untouched
+// and sets it on the note's synth, with no node created or cut and no
+// accent or trigger sent: buffer voice 1 holds notes 64 and 67, has a
+// releasing note (71) and a cutting one (72), and input voice 2 holds note
+// 64, at root 60; then each root moves by 9. The releasing and cutting
+// synths, both voices' own grain synths and a synth voice's note (it plays
+// its freq) get no set, and a rootNote of the root the voice has sends the
+// held notes nothing
 checkHeldNoteRoot = {
     var buffer = 1, input = 2, synthVoice = 3, pitches = [64, 67], before, kept, bundle, again, synthNote, rates, shifts;
+    var releasing, cutting, untouched, struck, problems = List.new, appeared, gone;
+    var nodeIDs = { h.synthTree(h.context.xg).collect({ arg node; node[\id] }).asSet };
     var heldSynths = { [slotSynth.(buffer, 1), slotSynth.(buffer, 2), slotSynth.(input, 1)] };
     var root = 69;
+    // the names a bundle's sets give a synth
+    var setNames = { arg messages, synth;
+        sentSets.(messages, synth).collect({ arg msg; (2, 4 .. (msg.size - 2)).collect({ arg index; msg[index].asSymbol }) }).flatten
+    };
     command.(\setNotePool, 8);
     startBufferVoice.(buffer);
     startInputVoice.(input);
     startSynthVoice.(synthVoice);
     pitches.do({ arg pitch, index; playNote.(buffer, index + 1, 2 ** ((pitch - 60) / 12), 1.0, pitch.midicps, pitch.asFloat) });
+    playNote.(buffer, 3, 2 ** ((71 - 60) / 12), 1.0, 71.midicps, 71.0);
+    playNote.(buffer, 4, 2 ** ((72 - 60) / 12), 1.0, 72.midicps, 72.0);
     playNote.(input, 1, 2 ** ((64 - 60) / 12), 1.0, 64.midicps, 64.0);
     playNote.(synthVoice, 1, 1.0, 1.0, 64.midicps, 64.0);
     server.sync; 0.05.wait;
+    command.(\noteOff, buffer, 3, 0);
+    command.(\noteOff, buffer, 4, 1);
+    releasing = slotSynth.(buffer, 3);
+    cutting = slotCutting.(buffer, 4);
     kept = heldSynths.value;
     synthNote = slotSynth.(synthVoice, 1);
-    before = h.synthNames(h.context.xg).size;
+    untouched = [releasing, cutting, ownGrain.(buffer), ownGrain.(input), synthNote];
+    before = nodeIDs.value;
     bundle = server.makeBundle(nil, {
         [buffer, input, synthVoice].do({ arg voice; command.(\setGrainParam, voice, \rootNote, root.asFloat) });
     });
     server.sync; 0.05.wait;
     rates = [1, 2].collect({ arg slot; controlOf.(slotSynth.(buffer, slot), \bufRate) });
     shifts = [controlOf.(slotSynth.(input, 1), \pitchShift)];
-    check.(kept.every(_.notNil) and: { heldSynths.value.every({ arg synth, index; synth === kept[index] }) }
-        and: { h.synthNames(h.context.xg).size == before } and: { bundle.every({ arg msg; (msg[0] != 9) and: { msg[0] != '/s_new' } }) }
-        and: { rates.every({ arg rate, index; near.(rate, 2 ** ((pitches[index] - root) / 12)) }) }
-        and: { near.(shifts[0], 2 ** ((64 - root) / 12)) }
-        and: { [1, 2].every({ arg slot; near.(slotRecord.(buffer, slot)[\rate], 2 ** ((pitches[slot - 1] - root) / 12)) }) }
-        and: { sentSets.(bundle, synthNote).isEmpty },
-        "notes: a held buffer or input note follows its voice's root, by a set on its own synth (#958; bufRate % against %, pitchShift % against %, the same synths %, nodes % then %, sets to the synth voice's note %)".format(
-            rates.collect({ arg rate; rate !? { rate.round(0.0001) } }), pitches.collect({ arg pitch; (2 ** ((pitch - root) / 12)).round(0.0001) }),
-            shifts, (2 ** ((64 - root) / 12)).round(0.0001), heldSynths.value.collect({ arg synth, index; synth === kept[index] }),
-            before, h.synthNames(h.context.xg).size, sentSets.(bundle, synthNote).size));
+    struck = kept.collect({ arg synth; setNames.(bundle, synth).select({ arg name; #[\t_accent, \t_trig].includes(name) }) }).flatten;
+    if (kept.every(_.notNil).not) { problems.add("a held note has no synth") };
+    if (untouched.every(_.notNil).not or: { slotState.(buffer, 3) != \releasing }) {
+        problems.add("the releasing note, the cutting synth, an own grain synth or the synth voice's note is missing (%)".format(untouched))
+    };
+    if (heldSynths.value.every({ arg synth, index; synth === kept[index] }).not) { problems.add("a held note's synth changed") };
+    // no node new since the move, none started in its bundle, and none gone
+    // but the cutting synth, whose kill fade may end meanwhile
+    appeared = nodeIDs.value - before;
+    gone = before - nodeIDs.value - [cutting !? { cutting.nodeID }].asSet;
+    if (appeared.notEmpty or: { gone.notEmpty }) { problems.add("nodes started % and ended %".format(appeared, gone)) };
+    if (bundle.any({ arg msg; (msg[0] == 9) or: { msg[0] == '/s_new' } })) { problems.add("the bundle starts a node") };
+    if (rates.every({ arg rate, index; near.(rate, 2 ** ((pitches[index] - root) / 12)) }).not
+        or: { near.(shifts[0], 2 ** ((64 - root) / 12)).not }
+        or: { [1, 2].every({ arg slot; near.(slotRecord.(buffer, slot)[\rate], 2 ** ((pitches[slot - 1] - root) / 12)) }).not }) {
+        problems.add("bufRate % against %, pitchShift % against %".format(rates.collect({ arg rate; rate !? { rate.round(0.0001) } }),
+            pitches.collect({ arg pitch; (2 ** ((pitch - root) / 12)).round(0.0001) }), shifts, (2 ** ((64 - root) / 12)).round(0.0001)))
+    };
+    if (struck.notEmpty) { problems.add("the held notes were sent %".format(struck)) };
+    untouched.do({ arg synth, index;
+        if (synth.notNil and: { sentSets.(bundle, synth).notEmpty }) {
+            problems.add("% got %".format(#["the releasing note", "the cutting synth", "the buffer voice's own grain synth",
+                "the input voice's own grain synth", "the synth voice's note"][index], setNames.(bundle, synth)))
+        };
+    });
+    check.(problems.isEmpty,
+        "notes: a held buffer or input note follows its voice's root, by a set on its own synth (#958; problems %)".format(problems.asArray));
     again = server.makeBundle(nil, { command.(\setGrainParam, buffer, \rootNote, root.asFloat) });
-    check.(kept.every({ arg synth; sentSets.(again, synth).isEmpty }),
+    check.(kept.every(_.notNil) and: { kept.every({ arg synth; sentSets.(again, synth).isEmpty }) },
         "notes: a rootNote of the root the voice has sends its held notes nothing (#958; % messages)".format(again.size));
     [buffer, input, synthVoice].do({ arg voice; command.(\setGrainParam, voice, \rootNote, 60.0) });
     h.stopAllVoices;
