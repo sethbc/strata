@@ -2091,22 +2091,112 @@ end
 -- list step's ubuntu_only, exactly as pinned (CI_WORKFLOW.LIST_UPDATE): it
 -- only points apt at the file, read as it is, and names no variable a
 -- later line could write through
+-- #1011: and what points apt at other configuration, keyrings or sources:
+-- Dir::Etc and Dir= (apt.conf(5): they move the whole configuration, its
+-- trusted keys and sources included; Dir::State, which the SHA512 list's
+-- making sets, is not one of them), the word trusted (Dir::Etc::trusted,
+-- trustedparts, a deb822 Trusted: yes), APT_CONFIG and apt's own -c or
+-- --config-file (in a command of apt's alone: python3 -c and git -C are
+-- not), apt's nested syntax (Dir {, Etc {) and any write under /etc/apt/ or
+-- of a file named apt.conf* (a redirection, tee, cp, mv, install, ln,
+-- sed -i, dd of= or a download's -o, also through a variable assigned such
+-- a path), but the mirror reorder (#999), the one write the workflow makes
+-- there, exactly as pinned: a line, not a step, is let through, so a write
+-- added beside the reorder is still refused
 CI_WORKFLOW.UBUNTU_ONLY = CI_WORKFLOW.LIST_UPDATE:match("\n(ubuntu_only=[^\n]*)\n")
+CI_WORKFLOW.REORDER = CI_WORKFLOW.LIST_UPDATE:match("\n%s*(sudo sed %-i [^\n]*)\n")
+-- #1011: whether a word names a file of apt's configuration: a path under
+-- /etc/apt/ (with doubled slashes or ./ folded), a file named apt.conf*, or
+-- a variable assigned one (`assigned`)
+function CI_WORKFLOW.names_apt_config(word, assigned)
+  local path = word:gsub("['\"]", ""):gsub("/%./", "/"):gsub("//+", "/")
+  if path:find("/etc/apt", 1, true) or path:lower():find("apt.conf", 1, true) then return true end
+  for name in path:gmatch("%${?([%a_][%w_]*)") do
+    if assigned[name] then return true end
+  end
+  return false
+end
+-- #1011: the words a command writes to: its redirections' files, and a
+-- writing command's targets (its name found past env assignments and the
+-- wrappers that run another command)
+function CI_WORKFLOW.written_words(command)
+  local targets = {}
+  for target in command:gmatch(">>?%s*([^%s>&][^%s]*)") do targets[#targets + 1] = target end
+  local words = {}
+  for word in command:gmatch("%S+") do words[#words + 1] = (word:gsub("^['\"]+", "")) end
+  local at = 1
+  while words[at] do
+    local word = words[at]
+    if word:match("^[%a_][%w_]*=") then at = at + 1
+    elseif word == "env" or word == "command" or word == "exec" or word == "nohup" or word == "nice"
+        or word == "xargs" or word == "stdbuf" or word == "timeout" then
+      at = at + 1
+      while words[at] and words[at]:match("^%-") do at = at + 1 end
+      if word == "timeout" and words[at] and words[at]:match("^%d") then at = at + 1 end
+    else break end
+  end
+  local name, rest, operands = words[at] or "", {}, {}
+  for index = at + 1, #words do
+    rest[#rest + 1] = words[index]
+    if not words[index]:match("^%-") then operands[#operands + 1] = words[index] end
+  end
+  if name == "tee" then
+    for _, word in ipairs(operands) do targets[#targets + 1] = word end
+  elseif name == "cp" or name == "mv" or name == "install" or name == "ln" then
+    for index, word in ipairs(rest) do
+      if word == "-t" or word == "--target-directory" then targets[#targets + 1] = rest[index + 1] or ""
+      elseif word:match("^%-%-target%-directory=") or word:match("^%-t.") then targets[#targets + 1] = word end
+    end
+    targets[#targets + 1] = operands[#operands]
+  elseif name == "sed" then
+    for _, word in ipairs(rest) do
+      if word:match("^%-%a*i") or word:match("^%-%-in%-place") then
+        for _, operand in ipairs(operands) do targets[#targets + 1] = operand end
+        break
+      end
+    end
+  elseif name == "dd" then
+    for _, word in ipairs(rest) do
+      if word:match("^of=") then targets[#targets + 1] = word end
+    end
+  elseif name == "curl" or name == "wget" or name == "gpg" then
+    for index, word in ipairs(rest) do
+      if word == "-o" or word == "-O" or word == "--output" or word == "--output-document" then targets[#targets + 1] = rest[index + 1] or ""
+      elseif word:match("^%-%-output") or word:match("^%-[oO].") then targets[#targets + 1] = word end
+    end
+  end
+  return targets
+end
 function CI_WORKFLOW.apt_weakenings(workflow)
   local found = {}
+  -- #1011: the names assigned a file of apt's configuration anywhere in the
+  -- workflow (a script's assignment, an export or an env: key)
+  local assigned = {}
   for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
     local plain = line:lower():gsub("[-_]", "")
-    local reads_ubuntu = line:match("^%s*(.-)%s*$") == CI_WORKFLOW.UBUNTU_ONLY
+    local trimmed = line:match("^%s*(.-)%s*$")
+    local reads_ubuntu = trimmed == CI_WORKFLOW.UBUNTU_ONLY
     for _, word in ipairs({ "allowunauthenticated", "allowinsecurerepositories", "allowdowngradetoinsecurerepositories",
         "allowweakrepositories", "checkvaliduntil", "checkdate", "forceyes", "verifypeer", "verifyhost", "trusted=yes",
-        "sources.list", "dir::etc::source" }) do
-      if plain:find(word, 1, true) and not (reads_ubuntu and (word == "sources.list" or word == "dir::etc::source")) then
-        found[#found + 1] = word .. ": " .. line:match("^%s*(.-)%s*$")
+        "sources.list", "dir::etc::source", "dir::etc", "trusted" }) do
+      if plain:find(word, 1, true) and not (reads_ubuntu and (word == "sources.list" or word:match("^dir::etc"))) then
+        found[#found + 1] = word .. ": " .. trimmed
+      end
+    end
+    -- Dir= as a word of its own (a NORNS_DIR= is not apt's)
+    if plain:find("%f[%w]dir=") then found[#found + 1] = "dir=: " .. trimmed end
+    if line:find("APT_CONFIG", 1, true) then found[#found + 1] = "APT_CONFIG: " .. trimmed end
+    for _, block in ipairs({ "Dir {", "Etc {" }) do
+      if plain:find("%f[%w]" .. block:lower():gsub(" ", "%%s*")) then
+        found[#found + 1] = "apt's nested configuration (" .. block .. "): " .. trimmed
       end
     end
     for _, words in ipairs({ "dpkg -i", "dpkg --install", "dpkg --unpack" }) do
-      if line:find(words, 1, true) then found[#found + 1] = words .. ": " .. line:match("^%s*(.-)%s*$") end
+      if line:find(words, 1, true) then found[#found + 1] = words .. ": " .. trimmed end
     end
+    local name, value = trimmed:match("^export%s+([%a_][%w_]*)=(.*)$")
+    if not name then name, value = trimmed:match("^([%a_][%w_]*)[=:]%s*(.*)$") end
+    if name and CI_WORKFLOW.names_apt_config(value, {}) then assigned[name] = true end
   end
   for _, job in ipairs(CI_WORKFLOW.jobs(workflow)) do
     for _, step in ipairs(job.steps) do
@@ -2116,6 +2206,8 @@ function CI_WORKFLOW.apt_weakenings(workflow)
         if packages then
           for word in packages:gmatch("%S+") do paths[#paths + 1] = word end
         end
+        local trimmed = line:match("^%s*(.-)%s*$")
+        local reorder = trimmed == CI_WORKFLOW.REORDER
         for _, command in ipairs(CI_WORKFLOW.commands(line)) do
           local words, apt, install = {}, nil, nil
           for word in command:gmatch("%S+") do words[#words + 1] = word end
@@ -2128,6 +2220,22 @@ function CI_WORKFLOW.apt_weakenings(workflow)
             if words[index] == "-o" then index = index + 1
             elseif not words[index]:match("^%-") then paths[#paths + 1] = words[index] end
             index = index + 1
+          end
+          -- #1011: apt's own configuration file, in a command of apt's
+          local tool = false
+          for _, word in ipairs(words) do
+            word = word:gsub("^['\"]+", "")
+            if word == "apt" or word:match("^apt%-%a+$") then tool = true
+            elseif tool and (word:match("^%-c") or word:match("^%-%-config%-file")) then
+              found[#found + 1] = "a configuration file for apt (-c, --config-file): " .. trimmed
+              break
+            end
+          end
+          for _, target in ipairs(reorder and {} or CI_WORKFLOW.written_words(command)) do
+            if CI_WORKFLOW.names_apt_config(target, assigned) then
+              found[#found + 1] = "a write into apt's configuration: " .. trimmed
+              break
+            end
           end
         end
         for _, word in ipairs(paths) do
@@ -2159,6 +2267,68 @@ function CI_WORKFLOW.failing_cases(workflow, find_problems, cases, job)
     end
   end
   assert_true(#missed == 0, "mutations of the workflow not refused:\n" .. table.concat(missed, "\n"))
+end
+-- #1011: the ways of pointing apt at other configuration, other keyrings or
+-- other sources, each a mutation of a job's text that apt_weakenings
+-- refuses, in both jobs that keep their packages (each edit's text is in
+-- each job once)
+function CI_WORKFLOW.relocation_cases()
+  local install = '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n'
+  local function on_install(extra) return { install, '          sudo apt-get $APT_NETWORK_OPTIONS install -y ' .. extra .. ' "${packages[@]}"\n' } end
+  local function instead(line) return { install, "          " .. line .. "\n" } end
+  local function before_install(...)
+    local lines = {}
+    for _, line in ipairs({ ... }) do lines[#lines + 1] = "          " .. line .. "\n" end
+    return { install, table.concat(lines) .. install }
+  end
+  local parts = "-o Dir::Etc::sourceparts=-)"
+  local list_retry = "priority:9/' \"$mirrors\"\n            cat \"$mirrors\"\n            status=0\n            sudo timeout --kill-after=5 60 "
+  local write = "a write into apt's configuration: "
+  return {
+    -- the whole configuration moved (apt.conf(5): Dir, Dir::Etc)
+    { name = "-o Dir=", expect = "dir=: sudo apt-get", edits = on_install("-o Dir=/tmp/apt") },
+    { name = "-o Dir::Etc=", expect = "dir::etc: sudo apt-get", edits = on_install("-o Dir::Etc=/tmp/etc") },
+    { name = "Dir::Etc::parts, quoted, any case", expect = "dir::etc: sudo apt-get", edits = on_install('-o "dir::etc::parts=/tmp/conf.d"') },
+    { name = "the list's ubuntu_only moving Dir::Etc", expect = "dir::etc: ubuntu_only=(", edits = { parts, "-o Dir::Etc::sourceparts=- -o Dir::Etc=/tmp/etc)" } },
+    { name = "the list's ubuntu_only moving Dir", expect = "dir=: ubuntu_only=(", edits = { parts, "-o Dir::Etc::sourceparts=- -o Dir=/tmp/apt)" } },
+    -- other keyrings, and a deb822 source trusted unsigned
+    { name = "Dir::Etc::trusted", expect = "trusted: sudo apt-get", edits = on_install("-o Dir::Etc::trusted=/tmp/k.gpg") },
+    { name = "Dir::Etc::TrustedParts", expect = "trusted: sudo apt-get", edits = on_install("-o Dir::Etc::TrustedParts=/tmp/keys") },
+    { name = "a deb822 Trusted: yes", expect = "trusted: echo", edits = instead("echo 'Trusted: yes' >> \"$RUNNER_TEMP/x.sources\"") },
+    -- a configuration file the workflow does not hold
+    { name = "APT_CONFIG before an install", expect = "APT_CONFIG: APT_CONFIG=",
+      edits = instead('APT_CONFIG="$RUNNER_TEMP/x.conf" sudo -E apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"') },
+    { name = "APT_CONFIG exported", expect = "APT_CONFIG: export", edits = before_install("export APT_CONFIG=/tmp/x.conf") },
+    { name = "APT_CONFIG left to the later steps", expect = "APT_CONFIG: echo", edits = before_install('echo "APT_CONFIG=/tmp/x.conf" >> "$GITHUB_ENV"') },
+    { name = "apt-get -c", expect = "a configuration file for apt (-c, --config-file): sudo apt-get", edits = on_install("-c /tmp/x.conf") },
+    { name = "apt-get --config-file=", expect = "a configuration file for apt (-c, --config-file): sudo apt-get", edits = on_install("--config-file=/tmp/x.conf") },
+    { name = "the list's apt-cache -c", expect = "a configuration file for apt (-c, --config-file): xargs apt-cache",
+      edits = { 'xargs apt-cache "${ubuntu_only[@]}"', 'xargs apt-cache -c "$RUNNER_TEMP/x.conf" "${ubuntu_only[@]}"' } },
+    -- a write under /etc/apt/ or of a file named apt.conf*
+    { name = "a tee into apt.conf.d", expect = write .. "echo 'APT::Get::Assume-Yes",
+      edits = instead("echo 'APT::Get::Assume-Yes \"true\";' | sudo tee /etc/apt/apt.conf.d/99yes") },
+    { name = "a printf into a file named apt.conf", expect = write .. "printf",
+      edits = instead("printf 'APT::Get::Assume-Yes \"true\";\\n' > \"$RUNNER_TEMP/apt.conf\"") },
+    { name = "an echo appended under /etc/apt/", expect = write .. "sudo sh -c",
+      edits = instead("sudo sh -c 'echo \"Pin-Priority: 1001\" >> /etc/apt/preferences.d/x'") },
+    { name = "a cp into apt.conf.d", expect = write .. "sudo cp", edits = instead('sudo cp "$RUNNER_TEMP/x.conf" /etc/apt/apt.conf.d/') },
+    { name = "a link into apt.conf.d", expect = write .. "sudo ln", edits = instead('sudo ln -s "$RUNNER_TEMP/x.conf" /etc/apt/apt.conf.d/99x') },
+    { name = "a download into apt.conf.d", expect = write .. "curl", edits = instead("curl -fsSL -o /etc/apt/apt.conf.d/99x https://example.com/x") },
+    { name = "a heredoc through a variable", expect = write .. 'sudo tee "$conf"',
+      edits = before_install("conf=/etc/apt/apt.conf.d/99x", "sudo tee \"$conf\" > /dev/null <<'EOF'", 'APT::Get::Assume-Yes "true";', "EOF") },
+    { name = "a sed -i of another file under /etc/apt/", expect = write .. "sudo sed", edits = instead("sudo sed -i 's/^/#/' /etc/apt/apt.conf.d/70debconf") },
+    -- the reorder is let through only exactly as pinned
+    { name = "a second sed of the mirror list", expect = write .. "sudo sed", edits = instead("sudo sed -i 's/^/x/' \"$mirrors\"") },
+    { name = "the list's reorder writing a second file", expect = write .. "sudo sed -i -E",
+      edits = { list_retry, "priority:9/' \"$mirrors\" /etc/apt/apt.conf.d/70debconf\n            cat \"$mirrors\"\n            status=0\n            sudo timeout --kill-after=5 60 " } },
+    { name = "a tee in the list step beside the reorder", expect = write .. "echo 'Acquire::Retries",
+      edits = { list_retry, "priority:9/' \"$mirrors\"\n            echo 'Acquire::Retries \"0\";' | sudo tee /etc/apt/apt.conf.d/99x\n            cat \"$mirrors\"\n            status=0\n            sudo timeout --kill-after=5 60 " } },
+    -- apt's nested syntax, in a file written anywhere
+    { name = "a heredoc of nested settings on one line", expect = "apt's nested configuration (Dir {): Dir {",
+      edits = before_install("cat > \"$RUNNER_TEMP/x\" <<'EOF'", 'Dir { Etc { SourceList "/tmp/x"; }; };', "EOF") },
+    { name = "a heredoc of nested settings over lines", expect = { "apt's nested configuration (Dir {): Dir {", "apt's nested configuration (Etc {): Etc {" },
+      edits = before_install("cat > \"$RUNNER_TEMP/x\" <<'EOF'", "Dir {", "Etc {", 'Main "/tmp/x.conf";', "};", "};", "EOF") },
+  }
 end
 
 -- #786: the making of the SHA512 list and the verify-and-copy loop are
@@ -2394,7 +2564,18 @@ test("the workflow refuses every weakening of apt's checks and every install of 
     { name = "the install reading another parts folder", expect = "dir::etc::source: sudo apt-get",
       edits = on_install("-o dir::etc::sourceparts=/tmp/parts") },
   }
+  -- #1011: apt's configuration, keyrings and sources moved or written
+  for _, case in ipairs(CI_WORKFLOW.relocation_cases()) do cases[#cases + 1] = case end
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, cases, "engine-shard")
+  -- #1011: a -c or -C of a command that is not apt's, a read of a file
+  -- under /etc/apt/ and the Dir::State of the SHA512 list's making pass
+  local install = '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n'
+  local passes = "          python3 -c 'import sys'\n          git -C \"$RUNNER_TEMP\" status\n"
+    .. "          cp /etc/apt/apt-mirrors.txt \"$RUNNER_TEMP/\"\n          sudo apt-get -o Dir::State::status=/tmp/s check\n"
+  for _, cache in ipairs(CI_WORKFLOW.CACHES) do
+    assert_equal(table.concat(CI_WORKFLOW.apt_weakenings(CI_WORKFLOW.mutated(workflow, install, passes .. install, cache.job)), " | "), "",
+      "the weakenings of " .. cache.where .. " with python3 -c, git -C, a read under /etc/apt/ and Dir::State")
+  end
   -- the pinned ubuntu_only line itself, as the workflow indents it, passes
   assert_equal(table.concat(CI_WORKFLOW.apt_weakenings("          " .. CI_WORKFLOW.UBUNTU_ONLY .. "\n"), " | "), "",
     "the weakenings of the pinned ubuntu_only line")
@@ -2493,6 +2674,8 @@ test("a kept package reaches apt only through the hash check in the Lua jobs too
     { name = "an install of a kept file", expect = '"$debs/$name"', edits = { '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n',
       '          sudo apt-get $APT_NETWORK_OPTIONS install -y "$debs/$name"\n' } },
   }, "lua-suite")
+  -- #1011: and so is a move or write of apt's configuration
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, CI_WORKFLOW.relocation_cases(), "lua-suite")
 end)
 
 -- #785: the engine shards keep the package files they download (actions/cache,
