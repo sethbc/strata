@@ -98,24 +98,40 @@ jobs:
         # under timeout 45 and, killed or failed, once more under timeout 60
         # with https://archive.ubuntu.com first, the install's own reorder:
         # 115 s at most with the apt-cache work (about 3 s) when the retry
-        # succeeds, and both tries unfinished fail by the ::error:: line
+        # succeeds, and both tries unfinished fail by the ::error:: line.
+        # Both read Ubuntu's sources file alone with --error-on=any (#1005):
+        # a list of Ubuntu's that fails with only apt's warning, which exits
+        # 0 and keeps the old list, exits 100, takes the retry and then the
+        # ::error:: line; the runner's third-party sources fail nothing and
+        # keep their lists (--no-list-cleanup). Then the step checks that the
+        # update read Ubuntu's main and universe for the runner's release
+        # (about a second, inside the apt-cache work's 5 s)
         timeout-minutes: 3
         run: |
           set -o pipefail
           mirrors=/etc/apt/apt-mirrors.txt
+          ubuntu_only=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
           status=0
-          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update || status=$?
+          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update || status=$?
           if [ "$status" -ne 0 ] && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
             echo "::warning::apt's update failed or was unfinished after 45 s (exit $status): trying https://archive.ubuntu.com first"
             sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
             cat "$mirrors"
             status=0
-            sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS update || status=$?
+            sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update || status=$?
           fi
           if [ "$status" -ne 0 ]; then
-            echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow). Nothing was installed or checked: rerun this job"
+            echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow; 100: a list of Ubuntu's did not download, apt's E: lines above name it). Nothing was installed or checked: rerun this job"
             exit 1
           fi
+          release=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release) || release=
+          targets=$(apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" indextargets --format '$(RELEASE) $(COMPONENT) $(CREATED_BY)') || targets=
+          for component in main universe; do
+            if ! grep -qx "$release $component Packages" <<< "$targets"; then
+              echo "::error::Ubuntu's $release $component list is not among the lists the update read: the SHA512 list would come from a stale one. Nothing was installed or checked"
+              exit 1
+            fi
+          done
           : > "$RUNNER_TEMP/empty-status"
           nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
           apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s lua5.3 luajit \
@@ -332,24 +348,36 @@ jobs:
         # mirror (#999): its apt-get update reads the mirrors whose slowness
         # #785 met. As the Lua job's list: timeout 45, then once more under
         # timeout 60 with https://archive.ubuntu.com first, 115 s at most when
-        # the retry succeeds (about 4 s of apt-cache work), inside the 4 minutes
+        # the retry succeeds (about 4 s of apt-cache work), inside the 4 minutes.
+        # As the Lua job's list too (#1005): Ubuntu's sources alone, a list of
+        # theirs that did not download fails, and the step checks the update
+        # read Ubuntu's main and universe for the runner's release
         timeout-minutes: 4
         run: |
           set -o pipefail
           mirrors=/etc/apt/apt-mirrors.txt
+          ubuntu_only=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
           status=0
-          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS update || status=$?
+          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update || status=$?
           if [ "$status" -ne 0 ] && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
             echo "::warning::apt's update failed or was unfinished after 45 s (exit $status): trying https://archive.ubuntu.com first"
             sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
             cat "$mirrors"
             status=0
-            sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS update || status=$?
+            sudo timeout --kill-after=5 60 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any --no-list-cleanup update || status=$?
           fi
           if [ "$status" -ne 0 ]; then
-            echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow). Nothing was installed or checked: rerun this job"
+            echo "::error::apt's lists did not update (exit $status; 124 or 137: too slow; 100: a list of Ubuntu's did not download, apt's E: lines above name it). Nothing was installed or checked: rerun this job"
             exit 1
           fi
+          release=$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release) || release=
+          targets=$(apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" indextargets --format '$(RELEASE) $(COMPONENT) $(CREATED_BY)') || targets=
+          for component in main universe; do
+            if ! grep -qx "$release $component Packages" <<< "$targets"; then
+              echo "::error::Ubuntu's $release $component list is not among the lists the update read: the SHA512 list would come from a stale one. Nothing was installed or checked"
+              exit 1
+            fi
+          done
           : > "$RUNNER_TEMP/empty-status"
           nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
           apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s jackd2 \
