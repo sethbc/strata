@@ -198,9 +198,15 @@ local STATES = {
     with_params({record_sync = 2}, function() record_buffer(SLOT) end)
     record_buffer(SLOT)
   end,
+  -- a.wav then long1.wav (checked, from 0 s) sent back to back; the
+  -- engine counts long1's load when it arrives and its periodic poll
+  -- repeats a.wav's 4 s under long1's number, which differs from the 0 s
+  -- the check waits past: the slot settles loaded as long1.wav while the
+  -- engine still checks it (both loads tracked, long1's still to fail)
   ["loaded"] = function(context)
-    prelude(context)
-    load_buffer(SLOT, "/tmp/z.wav"); load_buffer(SLOT, "/tmp/a.wav"); report(context, OLD_AUDIO)
+    prelude(context); high_tier(context)
+    load_buffer(SLOT, "/tmp/a.wav"); load_buffer(SLOT, "/tmp/long1.wav"); report(context, OLD_AUDIO)
+    assert_equal(buffer().name, "long1.wav", "today: settled as the checked load")
   end,
   ["unsettled"] = function(context)
     prelude(context)
@@ -633,7 +639,16 @@ local ROWS = {
   {"loaded", "bufferState audio", "loaded"},
   {"loaded", "bufferState 0 s", "loaded"},
   {"loaded", "another load's number", "loaded"},
-  {"loaded", "bufferLoadFailed older", "loaded", check = named("a.wav")},
+  -- the check's own failure: what it replaced comes back, a.wav's load
+  -- (the engine holds a.wav: its next report settles it). A fault, its
+  -- issue yet to be filed: the slot showed long1.wav loaded from a.wav's
+  -- repeated length while the engine still checked long1 (the helper takes
+  -- no known = 0)
+  {"loaded", "bufferLoadFailed newest", "loading", check = function()
+    named("a.wav")(); assert_equal(buffer().pending_loads[#buffer().pending_loads].number, buffer().loads_sent - 1,
+      "a.wav's load, still tracked")
+  end},
+  {"loaded", "bufferLoadFailed older", "loaded", check = named("long1.wav")},
   {"loaded", "bufferLoadFailed untracked", "loaded"},
   {"loaded", "takeWriteFailed", "loaded"},
 
@@ -716,8 +731,10 @@ impossible({"loading, restoring"}, REPORTS,
 impossible({"loading, restoring, no load tracked"}, REPORTS,
   "no recording since the start: a restore comes back after a recording only as what a canceled armed take"
   .. " replaced, and only with a length reported (resolve_previous, settle_kept_state), which is the other"
-  .. " state; at 0 s with no load tracked it came back through failed loads alone, the restore's own"
-  .. " forgotten among them")
+  .. " state; that state never drops to 0 s and stays restoring: its 0 s comes only from a preparation"
+  .. " reported after #974's fallback, 5 s after the stop and so past confirm_seconds of the restore's"
+  .. " confirm_since, and settles it unsettled; so at 0 s with no load tracked the restore came back through"
+  .. " failed loads alone, the restore's own forgotten among them")
 impossible(CHECKED_RESTORES, REPORTS,
   "no recording since the start: a recording ends the check, and what a canceled take gives back is never"
   .. " a check (state_before_take passes over every load still checked)")
@@ -773,9 +790,6 @@ impossible({"loading, restoring, no load tracked, audio known"}, {"bufferLoadFai
   .. " audio, reported while the take was armed), the recording emptied the list, and every load since has"
   .. " failed (the one whose undo gave this state back was the newest tracked; four newer ones would push"
   .. " it out, and this state could not come back)")
-impossible({"loaded"}, {"bufferLoadFailed newest"},
-  "the newest load tracked has taken effect (the slot settled from its report of audio, or is what a later"
-  .. " failed load replaced, which settled so), and a load that took effect fails no more")
 impossible({"loading, restoring", "loading, checking, restoring"}, {"bufferLoadFailed older"},
   "a restoring slot tracks at most the restore's own load: a failed later load gives back the state from"
   .. " before it, with only the loads before it")
