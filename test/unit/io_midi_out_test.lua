@@ -1369,6 +1369,98 @@ test("a played MPE note sounding on a port a remote grid claims gets its member 
   assert_equal(sent(device), SETUP_15_48, "no later value and no second off, held or let go; the port let go gets its zone's setup (#772)")
 end)
 
+-- MIDI out's debts across a menu visit (#988, #996, #997): a note sent
+-- mid-menu to a device at a port it visits is paid at the close when the
+-- device is back home; a debt owed to a device on a port a remote holds is
+-- kept, never dropped, and paid when the port is let go; and a debt is a
+-- count, so a device owed two ons of one channel and note gets two offs
+
+-- Only the note lines a device got, "|"-joined
+local function note_lines(device)
+  local list = {}
+  for _, entry in ipairs(lines(device)) do
+    if entry:find("^note_") then list[#list + 1] = entry end
+  end
+  return table.concat(list, "|")
+end
+
+test("a note sent mid-menu to a device at a port it visits gets its off at the close when the device goes home first (#988)", function()
+  local context, S = started()
+  local c = context.midi.plug(3, "synth c")
+  local target = midi_target(S)
+  params:set("v1_out_port", 1); settled(context)
+  _menu.set_mode(true)
+  context.midi.reassign(3, 1)  -- synth c visits port 1, voice 1's
+  target.note_on(1, "s1", 63, 1, step_info())
+  context.midi.reassign(1, 3)  -- and goes home before the close: the close tells no port
+  _menu.set_mode(false)
+  assert_equal(sent(c), "note_on 63 127 1|note_off 63 1", "c gets the note's off at the close, on port 3")
+  target.note_off(1, "s1")
+  context.clock.run_for(1)
+  assert_equal(sent(c), "note_on 63 127 1|note_off 63 1", "the note's end sends nothing more")
+  balanced(c, "synth c")
+end)
+
+test("a debt owed to a device on a port a remote holds is kept, and paid once the port is let go (#996)", function()
+  local context, S = started()
+  context.midi.plug(1, "synth a")
+  local c = context.midi.plug(3, "synth c")
+  remote_grid_at(S, 3)
+  local target = midi_target(S)
+  params:set("v1_out_port", 1); settled(context)
+  clear(c)
+  _menu.set_mode(true)
+  context.midi.reassign(3, 1)  -- synth c visits port 1; synth a is left on no port
+  target.note_on(1, "s1", 59, 1, step_info())
+  context.midi.reassign(1, 3)  -- c back on port 3, the remote's
+  _menu.set_mode(false)
+  assert_true(S.lib.io_remote.holds(3), "the remote still holds port 3")
+  assert_equal(note_lines(c), "note_on 59 127 1", "a held port gets nothing: the off is owed")
+  target.note_off(1, "s1")
+  assert_equal(note_lines(c), "note_on 59 127 1", "the note's end sends nothing to the held port")
+  remote_grid_at(S, 0)
+  assert_equal(note_lines(c), "note_on 59 127 1|note_off 59 1", "the port let go: c gets the owed off")
+  balanced(c, "synth c")
+end)
+
+test("a debt kept on a port a remote still holds at cleanup is dropped with the script, sent nowhere (#996)", function()
+  local context, S = started()
+  context.midi.plug(1, "synth a")
+  local c = context.midi.plug(3, "synth c")
+  remote_grid_at(S, 3)
+  params:set("v1_out_port", 1); settled(context)
+  _menu.set_mode(true)
+  context.midi.reassign(3, 1)
+  midi_target(S).note_on(1, "s1", 59, 1, step_info())
+  context.midi.reassign(1, 3)
+  _menu.set_mode(false)
+  cleanup()
+  assert_equal(note_lines(c), "note_on 59 127 1", "MIDI out stops before the remote lets port 3 go: no off")
+end)
+
+test("two debts for one channel and note pay two offs (#997)", function()
+  -- voices 1 and 2 on channel 1, at ports 3 and 4: synth c, on port 3, gets
+  -- voice 1's 60, visits port 4 in the menu and gets voice 2's 60 there (port
+  -- 4 sounds no 60, so no retrigger off): two ons of 60 on channel 1
+  local context, S = started()
+  local c = context.midi.plug(3, "synth c")
+  local target = midi_target(S)
+  params:set("v1_out_port", 3); params:set("v1_out_channel", 1)
+  params:set("v2_out_port", 4); params:set("v2_out_channel", 1); settled(context)
+  target.note_on(1, "s1", 60, 1, step_info())
+  _menu.set_mode(true)
+  context.midi.reassign(3, 4)
+  target.note_on(2, "s1", 60, 1, step_info())
+  target.note_off(1, "s1")    -- port 3 has no device: voice 1's 60 owed to c
+  context.midi.unplug(4)      -- c leaves: voice 2's 60 owed to c too
+  _menu.set_mode(false)
+  assert_equal(sent(c), "note_on 60 127 1|note_on 60 127 1", "two ons, nothing paid yet")
+  local again = context.midi.plug(3, "synth c")
+  assert_equal(note_lines(again), "note_off 60 1|note_off 60 1", "c comes back: an off for each on")
+  target.note_off(2, "s1")
+  assert_equal(note_lines(again), "note_off 60 1|note_off 60 1", "voice 2's end sends nothing more")
+end)
+
 -- #772: an MPE zone's setup goes once a port settles (S.lib.io_ports'
 -- on_settled, after every change and claim hook) with its device not held:
 -- a device a remote takes as it arrives gets none, and a port a remote
