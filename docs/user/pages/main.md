@@ -42,6 +42,8 @@ The right column shows the selected voice:
     - any voice whose source is a buffer: buffer position (`pos`)
   - a voice whose source is the input or a voice: grain size, grain density and grain pitch (`pitch`, a ratio).
 
+While a pattern step's step lock or note holds a field's parameter (the step locks `pos` and `size`, `pitch` on a voice whose source is the input or a voice, and a step's note, which moves a resonator's `freq` and the `pitch` of a voice whose source is the input or a voice), the field shows `[S]` in place of its name. The value shown is still the voice's own setting, not the one the step plays, and the name comes back when the lock ends: at the voice's next step that plays without it, when the patterns stop, when you turn the field by hand, when the voice's pattern is replaced or when its length is shortened past the locked step (see [What a step holds](../sequencer.md#what-a-step-holds)).
+
 Locking a voice doesn't dim its values: they can still be edited. The voice's crossmod sources are on the [VOICE](voice.md) page.
 
 The arc's MAIN rings are in [Monome Arc](../arc.md); the arc's button starts and stops the selected voice, as K3 does.

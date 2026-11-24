@@ -24,12 +24,16 @@ return function(S)
   -- it is cut to end name_gap px before it. 3.4: the mark (~) follows the
   -- name while the engine's modulation moves the voice, and the name is cut
   -- by its width and mark_gap more, so the mark ends 2 px before the
-  -- source (y 26 is full)
+  -- source (y 26 is full). #1025: a field a step lock or a step's note
+  -- holds shows step_lock_tag in its label's place, at the field's level,
+  -- and its value whole (the controller's ruling: beside the label and the
+  -- tag, a freq from 100 Hz would lose its unit)
   local LAYOUT = {
     left = 65, right = 127, divider_x = 62, name_y = 18, name_gap = 1,
     state_y = 26, lock_x = 84, trig_x = 99, freeze_x = 113, field_rows = {34, 42, 50}, label_x = 71,
     bright = 15, dim = 4, trig_level = 8, field_count = 3, modulated_mark = "~", mark_gap = 1,
     count_from = 2,  -- the voice list shows a voice's held notes from two (3.5)
+    step_lock_tag = "[S]",  -- in a held field's label's place (#1025)
   }
   M.LAYOUT = LAYOUT
 
@@ -186,10 +190,14 @@ return function(S)
     end
 
     -- y 34/42/50: the fields, the one under the cursor bright. A locked
-    -- voice's values stay bright: they can still be edited
+    -- voice's values stay bright: they can still be edited. A field whose
+    -- param a step lock or a step's note holds (#1025, read at each draw)
+    -- shows the tag in its label's place; the value is still the stored one
+    local fields = main_fields(voice_idx)
     for field = 1, LAYOUT.field_count do
       local y = LAYOUT.field_rows[field]
       local label, value = field_text(voice_idx, field)
+      if S.lib.engine_sync.is_overridden(fields[field]) then label = LAYOUT.step_lock_tag end
       local selected = field == S.main_field
       screen.level(selected and LAYOUT.bright or LAYOUT.dim)
       if selected then
@@ -351,6 +359,28 @@ return function(S)
         end
         S.lib.ui_keys.select_voice_by(5 - S.selected_voice)  -- pulse, the widest name
         update_voice_list()
+      end},
+      -- #1025: held fields at their widest values with the tag in their
+      -- labels' place, on the selected voice (a fresh load's resonator):
+      -- a step's note on freq ("2000 Hz") and a size lock ("0.02 s"), the
+      -- cursor on freq; then on the input, size and pitch ("0.25x") held,
+      -- the cursor on pitch, so both levels show
+      {name = "step locks at their widest values, resonator", setup = function()
+        local voice_idx = S.selected_voice
+        for id, value in pairs({[main_param_id(voice_idx)] = 2000, ["v" .. voice_idx .. "_grain_size"] = 0.02}) do
+          params:set(id, value)
+          S.lib.engine_sync.set_base_override(id, value)
+        end
+        S.main_field = 1
+      end},
+      {name = "step locks at their widest values, input source", setup = function()
+        local prefix = "v" .. S.selected_voice .. "_"
+        params:set(prefix .. "source", S.constants.SOURCE_INPUT)
+        for key, value in pairs({grain_size = 0.02, grain_pitch = 0.25}) do
+          params:set(prefix .. key, value)
+          S.lib.engine_sync.set_base_override(prefix .. key, value)
+        end
+        S.main_field = LAYOUT.field_count
       end},
       -- the widest ALT+K2 hint: K2:cancel K3:unlock
       {name = "ALT+K2 held past the hold time, voice locked", setup = function(context)
