@@ -549,9 +549,11 @@ return function(S)
   -- What the waits the grids show come to, with the blink's level; nil
   -- when none shows. One redraw rule for every blink (#593's): a wait
   -- counts only while a pane of a connected grid shows its key. The play
-  -- key's start (the strips, always shown) and each voice's freeze key,
-  -- the scene keys' recall (its slot) while a pane shows the scenes page,
-  -- the cell of a voice's jump or loop (S.lib.positions.waiting_cell)
+  -- key's start always counts: PL is on the 256's, 128h's and 128v's
+  -- strip and NV on the 64's, and a strip shows whatever page its panes
+  -- show. Each voice's freeze key counts while a pane shows the voices
+  -- page, the scene keys' recall (its slot) while one shows the scenes
+  -- page, the cell of a voice's jump or loop (S.lib.positions.waiting_cell)
   -- while one shows the positions page's cells. A bookmark key's wait is
   -- positions' (its display signature, under the same rule)
   local function blink_signature()
@@ -561,8 +563,9 @@ return function(S)
     local scene = quantize.waiting_detail("scene")
     if scene ~= nil and M.any_page(GRID_PAGES.scenes) then parts[#parts + 1] = "scene " .. tostring(scene) end
     local cells_shown = M.any_page(GRID_PAGES.positions, 1)
+    local freeze_shown = M.any_page(GRID_PAGES.voices)
     for voice_idx = 1, NUM_VOICES do
-      if quantize.waiting("freeze" .. voice_idx) then parts[#parts + 1] = "freeze " .. voice_idx end
+      if freeze_shown and quantize.waiting("freeze" .. voice_idx) then parts[#parts + 1] = "freeze " .. voice_idx end
       local cell = cells_shown and S.lib.positions.waiting_cell(voice_idx)
       if cell then parts[#parts + 1] = "cell " .. voice_idx .. ":" .. cell end
     end
