@@ -1517,6 +1517,26 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
         "the check's timeout (" .. tostring(check) .. " s) and its kill-after (" .. tostring(kill)
         .. " s) end inside the check step's " .. tostring(check_step and check_step.minutes) .. " minutes")
     end
+    if job.name == "lua-suite" then
+      -- #993: every step before the suite has a limit of its own, and those
+      -- limits and the runner's own steps fit the job's, so a hung step of
+      -- the setup fails by its own name before the job's limit. The suite
+      -- has none: the job's limit is its own
+      local total, unlimited, suite = CI_WORKFLOW.SECONDS.runner_steps, {}, false
+      for _, step in ipairs(job.steps) do
+        if step.name == "Behavior tests" then suite = true; break end
+        if step.minutes then total = total + step.minutes * 60 else unlimited[#unlimited + 1] = tostring(step.name or step.uses) end
+      end
+      assert_true(suite, "the Lua job runs its Behavior tests step")
+      assert_equal(table.concat(unlimited, ", "), "", "the Lua job's steps before the suite with no timeout-minutes of their own")
+      assert_true(total <= job.minutes * 60, "the Lua job's setup limits and " .. CI_WORKFLOW.SECONDS.runner_steps
+        .. " s for the runner's own steps (" .. total .. " s) fit its " .. job.minutes .. " minutes")
+      -- a slow mirror's list, a cached install and the slowest shard
+      -- measured fit the job's limit with room
+      local lua = CI_WORKFLOW.SECONDS.lua
+      assert_true(lua.checkout + lua.slow_list + lua.restore + lua.cached_install + lua.slowest_shard <= job.minutes * 60,
+        "a slow mirror's setup and the slowest shard fit the Lua job's " .. job.minutes .. " minutes")
+    end
   end
   assert_true(installing["lua-suite"] and installing["engine-shard"], "both the Lua suites and the engine shards install with apt-get")
 end)
@@ -1530,14 +1550,39 @@ end)
 -- of its own; the runner's own steps (set up job, the checkout's post step,
 -- complete job), which no limit can name, took 6 s at most together in
 -- five runs of seven shards (44367155756 to 44385889124); the allowance is
--- a minute
-CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60 }
+-- a minute.
+-- #993: the Lua job's measured times (runs 45317374513, 45318610201,
+-- 45318613190 and 45320574628, four jobs each, before its packages were
+-- kept): the checkout 7 s at most; on a slow mirror its install's
+-- `apt-get update` alone took 131 s (13.4 MB at 114 kB/s), the list step's
+-- allowance 150 s; a restore and a cached install of its few files are
+-- allowed 10 s and 20 s; the slowest shard's Behavior tests took 331 s
+CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60,
+  lua = { checkout = 10, slow_list = 150, restore = 10, cached_install = 20, slowest_shard = 331 } }
 
+-- #993: where a job's text is in the workflow's: from the newline before its
+-- key line (`  <job>:`) to the newline before the next job's, or the end
+function CI_WORKFLOW.job_span(text, job)
+  local from = text:find("\n  " .. job .. ":\n", 1, true)
+  if not from then return nil end
+  local to = text:find("\n  [%w_%-]+:%s*\n", from + 1)
+  return from, to or #text
+end
 -- #786: the workflow's text with `old` (found exactly once, so a mutation
--- never passes by missing its place) replaced by `new`
-function CI_WORKFLOW.mutated(text, old, new)
-  local at = text:find(old, 1, true)
-  assert_true(at ~= nil and text:find(old, at + 1, true) == nil, "the mutation's text is in the workflow once: " .. old)
+-- never passes by missing its place) replaced by `new`. #993: with `job`,
+-- `old` is found once in that job's text (two jobs keep their packages by
+-- the same lines)
+function CI_WORKFLOW.mutated(text, old, new, job)
+  local from, to = 1, #text
+  if job then
+    from, to = CI_WORKFLOW.job_span(text, job)
+    assert_true(from ~= nil, "the workflow has the job " .. job)
+  end
+  local region = text:sub(from, to)
+  local at = region:find(old, 1, true)
+  assert_true(at ~= nil and region:find(old, at + 1, true) == nil,
+    "the mutation's text is in " .. (job and ("the job " .. job) or "the workflow") .. " once: " .. old)
+  at = from + at - 1
   return text:sub(1, at - 1) .. new .. text:sub(at + #old)
 end
 -- a step's run script, one entry a command line: the lines under `run: |`
@@ -1618,7 +1663,10 @@ end
 -- must be, to the kept folder's assignment, where the loop's piece starts):
 -- nothing before the loop can shadow a command it runs (a function, an
 -- alias or a PATH of its own for sha512sum)
-CI_WORKFLOW.PINNED = {
+-- #993: the Lua jobs keep their two packages by the same pieces, with their
+-- own package names, kept folder and list (CI_WORKFLOW.CACHES)
+CI_WORKFLOW.PINNED = {}
+CI_WORKFLOW.PINNED["engine-shard"] = {
   { name = "install step's start", step = "install", first = 'echo "jackd2 ', from_start = true, text = [==[
 echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections
 packages=(jackd2 "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION")
@@ -1651,6 +1699,64 @@ while read -r sum name; do
 done < "$RUNNER_TEMP/sc-packages.sha512"
 ]==] },
 }
+CI_WORKFLOW.PINNED["lua-suite"] = {
+  { name = "install step's start", step = "install", first = "packages=", from_start = true, text = [==[
+packages=(lua5.3 luajit)
+debs="$RUNNER_TEMP/lua-debs"
+]==] },
+  { name = "making of the SHA512 list", step = "list", first = ": > ", text = [==[
+: > "$RUNNER_TEMP/empty-status"
+nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
+apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s lua5.3 luajit \
+  | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
+  > "$RUNNER_TEMP/lua-install.txt"
+xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/lua-install.txt" \
+  | awk -v native="$(dpkg --print-architecture)" \
+      '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
+       /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
+  | sort -u > "$RUNNER_TEMP/lua-packages.sha512"
+]==] },
+  { name = "verify-and-copy loop", step = "install", first = "debs=", text = [==[
+debs="$RUNNER_TEMP/lua-debs"
+archives=/var/cache/apt/archives
+mirrors=/etc/apt/apt-mirrors.txt
+mkdir -p "$debs"
+kept=0
+while read -r sum name; do
+  if [ -f "$debs/$name" ] && echo "$sum  $debs/$name" | sha512sum --check --status; then
+    sudo cp "$debs/$name" "$archives/"
+    kept=$((kept + 1))
+  fi
+done < "$RUNNER_TEMP/lua-packages.sha512"
+]==] },
+}
+-- #993: the jobs that keep their packages between runs, each read by the
+-- same checks: its install step's name, the step that runs what the job is
+-- for (the save comes before it), its kept folder (under the runner's temp
+-- folder), its SHA512 list (under the same) and the start of its cache
+-- key, which neither job's key shares with the other's, so no restore-keys
+-- of one ever restores the other's entry
+CI_WORKFLOW.CACHES = {
+  { job = "engine-shard", where = "the engine shard", install = "Install SuperCollider and JACK", suite = "Engine check",
+    kept = "sc-debs", list = "sc-packages.sha512", prefix = "sc-debs-" },
+  { job = "lua-suite", where = "the Lua job", install = "Install Lua 5.3 and LuaJIT", suite = "Behavior tests",
+    kept = "lua-debs", list = "lua-packages.sha512", prefix = "lua-debs-" },
+}
+-- a cache's steps in its job (list, restore, install, save, suite: their
+-- indexes), and the job
+function CI_WORKFLOW.cache_steps(workflow, cache)
+  local job = CI_WORKFLOW.jobs(workflow)[cache.job]
+  if not job then return nil, {} end
+  local at = {}
+  for index, step in ipairs(job.steps) do
+    if step.id == "packages" then at.list = index end
+    if step.uses and step.uses:match("^actions/cache/restore@") then at.restore = index end
+    if step.name == cache.install then at.install = index end
+    if step.uses and step.uses:match("^actions/cache/save@") then at.save = index end
+    if step.name == cache.suite then at.check = index end
+  end
+  return job, at
+end
 -- what breaks the cache's safety in a workflow's text, one line each: the
 -- pinned pieces differ from their text (the first differing line); outside
 -- them, a line of any step of the shard names apt's archive folder (by a
@@ -1663,32 +1769,62 @@ done < "$RUNNER_TEMP/sc-packages.sha512"
 -- BASH_ENV anywhere in the workflow (bash runs its file before every step's
 -- script), a write to GITHUB_PATH or a PATH written to GITHUB_ENV in any step
 -- (both reach every later step), and a PATH key in the env of the workflow,
--- the shard job or any of its steps (#817)
+-- the shard job or any of its steps (#817). #993: so in each job of
+-- CI_WORKFLOW.CACHES, each of its problems led by the job's name, and the
+-- jobs' keys start apart
 function CI_WORKFLOW.cache_problems(workflow)
-  local problems, at = {}, {}
-  local function problem(text) problems[#problems + 1] = text end
-  local shard = CI_WORKFLOW.jobs(workflow)["engine-shard"]
-  if not shard then return { "the workflow has no engine-shard job" } end
-  local steps = shard.steps
-  for index, step in ipairs(steps) do
-    if step.id == "packages" then at.list = index end
-    if step.uses and step.uses:match("^actions/cache/restore@") then at.restore = index end
-    if step.name == "Install SuperCollider and JACK" then at.install = index end
-    if step.uses and step.uses:match("^actions/cache/save@") then at.save = index end
-    if step.name == "Engine check" then at.check = index end
+  local problems, starts = {}, {}
+  for _, cache in ipairs(CI_WORKFLOW.CACHES) do
+    local found, start = CI_WORKFLOW.job_cache_problems(workflow, cache)
+    for _, text in ipairs(found) do problems[#problems + 1] = cache.job .. ": " .. text end
+    starts[#starts + 1] = { job = cache.job, start = start }
   end
+  for first = 1, #starts do
+    for second = first + 1, #starts do
+      local a, b = starts[first].start, starts[second].start
+      if a and b and (a:sub(1, #b) == b or b:sub(1, #a) == a) then
+        problems[#problems + 1] = "the cache keys of " .. starts[first].job .. " and " .. starts[second].job
+          .. " start alike (" .. a .. ", " .. b .. "): one's restore-keys would restore the other's entry"
+      end
+    end
+  end
+  -- the workflow's env, the job's, a step's or a line written to
+  -- $GITHUB_ENV: any of them reaches every step of the job after it
+  for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
+    if not line:match("^%s*#") and line:find("BASH_ENV", 1, true) then
+      problems[#problems + 1] = "BASH_ENV is set (bash runs its file before every step's script): " .. line:match("^%s*(.-)%s*$")
+    end
+  end
+  for _, text in ipairs(CI_WORKFLOW.env_path_problems(workflow:match("^(.-\n)jobs:\n") or "")) do
+    problems[#problems + 1] = text
+  end
+  return problems
+end
+-- one job's cache problems, and the literal start of its key's prefix (to
+-- its first variable)
+function CI_WORKFLOW.job_cache_problems(workflow, cache)
+  local problems = {}
+  local function problem(text) problems[#problems + 1] = text end
+  local shard, at = CI_WORKFLOW.cache_steps(workflow, cache)
+  if not shard then return { "the workflow has no " .. cache.job .. " job" } end
+  local steps = shard.steps
   for _, part in ipairs({ "list", "restore", "install", "save", "check" }) do
-    if not at[part] then problem("the engine shard has no " .. part .. " step") end
+    if not at[part] then problem(cache.where .. " has no " .. part .. " step") end
   end
   if #problems > 0 then return problems end
-  if not (at.list < at.restore and at.restore < at.install) then problem("the shard does not list, restore, then install") end
+  if not (at.list < at.restore and at.restore < at.install) then problem(cache.where .. " does not list, restore, then install") end
   if at.save ~= at.install + 1 or at.save > at.check then problem("the save is not the step right after the install") end
   local miss = "steps." .. tostring(steps[at.restore].id) .. ".outputs.cache-hit != 'true'"
   if steps[at.save].text:match("\n%s+if:%s*([^\n]-)%s*\n") ~= miss then problem("the save runs on an exact hit: its if is not " .. miss) end
+  -- #993: the key is the job's own (CI_WORKFLOW.CACHES' prefix)
+  local prefix = steps[at.list].text:match('\n%s+prefix="([^"\n]*)"') or ""
+  if prefix:sub(1, #cache.prefix) ~= cache.prefix then
+    problem("the cache key's prefix (" .. prefix .. ") does not start with " .. cache.prefix)
+  end
   -- the pinned pieces, verbatim; a piece that matches is exempt from the
   -- route checks below (its lines are the ones that may name the folder)
   local exempt = {}
-  for _, piece in ipairs(CI_WORKFLOW.PINNED) do
+  for _, piece in ipairs(CI_WORKFLOW.PINNED[cache.job]) do
     local script, expected = CI_WORKFLOW.script(steps[at[piece.step]], true), {}
     for line in piece.text:gmatch("([^\n]*)\n") do expected[#expected + 1] = line end
     local starts = {}
@@ -1719,9 +1855,10 @@ function CI_WORKFLOW.cache_problems(workflow)
   end
   -- the kept folder is the one the restore fills (and the save keeps)
   local kept = steps[at.restore].text:match("\n%s+path:%s*([^\n]-)%s*\n") or ""
-  if kept ~= "${{ runner.temp }}/sc-debs" then
-    problem("the kept folder the restore fills (" .. kept .. ") is not the install's debs, \"$RUNNER_TEMP/sc-debs\"")
+  if kept ~= "${{ runner.temp }}/" .. cache.kept then
+    problem("the kept folder the restore fills (" .. kept .. ") is not the install's debs, \"$RUNNER_TEMP/" .. cache.kept .. "\"")
   end
+  local list_stem = cache.list:gsub("%.sha512$", "")
   -- outside the pinned pieces nothing puts a file in apt's archive folder,
   -- and nothing writes the SHA512 list (a read of it is `< "<the list>"`)
   for index, step in ipairs(steps) do
@@ -1751,62 +1888,63 @@ function CI_WORKFLOW.cache_problems(workflow)
       end
       for _, command in ipairs(CI_WORKFLOW.commands(line)) do
         if command:match("^function%s") or command:match("^[^%s=()'\"$]+%s*%(%s*%)") then
-          problem("a shell function is defined in the engine shard (it could shadow a command the pinned lines run): " .. line)
+          problem("a shell function is defined in " .. cache.where .. " (it could shadow a command the pinned lines run): " .. line)
         end
       end
       if line:find("%f[%w_]alias%f[^%w_]") then
-        problem("an alias in the engine shard (it could shadow a command the pinned lines run): " .. line)
+        problem("an alias in " .. cache.where .. " (it could shadow a command the pinned lines run): " .. line)
       end
       for _, command in ipairs(pinned and {} or CI_WORKFLOW.commands(line)) do
         if CI_WORKFLOW.names_archives(command) and not CI_WORKFLOW.leaves_archives(command) then
           problem("a file can reach apt's archive folder past the hash check: " .. line)
         end
-        if command:find("sc-packages", 1, true)
-            and not (command:find('< "$RUNNER_TEMP/sc-packages.sha512"', 1, true) and not command:find(">", 1, true)) then
+        if command:find(list_stem, 1, true)
+            and not (command:find('< "$RUNNER_TEMP/' .. cache.list .. '"', 1, true) and not command:find(">", 1, true)) then
           problem("the SHA512 list is written past its pinned making: " .. line)
         end
       end
     end
   end
-  -- the workflow's env, the job's, a step's or a line written to
-  -- $GITHUB_ENV: any of them reaches every step of the shard after it
-  for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
-    if not line:match("^%s*#") and line:find("BASH_ENV", 1, true) then
-      problem("BASH_ENV is set (bash runs its file before every step's script): " .. line:match("^%s*(.-)%s*$"))
-    end
-  end
-  -- a PATH key in an env block (#817): the workflow's, the shard job's or a
-  -- step's sets the PATH every command under it runs with, so a directory
-  -- put first there shadows a command the pinned lines run.
-  -- What it reads, by lines, comments and blank lines dropped: the env of
-  -- the workflow (before `jobs:`), of the shard job and of each of its
-  -- steps. An `env:` line (a step's first key, `- env:`, too) with nothing
-  -- after it opens a block: the lines after it indented deeper than the
-  -- `env:`, and, when the first of them starts with `{`, the lines from that
-  -- `{` to its closing `}` too. One that opens a flow mapping (`env: {`)
-  -- opens the lines to that `}`, whatever their indent (braces counted, so
-  -- `${{ ... }}` balances), and the lines indented deeper than the `env:`.
-  -- A block ends at the later of the two: its brace's close and its
-  -- indent's end. On those lines and on the `env:`
-  -- line itself (`env: { A: 1, PATH: x }`), a PATH key is matched as a
-  -- plain or quoted key (`PATH`, `"PATH"`, `'PATH'`, any spacing before its
-  -- colon) after the line's indent, a `{` or a `,`; a key that only ends in
-  -- PATH (`MYPATH`) passes.
-  -- What it does not: it parses no quotes, so a quoted value holding
-  -- `, PATH:` or `{ PATH:` (`A: "x, PATH: y"`) is refused too, a known
-  -- over-refusal (`A: "PATH: y"` passes), and a brace inside a quoted value
-  -- is counted as a brace, so a quoted `}` closes a `{`-opened block early;
-  -- the indent still holds the block's deeper lines, so only a flow
-  -- mapping whose lines sit at the `env:`'s own indent, after a quoted `}`,
-  -- is left unread; it does not read an explicit key written
-  -- with `?` (`? PATH` then `: x`), a tagged key (`!!str PATH: x`), an env
-  -- given by an expression (`env: ${{ ... }}`, such as `fromJSON`) or one
-  -- through an anchor or merge key (`<<: *name`). The workflow uses none of
-  -- these
+  for _, text in ipairs(CI_WORKFLOW.env_path_problems(shard.text)) do problem(text) end
+  return problems, prefix:match("^[^$]*")
+end
+-- the PATH keys in the env blocks of a text (the workflow's head, or a job's
+-- text: its own env and its steps'), one problem each.
+-- A PATH key in an env block (#817): the workflow's, a caching job's or a
+-- step's sets the PATH every command under it runs with, so a directory
+-- put first there shadows a command the pinned lines run.
+-- What it reads, by lines, comments and blank lines dropped: the env of
+-- the workflow (before `jobs:`), of each job that keeps its packages and of each of its
+-- steps. An `env:` line (a step's first key, `- env:`, too) with nothing
+-- after it opens a block: the lines after it indented deeper than the
+-- `env:`, and, when the first of them starts with `{`, the lines from that
+-- `{` to its closing `}` too. One that opens a flow mapping (`env: {`)
+-- opens the lines to that `}`, whatever their indent (braces counted, so
+-- `${{ ... }}` balances), and the lines indented deeper than the `env:`.
+-- A block ends at the later of the two: its brace's close and its
+-- indent's end. On those lines and on the `env:`
+-- line itself (`env: { A: 1, PATH: x }`), a PATH key is matched as a
+-- plain or quoted key (`PATH`, `"PATH"`, `'PATH'`, any spacing before its
+-- colon) after the line's indent, a `{` or a `,`; a key that only ends in
+-- PATH (`MYPATH`) passes.
+-- What it does not: it parses no quotes, so a quoted value holding
+-- `, PATH:` or `{ PATH:` (`A: "x, PATH: y"`) is refused too, a known
+-- over-refusal (`A: "PATH: y"` passes), and a brace inside a quoted value
+-- is counted as a brace, so a quoted `}` closes a `{`-opened block early;
+-- the indent still holds the block's deeper lines, so only a flow
+-- mapping whose lines sit at the `env:`'s own indent, after a quoted `}`,
+-- is left unread; it does not read an explicit key written
+-- with `?` (`? PATH` then `: x`), a tagged key (`!!str PATH: x`), an env
+-- given by an expression (`env: ${{ ... }}`, such as `fromJSON`) or one
+-- through an anchor or merge key (`<<: *name`). The workflow uses none of
+-- these
+function CI_WORKFLOW.env_path_problems(text)
+  local problems = {}
+  local function problem(found) problems[#problems + 1] = found end
   local function names_path(text) return ("," .. text):find("[{,]%s*[\"']?PATH[\"']?%s*:") ~= nil end
   local function braces(text) return select(2, text:gsub("{", "")) - select(2, text:gsub("}", "")) end
   local function blamed(line) problem("PATH is set in an env block (every command under it runs with that PATH): " .. line:match("^%s*(.-)%s*$")) end
-  for _, scope in ipairs({ workflow:match("^(.-\n)jobs:\n") or "", shard.text }) do
+  for _, scope in ipairs({ text }) do
     -- block: the env:'s indent while its block lasts; depth: the braces
     -- open while a `{`-opened block's brace is open (the block then lasts
     -- whatever the indent); first: the next line is the first after an
@@ -1892,12 +2030,14 @@ function CI_WORKFLOW.apt_weakenings(workflow)
 end
 -- each case: a name, the edits (old, new, ...) and a text the problems name
 -- (or a list of texts, each named); every case that is not refused is
--- reported, not only the first
-function CI_WORKFLOW.failing_cases(workflow, find_problems, cases)
+-- reported, not only the first. #993: the edits are made in the job `job`
+-- names (the case's own `job` first; "workflow" for the whole text)
+function CI_WORKFLOW.failing_cases(workflow, find_problems, cases, job)
   local missed = {}
   for _, case in ipairs(cases) do
-    local text = workflow
-    for i = 1, #case.edits, 2 do text = CI_WORKFLOW.mutated(text, case.edits[i], case.edits[i + 1]) end
+    local text, scope = workflow, case.job or job
+    if scope == "workflow" then scope = nil end
+    for i = 1, #case.edits, 2 do text = CI_WORKFLOW.mutated(text, case.edits[i], case.edits[i + 1], scope) end
     local found = table.concat(find_problems(text), "\n  ")
     for _, expect in ipairs(type(case.expect) == "table" and case.expect or { case.expect }) do
       if not found:find(expect, 1, true) then
@@ -2005,7 +2145,7 @@ test("a kept package reaches apt's archive folder only through the hash check, b
     { name = "PATH in the shard job's env", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
       edits = { "      STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}\n",
         "      STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}\n      PATH: /tmp/shadow:/usr/bin:/bin\n" } },
-    { name = "PATH in the workflow's env", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
+    { name = "PATH in the workflow's env", job = "workflow", expect = "PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
       edits = { "\nenv:\n", "\nenv:\n  PATH: /tmp/shadow:/usr/bin:/bin\n" } },
     { name = "PATH in a flow mapping on a step's env", expect = "PATH is set in an env block (every command under it runs with that PATH): env: { PATH: /tmp/shadow }",
       edits = { "        timeout-minutes: 4\n        run: |\n          echo \"jackd2 ",
@@ -2073,7 +2213,7 @@ test("a kept package reaches apt's archive folder only through the hash check, b
       expect = "PATH is written to GITHUB_ENV (it reaches every later step): echo 'PATH<<END'",
       edits = { prefix, "          {\n            echo 'PATH<<END'\n            echo \"$RUNNER_TEMP/bin\"\n            echo END\n          } >> \"$GITHUB_ENV\"\n" .. prefix } },
   }
-  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases, "engine-shard")
   -- and none of them refuses a step that reads PATH or writes another
   -- variable to GITHUB_ENV (the workflow writes to GITHUB_ENV nowhere today)
   for _, line in ipairs({ 'echo "PATH is $PATH"', 'echo "SC_STARTED=1" >> "$GITHUB_ENV"', 'export MYPATH="$RUNNER_TEMP/bin"' }) do
@@ -2128,7 +2268,7 @@ test("the workflow refuses every weakening of apt's checks and every install of 
     { name = "dpkg -i", expect = "dpkg -i", edits = instead('sudo dpkg -i "$debs"/*.deb') },
     { name = "dpkg --unpack", expect = "dpkg --unpack", edits = instead('sudo dpkg --unpack "$debs"/*.deb') },
   }
-  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, cases)
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, cases, "engine-shard")
 end)
 
 -- #786: the save is the step right after the install, and runs only when the
@@ -2150,103 +2290,179 @@ test("the cache is saved by the step right after the install, only on the restor
     { name = "the save run always", expect = "the save runs on an exact hit",
       edits = { condition, "        if: always()\n" } },
   }
-  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases)
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases, "engine-shard")
+end)
+
+-- #993: the Lua jobs keep their packages by the engine shard's pieces, so
+-- the same checks refuse the same edits there: each pinned piece fails by
+-- its first changed line, every other route into apt's archive folder or
+-- write of the list is named, the save stays right after the install and
+-- only on a miss, nothing shadows a command the pinned lines run, and the
+-- Lua job's key never starts as the shard's does
+test("a kept package reaches apt only through the hash check in the Lua jobs too, under a key of their own (#993)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  assert_equal(table.concat(CI_WORKFLOW.cache_problems(workflow), " | "), "", "the workflow's cache problems")
+  local function differs(region, line, found)
+    return { "lua-suite: the " .. region .. " differs from its pinned text at line " .. line .. ":", "found `" .. found .. "`" }
+  end
+  local loop, start, list = "verify-and-copy loop", "install step's start", "making of the SHA512 list"
+  local after_loop = '          echo "$kept package files from the cache, each matching apt\'s lists"\n'
+  local function added(line) return { after_loop, "          " .. line .. "\n" .. after_loop } end
+  local debs, first = '          debs="$RUNNER_TEMP/lua-debs"\n', "          packages=(lua5.3 luajit)\n"
+  local reach = "lua-suite: a file can reach apt's archive folder past the hash check: "
+  local cases = {
+    { name = "the kept folder copied before the check", expect = differs(loop, 5, 'sudo cp "$debs"/*.deb "$archives/"'),
+      edits = { "          kept=0\n", '          sudo cp "$debs"/*.deb "$archives/"\n          kept=0\n' } },
+    { name = "the check made optional", expect = differs(loop, 7, '  if [ -f "$debs/$name" ] || echo "$sum  $debs/$name" | sha512sum --check --status; then'),
+      edits = { '[ -f "$debs/$name" ] && echo', '[ -f "$debs/$name" ] || echo' } },
+    { name = "the check reading another list", expect = differs(loop, 11, 'done < "$debs/sums.sha512"'),
+      edits = { '            fi\n          done < "$RUNNER_TEMP/lua-packages.sha512"\n          echo "$kept',
+        '            fi\n          done < "$debs/sums.sha512"\n          echo "$kept' } },
+    { name = "the list's sums not apt's", expect = { "lua-suite: the " .. list .. " differs from its pinned text at line 8:", "/^SHA256: /" },
+      edits = { "/^SHA512: / { s = $2 }", "/^SHA256: / { s = $2 }" } },
+    { name = "the list made against the image's own dpkg status", expect = differs(list, 3, "apt-get $APT_NETWORK_OPTIONS install -s lua5.3 luajit \\"),
+      edits = { '"${nothing_installed[@]}" install -s lua5.3', "install -s lua5.3" } },
+    { name = "an unchecked mv", expect = reach .. 'sudo mv "$debs"/*.deb "$archives/"', edits = added('sudo mv "$debs"/*.deb "$archives/"') },
+    { name = "a copy in the suite's step", expect = reach .. 'sudo cp "$RUNNER_TEMP"/lua-debs/*.deb /var/cache/apt/archives/',
+      edits = { "        run: ${{ matrix.lua }} test/run.lua", '        run: sudo cp "$RUNNER_TEMP"/lua-debs/*.deb /var/cache/apt/archives/ && ${{ matrix.lua }} test/run.lua' } },
+    { name = "apt pointed at the kept folder", expect = reach,
+      edits = { 'install -y --download-only "${packages[@]}" || status=$?\n          if',
+        '-o Dir::Cache::archives="$debs" install -y --download-only "${packages[@]}" || status=$?\n          if' } },
+    { name = "the restore filling apt's archive folder", expect = "lua-suite: the kept folder the restore fills (/var/cache/apt/archives)",
+      edits = { "          path: ${{ runner.temp }}/lua-debs\n          key: ${{ steps.packages.outputs.key }}\n          restore-keys",
+        "          path: /var/cache/apt/archives\n          key: ${{ steps.packages.outputs.key }}\n          restore-keys" } },
+    { name = "the SHA512 list written again after its pinned making",
+      expect = 'lua-suite: the SHA512 list is written past its pinned making: sha512sum "$RUNNER_TEMP"/lua-debs/*.deb > "$RUNNER_TEMP/lua-packages.sha512"',
+      edits = { "          fi\n          prefix=", '          fi\n          sha512sum "$RUNNER_TEMP"/lua-debs/*.deb > "$RUNNER_TEMP/lua-packages.sha512"\n          prefix=' } },
+    { name = "sha512sum shadowed by a function above debs=", expect = { differs(start, 2, "sha512sum() { :; }")[1],
+        "lua-suite: a shell function is defined in the Lua job (it could shadow a command the pinned lines run): sha512sum() { :; }" },
+      edits = { debs, "          sha512sum() { :; }\n" .. debs } },
+    { name = "an alias in the suite's step", expect = "lua-suite: an alias in the Lua job",
+      edits = { "        run: nproc\n", "        run: shopt -s expand_aliases; alias sha512sum=true; nproc\n" } },
+    { name = "a line above the install's first", expect = "lua-suite: the install step's start is not the script's first line: line 1 is `set +o errexit`",
+      edits = { first, "          set +o errexit\n" .. first } },
+    { name = "PATH in the Lua job's env", expect = "lua-suite: PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
+      edits = { "    timeout-minutes: 10\n    runs-on: ubuntu-24.04\n", "    timeout-minutes: 10\n    runs-on: ubuntu-24.04\n    env:\n      PATH: /tmp/shadow:/usr/bin:/bin\n" } },
+    { name = "a directory added to GITHUB_PATH in the list step",
+      expect = 'lua-suite: GITHUB_PATH is written (its directories come first in PATH for every later step): echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"',
+      edits = { '          prefix="lua-debs-', '          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"\n          prefix="lua-debs-' } },
+    { name = "the save made unconditional", expect = "lua-suite: the save runs on an exact hit",
+      edits = { "        if: steps.restore.outputs.cache-hit != 'true'\n", "" } },
+    { name = "a step between the install and the save", expect = "lua-suite: the save is not the step right after the install",
+      edits = { "      - name: Keep Lua 5.3 and LuaJIT's packages\n", "      - name: A step between\n        run: true\n      - name: Keep Lua 5.3 and LuaJIT's packages\n" } },
+    { name = "the Lua job's key the shard's", expect = { "lua-suite: the cache key's prefix (sc-debs-$ImageOS-$RUNNER_ARCH-) does not start with lua-debs-",
+        "the cache keys of engine-shard and lua-suite start alike (sc-debs-, sc-debs-)" },
+      edits = { 'prefix="lua-debs-$ImageOS-$RUNNER_ARCH-"', 'prefix="sc-debs-$ImageOS-$RUNNER_ARCH-"' } },
+    { name = "the Lua job's key a longer start of the shard's", expect = "the cache keys of engine-shard and lua-suite start alike (sc-debs-, sc-debs-lua-)",
+      edits = { 'prefix="lua-debs-$ImageOS-$RUNNER_ARCH-"', 'prefix="sc-debs-lua-$ImageOS-$RUNNER_ARCH-"' } },
+  }
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases, "lua-suite")
+  -- and what an apt weakening is in the shard is one in the Lua job
+  CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, {
+    { name = "dpkg -i of the kept files", expect = "dpkg -i", edits = { '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n',
+      '          sudo dpkg -i "$debs"/*.deb\n' } },
+    { name = "an install of a kept file", expect = '"$debs/$name"', edits = { '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n',
+      '          sudo apt-get $APT_NETWORK_OPTIONS install -y "$debs/$name"\n' } },
+  }, "lua-suite")
 end)
 
 -- #785: the engine shards keep the package files they download (actions/cache,
 -- restored before the install, saved after it) and trust none unchecked: apt
 -- takes any file of the right size in its archive folder as downloaded, so a
--- kept file reaches apt only when its SHA512 is the one apt's lists give
-test("the engine shards keep their packages between runs and check each one against apt's lists (#785)", function()
-  local jobs = CI_WORKFLOW.jobs(read_repo_file(".github/workflows/test.yml"))
-  local shard = jobs["engine-shard"]
-  local at = {}
-  for index, step in ipairs(shard.steps) do
-    if step.id == "packages" then at.list = index end
-    if step.uses and step.uses:match("^actions/cache/restore@") then at.restore = index end
-    if step.name == "Install SuperCollider and JACK" then at.install = index end
-    if step.uses and step.uses:match("^actions/cache/save@") then at.save = index end
-    if step.name == "Engine check" then at.check = index end
+-- kept file reaches apt only when its SHA512 is the one apt's lists give.
+-- #993: the Lua jobs keep theirs the same way, under a key of their own
+test("the engine shards and the Lua jobs keep their packages between runs and check each one against apt's lists (#785, #993)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  local commits = {}
+  for _, cache in ipairs(CI_WORKFLOW.CACHES) do
+    local job, at = CI_WORKFLOW.cache_steps(workflow, cache)
+    assert_true(job ~= nil, "the workflow has the job " .. cache.job)
+    for _, part in ipairs({ "list", "restore", "install", "save", "check" }) do
+      assert_true(at[part] ~= nil, cache.where .. " has its " .. part .. " step")
+    end
+    assert_true(at.list < at.restore and at.restore < at.install and at.install < at.save and at.save < at.check,
+      cache.where .. " lists its packages, restores them, installs, keeps them, then runs " .. cache.suite)
+    -- saved as soon as the install has succeeded, whatever the check does, so
+    -- a rerun of a job that was too slow finds what a faster one saved
+    assert_equal(at.save, at.install + 1, cache.where .. "'s save is the step right after the install")
+    local list, restore, install, save = job.steps[at.list], job.steps[at.restore], job.steps[at.install], job.steps[at.save]
+    -- the key names the packages (each file's name and SHA512) and the image's
+    -- release, never its build or a mirror's address
+    local key = list.text:match('echo "key=([^\n]*)"')
+    assert_true(key ~= nil and key:find("sha256sum", 1, true) ~= nil, "the key ends in a hash of the package list: " .. tostring(key))
+    local prefix = list.text:match('prefix="([^"\n]*)"') or ""
+    assert_equal(prefix:sub(1, #cache.prefix), cache.prefix, cache.where .. "'s key is its own")
+    local parts = cache.job == "engine-shard" and { "$ImageOS", "$RUNNER_ARCH", "$SC_APT_VERSION" } or { "$ImageOS", "$RUNNER_ARCH" }
+    for _, part in ipairs(parts) do
+      assert_true(prefix:find(part, 1, true) ~= nil, "the key's prefix names " .. part .. ": " .. prefix)
+    end
+    assert_true(not list.text:find("ImageVersion", 1, true) and not list.text:find("print-uris", 1, true),
+      "the key names no image build and no mirror (the run of #785 had two of each)")
+    assert_true(list.text:find("SHA512", 1, true) ~= nil, "the list holds each file's SHA512 from apt's lists")
+    -- one key for every job of a kind: the list is what the packages need
+    -- with nothing installed, so what an image has installed does not change it
+    assert_true(list.text:find('Dir::State::status="$RUNNER_TEMP/empty-status"', 1, true) ~= nil
+      and list.text:find(': > "$RUNNER_TEMP/empty-status"', 1, true) ~= nil, "the list is made against an empty dpkg status")
+    -- restore and save: the same pinned action, folder and key; neither can fail the job
+    assert_equal(save.uses:match("@(%x+)"), restore.uses:match("@(%x+)"), "restore and save are one release of actions/cache")
+    commits[#commits + 1] = restore.uses:match("@(%x+)")
+    local path = restore.text:match("\n%s+path:%s*([^\n]-)%s*\n")
+    assert_equal(path, "${{ runner.temp }}/" .. cache.kept, "the kept folder is in the runner's temp folder")
+    assert_equal(save.text:match("\n%s+path:%s*([^\n]-)%s*\n"), path, "save keeps the folder restore fills")
+    for _, step in ipairs({ restore, save }) do
+      assert_equal(step.text:match("\n%s+key:%s*([^\n]-)%s*\n"), "${{ steps.packages.outputs.key }}", tostring(step.uses) .. "'s key")
+      assert_true(step.may_fail and step.minutes ~= nil, tostring(step.uses) .. " has a limit and never fails " .. cache.where)
+    end
+    assert_equal(restore.text:match("\n%s+restore%-keys:%s*([^\n]-)%s*\n"), "${{ steps.packages.outputs.prefix }}", "a near miss restores most files")
+    assert_equal(save.text:match("\n%s+if:%s*([^\n]-)%s*\n"), "steps." .. tostring(restore.id) .. ".outputs.cache-hit != 'true'",
+      "an exact hit saves nothing")
+    -- the install hands apt only checked files; apt still installs
+    assert_true(install.text:find("sha512sum --check", 1, true) ~= nil, "each kept file is checked against its SHA512")
+    assert_true(not install.text:find("dpkg -i", 1, true) and not install.text:find("dpkg --install", 1, true), "nothing is installed past apt")
+    assert_true(install.text:find('install -y --download-only "${packages[@]}"', 1, true) ~= nil,
+      "apt downloads what the cache lacked before the kept folder is refilled")
   end
-  for _, part in ipairs({ "list", "restore", "install", "save", "check" }) do
-    assert_true(at[part] ~= nil, "the engine shard has its " .. part .. " step")
-  end
-  assert_true(at.list < at.restore and at.restore < at.install and at.install < at.save and at.save < at.check,
-    "the shard lists its packages, restores them, installs, keeps them, then runs the check")
-  -- saved as soon as the install has succeeded, whatever the check does, so
-  -- a rerun of a shard that was too slow finds what a faster one saved
-  assert_equal(at.save, at.install + 1, "the save is the step right after the install")
-  local list, restore, install, save = shard.steps[at.list], shard.steps[at.restore], shard.steps[at.install], shard.steps[at.save]
-  -- the key names the packages (each file's name and SHA512) and the image's
-  -- release, never its build or a mirror's address
-  local key = list.text:match('echo "key=([^\n]*)"')
-  assert_true(key ~= nil and key:find("sha256sum", 1, true) ~= nil, "the key ends in a hash of the package list: " .. tostring(key))
-  local prefix = list.text:match('prefix="([^"\n]*)"') or ""
-  for _, part in ipairs({ "$ImageOS", "$SC_APT_VERSION" }) do
-    assert_true(prefix:find(part, 1, true) ~= nil, "the key's prefix names " .. part .. ": " .. prefix)
-  end
-  assert_true(not list.text:find("ImageVersion", 1, true) and not list.text:find("print-uris", 1, true),
-    "the key names no image build and no mirror (the run of #785 had two of each)")
-  assert_true(list.text:find("SHA512", 1, true) ~= nil, "the list holds each file's SHA512 from apt's lists")
-  -- one key for every shard: the list is what the packages need with nothing
-  -- installed, so what an image has installed does not change it
-  assert_true(list.text:find('Dir::State::status="$RUNNER_TEMP/empty-status"', 1, true) ~= nil
-    and list.text:find(': > "$RUNNER_TEMP/empty-status"', 1, true) ~= nil, "the list is made against an empty dpkg status")
-  -- restore and save: the same pinned action, folder and key; neither can fail the shard
-  assert_equal(save.uses:match("@(%x+)"), restore.uses:match("@(%x+)"), "restore and save are one release of actions/cache")
-  local path = restore.text:match("\n%s+path:%s*([^\n]-)%s*\n")
-  assert_true(path ~= nil and path:find("${{ runner.temp }}/", 1, true) == 1, "the kept folder is in the runner's temp folder: " .. tostring(path))
-  assert_equal(save.text:match("\n%s+path:%s*([^\n]-)%s*\n"), path, "save keeps the folder restore fills")
-  for _, step in ipairs({ restore, save }) do
-    assert_equal(step.text:match("\n%s+key:%s*([^\n]-)%s*\n"), "${{ steps.packages.outputs.key }}", tostring(step.uses) .. "'s key")
-    assert_true(step.may_fail and step.minutes ~= nil, tostring(step.uses) .. " has a limit and never fails the shard")
-  end
-  assert_equal(restore.text:match("\n%s+restore%-keys:%s*([^\n]-)%s*\n"), "${{ steps.packages.outputs.prefix }}", "a near miss restores most files")
-  assert_equal(save.text:match("\n%s+if:%s*([^\n]-)%s*\n"), "steps." .. tostring(restore.id) .. ".outputs.cache-hit != 'true'",
-    "an exact hit saves nothing")
-  -- the install hands apt only checked files; apt still installs
-  assert_true(install.text:find("sha512sum --check", 1, true) ~= nil, "each kept file is checked against its SHA512")
-  assert_true(not install.text:find("dpkg -i", 1, true) and not install.text:find("dpkg --install", 1, true), "nothing is installed past apt")
-  assert_true(install.text:find('install -y --download-only "${packages[@]}"', 1, true) ~= nil,
-    "apt downloads what the cache lacked before the kept folder is refilled")
-  assert_true(install.text:find('echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections', 1, true) ~= nil,
-    "the JACK debconf line is kept")
+  -- every cache step is the one pinned release of actions/cache (#533)
+  for _, commit in ipairs(commits) do assert_equal(commit, commits[1], "every cache step is one release of actions/cache") end
+  assert_true(CI_WORKFLOW.jobs(workflow)["engine-shard"].text:find(
+    'echo "jackd2 jackd/tweak_rt_limits boolean false" | sudo debconf-set-selections', 1, true) ~= nil, "the JACK debconf line is kept")
 end)
 
 -- #785: a slow mirror sends data, so no file fails and neither apt's timeout
 -- nor its mirror failover ends it. The download has a limit of its own, then
 -- runs again with the runner's second mirror (https://archive.ubuntu.com,
 -- already in its mirror list) first, within the step's limit; apt's lists,
--- their signatures and the files' hashes are checked as before
-test("a slow mirror ends the engine shard's download early and tries archive.ubuntu.com, apt's checks unchanged (#785)", function()
+-- their signatures and the files' hashes are checked as before. #993: so in
+-- the Lua jobs
+test("a slow mirror ends a job's download early and tries archive.ubuntu.com, apt's checks unchanged (#785, #993)", function()
   local workflow = read_repo_file(".github/workflows/test.yml")
-  local install
-  for _, step in ipairs(CI_WORKFLOW.jobs(workflow)["engine-shard"].steps) do
-    if step.name == "Install SuperCollider and JACK" then install = step end
+  for _, cache in ipairs(CI_WORKFLOW.CACHES) do
+    local job, at = CI_WORKFLOW.cache_steps(workflow, cache)
+    local install = job and at.install and job.steps[at.install]
+    assert_true(install, cache.where .. " has its install step")
+    local limits = {}
+    for seconds in install.text:gmatch("sudo timeout %-%-kill%-after=%d+ (%d+) apt%-get %$APT_NETWORK_OPTIONS install %-y %-%-download%-only ") do
+      limits[#limits + 1] = tonumber(seconds)
+    end
+    assert_equal(#limits, 2, cache.where .. ": the download runs under a limit, and once more after the mirrors are reordered")
+    assert_true(limits[1] <= 60, "the first try gives up within a minute (a normal one takes seconds): " .. tostring(limits[1]))
+    local first, second = install.text:find("sudo timeout", 1, true), select(2, install.text:find("sudo timeout.-sudo timeout"))
+    local reorder = install.text:find("sudo sed -i -E '/^https:\\/\\/archive\\.ubuntu\\.com\\/ubuntu\\//! s/priority:[0-9]+/priority:9/' \"$mirrors\"", 1, true)
+    assert_true(reorder ~= nil and first < reorder and reorder < second, cache.where .. ": only the mirror list's priorities change, between the two tries")
+    assert_true(install.text:find("mirrors=/etc/apt/apt-mirrors.txt", 1, true) ~= nil, "the list changed is the runner's own")
+    -- both tries and the unpacking (about 25 s) fit in the step's limit
+    assert_true(limits[1] + limits[2] + 30 <= install.minutes * 60, cache.where .. ": both tries fit the step's " .. install.minutes .. " minutes")
+    -- #786: the worst run that still succeeds (each try to its limit and its
+    -- kill, the second one finishing, then the refill and the unpacking) ends
+    -- inside the step's limit, so a failure is the step's own ::error:: line
+    local worst = CI_WORKFLOW.SECONDS.after_downloads
+    for kill, seconds in install.text:gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get ") do
+      worst = worst + tonumber(kill) + tonumber(seconds)
+    end
+    assert_true(worst <= install.minutes * 60,
+      cache.where .. ": the worst successful install (" .. worst .. " s) fits the step's " .. install.minutes .. " minutes")
+    assert_true(install.text:find("::error::", 1, true) ~= nil, cache.where .. ": a download that never finishes fails the step with its own line")
   end
-  assert_true(install ~= nil, "the engine shard has its install step")
-  local limits = {}
-  for seconds in install.text:gmatch("sudo timeout %-%-kill%-after=%d+ (%d+) apt%-get %$APT_NETWORK_OPTIONS install %-y %-%-download%-only ") do
-    limits[#limits + 1] = tonumber(seconds)
-  end
-  assert_equal(#limits, 2, "the download runs under a limit, and once more after the mirrors are reordered")
-  assert_true(limits[1] <= 60, "the first try gives up within a minute (a normal one takes seconds): " .. tostring(limits[1]))
-  local first, second = install.text:find("sudo timeout", 1, true), select(2, install.text:find("sudo timeout.-sudo timeout"))
-  local reorder = install.text:find("sudo sed -i -E '/^https:\\/\\/archive\\.ubuntu\\.com\\/ubuntu\\//! s/priority:[0-9]+/priority:9/' \"$mirrors\"", 1, true)
-  assert_true(reorder ~= nil and first < reorder and reorder < second, "only the mirror list's priorities change, between the two tries")
-  assert_true(install.text:find("mirrors=/etc/apt/apt-mirrors.txt", 1, true) ~= nil, "the list changed is the runner's own")
-  -- both tries and the unpacking (about 25 s) fit in the step's limit
-  assert_true(limits[1] + limits[2] + 30 <= install.minutes * 60, "both tries fit the step's " .. install.minutes .. " minutes")
-  -- #786: the worst run that still succeeds (each try to its limit and its
-  -- kill, the second one finishing, then the refill and the unpacking) ends
-  -- inside the step's limit, so a failure is the step's own ::error:: line
-  local worst = CI_WORKFLOW.SECONDS.after_downloads
-  for kill, seconds in install.text:gmatch("sudo timeout %-%-kill%-after=(%d+) (%d+) apt%-get ") do
-    worst = worst + tonumber(kill) + tonumber(seconds)
-  end
-  assert_true(worst <= install.minutes * 60,
-    "the worst successful install (" .. worst .. " s) fits the step's " .. install.minutes .. " minutes")
-  assert_true(install.text:find("::error::", 1, true) ~= nil, "a download that never finishes fails the step with its own line")
   -- X2's list (allow-unauthenticated, AllowInsecureRepositories, trusted=yes,
   -- Check-Valid-Until, AllowDowngradeToInsecureRepositories, dpkg -i, dpkg
   -- --install, sources.list) is in CI_WORKFLOW.apt_weakenings, with #786's
