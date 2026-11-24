@@ -1033,4 +1033,192 @@ test("a raising home destination leaves MAIN's other columns drawn", function()
   h.claim_script_errors(context, 1, "strata: matrix home 3 (affects) failed: ", "home boom")
 end)
 
+
+-- #1025: a field whose param a step lock or a step's note holds (a base
+-- override, S.lib.engine_sync.is_overridden) shows the step lock's tag in
+-- its label's place, at the field's level; the value is the stored one,
+-- drawn whole
+
+-- Field `field`'s tag entry (the text in the label's place when it is the
+-- tag), or nil; and the field's value entry
+local function field_tag(context, S, field)
+  redraw()
+  local label, value = field_texts(context, field)
+  assert_true(label and value, "field " .. field .. " is drawn")
+  local tag = S.lib.pages_main.LAYOUT.step_lock_tag
+  return label.text == tag and label or nil, value
+end
+
+local function started_main(source)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  if source then params:set("v1_source", source) end
+  show_page("MAIN")
+  select_voice(1)
+  return context, S
+end
+
+test("MAIN marks a field while a step lock holds its param, and the mark goes when the lock ends (#1025)", function()
+  local context, S = started_main()
+  local tag = S.lib.pages_main.LAYOUT.step_lock_tag
+  assert_true(type(tag) == "string" and tag:match("^%[.+%]$"), "the mark is a [BRACKETS] tag")
+  S.buffers[1].seconds = 8
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("v1_buf_pos", 0.5)
+  local seq, pages = S.lib.sequencer, S.constants.UI_PAGES
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "pos", 0.25)
+  S.main_field = 1
+  local marked, value = field_tag(context, S, 1)
+  assert_true(not marked, "no step lock: no mark")
+  assert_equal(field_texts(context, 1).text, "pos", "the label")
+  pattern_clock_start()
+  assert_true(S.lib.engine_sync.is_overridden("v1_buf_pos"), "step 1's pos lock holds buf_pos")
+  marked, value = field_tag(context, S, 1)
+  assert_true(marked, "step 1's pos lock marks field 1")
+  assert_equal(marked.x, LABEL_X, "the tag in the label's place")
+  assert_equal(marked.level, 15, "on the cursor: the cursor's level")
+  assert_equal(value.text, string.format("%.2f", 0.5), "the value is the stored one, not the lock's")
+  assert_equal(value.level, 15, "the value keeps the cursor's level")
+  S.main_field = 2
+  marked, value = field_tag(context, S, 1)
+  assert_true(marked, "still marked off the cursor")
+  assert_equal(marked.level, 4, "off the cursor: the field's level, 4")
+  assert_equal(value.level, 4, "the value keeps its level")
+  assert_true(not field_tag(context, S, 2), "grain size: no lock, no mark")
+  pages.screen_dirty = false
+  context.clock.advance_until(S.pattern_clocks[1])  -- step 2, plain: the lock ends
+  assert_equal(seq.sounding_step(1), 2, "step 2 played")
+  assert_true(pages.screen_dirty, "the lock's end asks the screen to redraw")
+  assert_true(not field_tag(context, S, 1), "the mark goes when the lock ends")
+  assert_equal(field_texts(context, 1).text, "pos", "the label is back")
+  -- a replaced pattern ends it (S.lib.sequencer.replace_pattern)
+  pattern_clock_stop()
+  pattern_clock_start()
+  assert_true(field_tag(context, S, 1), "playing again: marked")
+  pages.screen_dirty = false
+  seq.replace_pattern(1, {15})
+  assert_true(pages.screen_dirty, "the replacement's end of the lock asks the screen to redraw")
+  assert_true(not field_tag(context, S, 1), "a replaced pattern ends the lock and its mark")
+  pattern_clock_stop()
+  -- a length that leaves the locked step out ends it
+  clear_pattern(1)
+  seq.set_step_attr(1, 1, "pos", nil)
+  S.patterns[1][5] = 15
+  seq.set_step_attr(1, 5, "pos", 0.25)
+  pattern_clock_start()
+  for _ = 1, 4 do context.clock.advance_until(S.pattern_clocks[1]) end
+  assert_equal(seq.sounding_step(1), 5, "step 5 played")
+  assert_true(field_tag(context, S, 1), "step 5's pos lock: marked")
+  pages.screen_dirty = false
+  params:set("v1_seq_length", 4)
+  assert_true(pages.screen_dirty, "the shorter length's end of the lock asks the screen to redraw")
+  assert_true(not field_tag(context, S, 1), "a length below the locked step ends the lock and its mark")
+  pattern_clock_stop()
+end)
+
+test("MAIN marks every field a lock holds and no other (#1025)", function()
+  local context, S = started_main()
+  local seq = S.lib.sequencer
+  assert_equal(main_param_id(1), "v1_freq", "voice 1 is a resonator: field 1 is freq")
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "notes", {0})
+  seq.set_step_attr(1, 1, "size", 0.3)
+  pattern_clock_start()
+  assert_true(S.lib.engine_sync.is_overridden("v1_freq"), "the step's note holds freq")
+  local freq_tag, freq_value = field_tag(context, S, 1)
+  assert_true(freq_tag, "the step's note marks freq (field 1)")
+  assert_equal(freq_value.text, string.format("%.0f Hz", params:get("v1_freq")), "freq shows the stored value")
+  local size_tag, size_value = field_tag(context, S, 2)
+  assert_true(size_tag, "the size lock marks size (field 2)")
+  assert_equal(size_value.text, string.format("%.2f s", params:get("v1_grain_size")), "size shows the stored value")
+  assert_true(not field_tag(context, S, 3), "dens: no lock holds it, no mark")
+  pattern_clock_stop()
+  -- an input voice's pitch lock marks its third field
+  context, S = started_main(S.constants.SOURCE_INPUT)
+  seq = S.lib.sequencer
+  S.patterns[1][1] = 15
+  seq.set_step_attr(1, 1, "pitch", 2)
+  pattern_clock_start()
+  assert_true(S.lib.engine_sync.is_overridden("v1_grain_pitch"), "the pitch lock holds grain pitch")
+  assert_true(not field_tag(context, S, 1), "size: no lock, no mark")
+  assert_true(not field_tag(context, S, 2), "dens: no mark")
+  local pitch_tag, pitch_value = field_tag(context, S, 3)
+  assert_true(pitch_tag, "the pitch lock marks pitch (field 3)")
+  assert_equal(pitch_value.text, string.format("%.2fx", params:get("v1_grain_pitch")), "pitch shows the stored value")
+  pattern_clock_stop()
+end)
+
+-- The controller's ruling on #1025 (way (b)): the tag takes the label's
+-- place, so a held field's widest value (each held param at its minimum
+-- and maximum, on every source, with the cursor on every field) is drawn
+-- whole. The MAIN fields a lock or a step's note can hold (the sequencer's
+-- lock params and a synth voice's note param; buf_rate is never a field)
+local HELD_KEYS = { freq = "%.0f Hz", buf_pos = "%.2f", grain_size = "%.2f s", grain_pitch = "%.2fx" }
+
+test("MAIN draws a held field's widest value whole beside the tag (#1025)", function()
+  for _, source in ipairs({ "synth", "buffer", "input" }) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    local option = ({ synth = S.constants.SOURCE_SYNTH, buffer = S.constants.SOURCE_SYNTH + 1,
+      input = S.constants.SOURCE_INPUT })[source]
+    params:set("v1_source", option)
+    show_page("MAIN")
+    select_voice(1)
+    local fields = main_fields(1)
+    local held = 0
+    for _, edge in ipairs({ "min", "max" }) do
+      for _, id in ipairs(fields) do
+        local min_value, max_value = param_range(id)
+        params:set(id, edge == "min" and min_value or max_value)
+        if HELD_KEYS[id:match("^v%d+_(.*)$")] then S.lib.engine_sync.set_base_override(id, params:get(id)) end
+      end
+      for cursor = 1, S.lib.pages_main.LAYOUT.field_count do
+        S.main_field = cursor
+        for field, id in ipairs(fields) do
+          local format = HELD_KEYS[id:match("^v%d+_(.*)$")]
+          local marked, value = field_tag(context, S, field)
+          local where = string.format("%s, %s values, cursor %d, field %d", source, edge, cursor, field)
+          assert_equal(marked ~= nil, format ~= nil, where .. ": marked exactly while held")
+          if format then
+            held = held + 1
+            assert_equal(value.text, string.format(format, params:get(id)), where .. ": the value whole")
+          end
+        end
+        assert_screen_layout(context, string.format("MAIN held, %s, %s values, cursor %d", source, edge, cursor))
+      end
+    end
+    assert_true(held > 0, source .. ": some field is held")
+  end
+end)
+
+-- #1025's layout states: each held field drawn with the tag and its value
+-- whole, at both levels, for the layout tests and the page renders
+test("MAIN's step lock layout states draw the tag on every held field they show (#1025)", function()
+  local cases = {
+    ["step locks at their widest values, resonator"] = { held = { 1, 2 }, free = 3, cursor = 1, values = { "2000 Hz", "0.02 s" } },
+    ["step locks at their widest values, input source"] = { held = { 1, 3 }, free = 2, cursor = 3, values = { "0.02 s", "0.25x" } },
+  }
+  for state_name, case in pairs(cases) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    show_page("MAIN")
+    local found
+    for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.MAIN].layout_states) do
+      if state.name == state_name then found = state end
+    end
+    assert_true(found, "a layout state " .. state_name)
+    found.setup(context)
+    assert_equal(S.main_field, case.cursor, state_name .. ": the cursor")
+    for k, field in ipairs(case.held) do
+      local marked, value = field_tag(context, S, field)
+      assert_true(marked, state_name .. ": field " .. field .. " carries the tag")
+      assert_equal(marked.level, field == case.cursor and 15 or 4, state_name .. ": field " .. field .. "'s level")
+      assert_equal(value.text, case.values[k], state_name .. ": field " .. field .. "'s widest value whole")
+    end
+    assert_true(not field_tag(context, S, case.free), state_name .. ": dens is not marked")
+    assert_screen_layout(context, state_name)
+  end
+end)
+
 end
