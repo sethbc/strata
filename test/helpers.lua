@@ -1543,7 +1543,7 @@ local function assert_screen_layout(context, where)
     if entry.x == HEADER_FLASH_X and entry.y == 8 then flash_drawn = true end
     if entry.x == 0 and entry.y == HINT_ROW_Y then hint_found = true end
   end
-  assert_true(title_right, "page title " .. title .. " drawn at 0,8 (" .. where .. ")")
+  assert_true(title_right, "page title or owner name " .. title .. " drawn at 0,8 (" .. where .. ")")
   -- the header band: rects above y 9. Every one over the dots' span is a
   -- page dot (2x2, or FX's 2x5 bar), so a rect of another shape there
   -- fails rather than going uncounted (#856)

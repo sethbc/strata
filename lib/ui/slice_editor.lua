@@ -603,7 +603,7 @@ return function(S)
   end
 
   -- SLICE in the header while it is on top (#901); close as K2 (#899)
-  owner = {name = "SLICE", close = M.close, draw = draw, hints = hints, enc = enc, key = key, animates = animates}
+  owner = {name = "SLICE", close = function() M.close() end, draw = draw, hints = hints, enc = enc, key = key, animates = animates}
   M.owner = owner
 
   -- While the key row is picked, a MIDI note sets the key to its number:
