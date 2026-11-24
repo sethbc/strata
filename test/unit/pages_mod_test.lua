@@ -1022,6 +1022,10 @@ test("a quick ALT+K2 undoes a sequence's new on its row and in its settings, and
   key(1, 1); redraw()
   assert_true(not hint_text(context):find("K2:", 1, true), "nothing held: no K2 in the row's ALT hint")
   key(1, 0)
+  alt_k2_held(context); redraw()
+  assert_equal(hint_text(context), "K2:cancel", "held past the hold time: nothing to clear, so cancel")
+  key(2, 0); key(1, 0)
+  assert_equal(sequences.values(2)[1], before[1], "a held press changes nothing")
   params:set("rseq2_new", 1)
   key(1, 1); redraw()
   assert_true(hint_text(context):find("K2:undo", 1, true) ~= nil, "K2:undo while it is held")
@@ -1047,6 +1051,29 @@ test("a quick ALT+K2 undoes a sequence's new on its row and in its settings, and
   place(S, "routing:1")
   alt_k2_quick()
   assert_equal(S.lib.matrix.routing(1).dest, "", "undone on the matrix")
+end)
+
+
+-- #927: a learn that leaves its routing incomplete, with no other routing
+-- complete, leaves the matrix nothing to randomize; its undo is still
+-- reached by a quick ALT+K2 there, and the row's hint says so
+test("a learn whose routing stays incomplete is undone by a quick ALT+K2 with no routing complete", function()
+  local context, S = loaded()
+  local matrix = S.lib.matrix
+  for k = 1, S.constants.MATRIX_SLOTS do assert_true(matrix.routing(k).source == "" or matrix.routing(k).dest == "") end
+  matrix.learn(2)                             -- routing 2 has no source
+  enc_param_delta(3, "reverb_mix", 1)
+  assert_equal(matrix.routing(2).dest, "reverb_mix", "learned")
+  assert_equal(matrix.routing(2).source, "", "still incomplete")
+  place(S, "routing:2")
+  key(1, 1); redraw()
+  assert_true(hint_text(context):find("K2:undo", 1, true) ~= nil, "K2:undo while the learn is held")
+  key(1, 0)
+  alt_k2_quick()
+  assert_equal(matrix.routing(2).dest, "", "undone")
+  key(1, 1); redraw()
+  assert_true(hint_text(context):find("K2:undo", 1, true) == nil, "nothing held: no K2:undo")
+  key(1, 0)
 end)
 
 end
