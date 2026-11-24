@@ -536,25 +536,41 @@ var checkRefusedEnding = {
 };
 
 // A 16 s pass on the standard tier, timed; then a 300 s pass on a high
-// engine: a message sent every 10 ms while it runs is handled within one
-// of the pass's chunks of its send (chunkAllowance), counted with the
-// area's chunks, not timed (#964), and it keeps the 63 of a click every
-// 1000 frames. It assumes what the rule is: an OSC message waits for the
-// language lock, which the pass gives up after each chunk for at least
-// commandGap (0.2 ms), and sclang's network thread takes it in that gap
-// or, if the OS has not run the thread by then, in the next one, a chunk
-// later; a pass that yields only every second chunk holds some message
-// two. A machine so loaded that the thread misses two gaps in a row would
-// fail it. What fails a pass that never yields is the other condition: the messages go
-// from the check's routine, which runs during the pass only when the pass
-// yields, so some must be sent between the pass's first chunk and its last
-// (with no yield none is, and each sent before or after it is handled at
-// once)
+// engine that yields to commands after every chunk, and keeps the 63 of a
+// click every 1000 frames. A message goes every 10 ms from the check's
+// routine, which runs during the pass only inside the pass's yields: so
+// each send's chunk count (the area's chunks) is the count at a yield, and
+// the cadence is read from the sends, never from a clock (#964). Four
+// conditions:
+// - every message is heard;
+// - some are sent between the pass's first chunk and its last (a pass
+//   that never yields, or yields with a plain wait that falls behind its
+//   clock and never lets the language lock go, lets the routine send none
+//   then);
+// - the greatest common divisor of the differences between the sends'
+//   chunk counts is 1 (a pass that yields every n chunks gives n: 2 under
+//   a pass yielding every second chunk);
+// - no message waits more than chunkBackstop (8) chunks, a latency
+//   backstop only: a yield whose gap is too short for sclang's network
+//   thread lets the routine in now and then but holds its messages for
+//   hundreds of chunks (a commandGap of 1 us: 2 sent during the chunks,
+//   one waiting 525).
+// Why not the waits themselves: a message is mostly handled in the very
+// gap it was sent in, whatever the cadence, and waits longer only when
+// sclang's network thread misses a gap, which is thread scheduling.
+// Measured (#964's second round), by the chunks each message sent during
+// the chunks waited (0, 1, 2): normal runs, 20 on 3.13 in Docker 10 at
+// once and 3 on 3.14.1, 1 to 7 messages at 1 and none at 2, but CI's run
+// 45346328463 had 1 of 53 at 2 (two gaps missed); under the
+// every-second-chunk fault none at 1 and 0 to 5 at 2 (a share of 0.000 to
+// 0.128, at or below CI's normal 0.019 in five of 14 runs), so no share of late
+// messages tells the two apart. The divisor was 1 in every normal run and
+// 2 in every faulted one.
 var checkLong = {
     var period = [0.9] ++ Array.fill(999, 0), write, standardRun, longRun, highEngine, slot = 0;
     var shortPath = scratchRoot +/+ "onsets-16.wav", longPath = highRoot +/+ "onsets-300.wav";
     var capacity = 20000, sentAt = Array.newClear(capacity), latency = Signal.newClear(capacity), sent = 0, heard = 0, ping;
-    var sentChunk = Array.newClear(capacity), heardChunks = Array.newClear(capacity), chunksOf, firstChunk, lastChunk, during, late, chunkAllowance = 1;
+    var sentChunk = Array.newClear(capacity), heardChunks = Array.newClear(capacity), chunksOf, firstChunk, lastChunk, during, sends, cadence, most, chunkBackstop = 8;
     write = { arg path, seconds;
         var file = SoundFile.new.headerFormat_("WAV").sampleFormat_("int16").numChannels_(2).sampleRate_(rate);
         file.openWrite(path);
@@ -596,14 +612,17 @@ var checkLong = {
         0.1.wait;
         ping.free;
         // sent after the pass's first chunk and before its last
-        during = sentChunk.copyRange(0, (sent - 1).max(0)).count({ arg each; each.notNil and: { each > firstChunk } and: { each < lastChunk } });
-        late = heardChunks.copyRange(0, (sent - 1).max(0)).count({ arg each; each.isNil or: { each > chunkAllowance } });
-        check.((longRun[\failed] == false) and: { heard == sent } and: { sent > 10 } and: { late == 0 } and: { during > 0 }
+        sends = sentChunk.copyRange(0, (sent - 1).max(0)).select({ arg each; each.notNil and: { each > firstChunk } and: { each < lastChunk } });
+        during = sends.size;
+        // the yields' cadence: the gcd of the differences between the
+        // distinct chunk counts the sends saw (0 with fewer than two)
+        cadence = sends.asSet.asArray.sort.differentiate.drop(1).inject(0, { arg divisor, each; divisor gcd: each });
+        most = heardChunks.copyRange(0, (sent - 1).max(0)).collect({ arg each; each ? inf }).maxItem ? 0;
+        check.((longRun[\failed] == false) and: { heard == sent } and: { sent > 10 } and: { during > 0 } and: { cadence == 1 } and: { most <= chunkBackstop }
             and: { onsetFrames.(readOnsets.(onsetsFile.(highEngine, slot))).size == engine.onsetCandidates },
-            "onsets: a 300 s slot's pass yields to commands, each message handled within a chunk of its send (#964; % s, % chunks; % messages, % sent during the chunks, % heard, % after more than % chunks, the most chunks %; the slowest handled in % ms)".format(
-                longRun[\seconds] !? { arg each; each.round(0.01) }, lastChunk - firstChunk, sent, during, heard, late, chunkAllowance,
-                heardChunks.copyRange(0, (sent - 1).max(0)).select(_.notNil).maxItem,
-                (latency.copyRange(0, (sent - 1).max(0)).peak * 1000).round(0.01)));
+            "onsets: a 300 s slot's pass yields to commands after every chunk, read from its sends (#964; % s, % chunks; % messages, % sent during the chunks, % heard; the sends' cadence % (1 wanted), the most chunks a message waited % (at most %); the slowest handled in % ms)".format(
+                longRun[\seconds] !? { arg each; each.round(0.01) }, lastChunk - firstChunk, sent, during, heard,
+                cadence, most, chunkBackstop, (latency.copyRange(0, (sent - 1).max(0)).peak * 1000).round(0.01)));
         h.commandTo(highEngine, \clearBuffer, slot); server.sync;
     } {
         h.freeEngine(highEngine);
