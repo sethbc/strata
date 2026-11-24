@@ -2524,12 +2524,17 @@ end
 -- scene and redraws send nothing to the engine and are left out. The
 -- groundwork before 3.8 re-bases it on the format 9 voice (one values
 -- table), whose keys it sets in recall order (reference_voice_keys), where
--- 3.3.2 set the synth and grain params in pairs order and crossmod per slot
+-- 3.3.2 set the synth and grain params in pairs order and crossmod per slot.
+-- 3.9 (#977) re-bases its set_scene_param: a control param that already
+-- holds the value is set to its own raw value (no action, no send)
 local function reference_recall(S, scene_data)
   local NUM_VOICES = S.constants.NUM_VOICES
   local function set_scene_param(param_id, value)
-    if params:lookup_param(param_id).t == params.tBINARY then
+    local param = params:lookup_param(param_id)
+    if param.t == params.tBINARY then
       set_binary_param(param_id, value)
+    elseif param.t == params.tCONTROL and param:get() == value then
+      params:set_raw(param_id, params:get_raw(param_id))
     else
       params:set(param_id, value)
     end
@@ -5132,6 +5137,64 @@ test("a read-only scenes load neither backs up nor marks a PSET", function()
   local live = S.lib.data_files.read(live_scenes_path(context))
   assert_equal(S.lib.data_files.encode(live.scenes), S.lib.data_files.encode(set_scenes), "the live file holds them")
   assert_equal(live.pset, nil, "and names no PSET")
+end)
+
+-- #977: a scene holds a control param's get(), its controlspec's map of the
+-- raw value, and norns' Control:set runs the action on any change of the
+-- raw value; an exponential spec's unmap of that value can land an ulp from
+-- the raw value in force, so a recall of the value in force sent it again,
+-- an ulp off. A recall compares the value with the param's get() first
+test("a recall after a hand set of an exp freq sends nothing for it (#977)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  assert_true(S.voices[1].active, "voice 1 runs")
+  params:set("v1_freq", 440)
+  local held = params:get("v1_freq")
+  local spec = params:lookup_param("v1_freq").controlspec
+  assert_true(spec:map(spec:unmap(held)) ~= held, "440 Hz is a value the freq spec does not round-trip")
+  capture_scene(4)
+  context.clear_engine_calls()
+  recall_scene(4, 0)
+  for _, call in ipairs(context.engine_calls) do
+    assert_true(not (call.name == "setVoiceParam" and call.args[1] == 0 and call.args[2] == "freq"),
+      "no freq sent: " .. tostring(call.args[3]))
+    assert_true(not (call.name == "setGrainParam" and call.args[1] == 0 and call.args[2] == "scaleNote"),
+      "no scaleNote sent: " .. tostring(call.args[3]))
+  end
+  assert_equal(params:get("v1_freq"), held, "the freq is the one the hand set left")
+end)
+
+test("the first recall of the state in force sends nothing (#977)", function()
+  local context = load_strata(); finish_startup(context)
+  capture_scene(3)
+  context.clear_engine_calls()
+  recall_scene(3, 0)
+  local sent = {}
+  for _, call in ipairs(context.engine_calls) do sent[#sent + 1] = call.name .. "(" .. tostring(call.args[2]) .. ")" end
+  assert_equal(#context.engine_calls, 0, "nothing sent, no attackTime or releaseTime either: " .. table.concat(sent, ", "))
+  -- a fade to it sets each value through the same path: nothing either
+  recall_scene(3, 1)
+  context.clock.run_for(1.5, 0.01)
+  sent = {}
+  for _, call in ipairs(context.engine_calls) do sent[#sent + 1] = call.name .. "(" .. tostring(call.args[2]) .. ")" end
+  assert_equal(#context.engine_calls, 0, "a fade to the state in force sends nothing: " .. table.concat(sent, ", "))
+end)
+
+test("six rounds of capture and recall leave attackTime and releaseTime where they were (#977)", function()
+  local context = load_strata(); finish_startup(context)
+  local attack, release = params:get("v1_attack"), params:get("v1_release")
+  assert_near(release, 8, 1e-9, "voice 1's release is 8 s")
+  local sends = 0
+  for _ = 1, 6 do
+    capture_scene(3)
+    context.clear_engine_calls()
+    recall_scene(3, 0)
+    sends = sends + #context.engine_calls
+  end
+  assert_equal(string.format("%.17g", params:get("v1_attack")), string.format("%.17g", attack), "the attack has not crept")
+  assert_equal(string.format("%.17g", params:get("v1_release")), string.format("%.17g", release),
+    "the release 8 stays 8, exactly")
+  assert_equal(sends, 0, "no round sent anything")
 end)
 
 end

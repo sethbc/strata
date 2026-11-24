@@ -184,9 +184,8 @@ local Model = require("modulation_model")
 -- envelope (loop off) whose run ended runs again in Lua's model when one
 -- of its times is raised past the time since its hit, which the engine's
 -- ended EnvGen does not, and only when a time was raised since the end
--- was seen. Three more are the walk's own, counted in state.allowed:
--- ulp_resend (#977), the recall's (needless_sends, below); bar_sync and
--- moving_send, the idle step's (idle_step, below)
+-- was seen. Two more are the walk's own, counted in state.allowed:
+-- bar_sync and moving_send, the idle step's (idle_step, below)
 local WALK_ALLOWED = { waiting = true, ended_runs_again = true }
 
 -- The commands that start, move or stop a modulation node, which an idle
@@ -197,46 +196,15 @@ local NODE_COMMANDS = { setFastLfo = true, stopFastLfo = true, syncFastLfo = tru
 local function walk_lfo(random) return random(local_value("S").constants.NUM_LFOS) end
 local function pick(random, list) return list[random(#list)] end
 
--- A recall's send that only repeats the last one of its kind but for
--- rounding (#977, package 2b: norns' Control:set_raw runs the action on any
--- change of the raw value, and a recalled value maps to a raw value an ulp
--- or so from the one in force): a voice's setVoiceParam or setGrainParam
--- (the one value a call: the commands #977 resends), the same voice and
--- param as the last such call, its value within Model.ENGINE.ulp of that
--- call's and not equal to it. An exact repeat is no rounding: it is a
--- needless send (an action banged at every recall), never this allowance
-local ROUNDING_KINDS = { setVoiceParam = true, setGrainParam = true }
-
-local function same_but_rounding(entry, earlier)
-  local value, other = entry.args[3], earlier.args[3]
-  if type(value) ~= "number" or type(other) ~= "number" or value == other then return false end
-  return math.abs(value - other) <= Model.ENGINE.ulp * math.max(1, math.abs(other))
-end
-
-local function same_kind(entry, earlier)
-  return entry.name == earlier.name and entry.args[1] == earlier.args[1] and entry.args[2] == earlier.args[2]
-end
-
--- The calls from index `from` on that are not a rounding resend of the last
--- call of their kind before them (#977's allowance, counted in
--- state.allowed.ulp_resend)
+-- The calls from index `from` on, each a needless send of a recall of the
+-- state in force (#977's fix: a recall sets a control param that already
+-- holds its value to the raw value it holds, so nothing is sent)
 local function needless_sends(state, from)
   local calls, found = state.context.engine_calls, {}
   for index = from + 1, #calls do
-    local entry, resend = calls[index], false
-    for earlier = index - 1, ROUNDING_KINDS[entry.name] and 1 or index, -1 do
-      if same_kind(entry, calls[earlier]) then
-        resend = same_but_rounding(entry, calls[earlier])
-        break
-      end
-    end
-    if resend then
-      state.allowed.ulp_resend = (state.allowed.ulp_resend or 0) + 1
-    else
-      local args = {}
-      for k, value in ipairs(entry.args) do args[k] = tostring(value) end
-      found[#found + 1] = entry.name .. "(" .. table.concat(args, ", ") .. ")"
-    end
+    local entry, args = calls[index], {}
+    for k, value in ipairs(entry.args) do args[k] = tostring(value) end
+    found[#found + 1] = entry.name .. "(" .. table.concat(args, ", ") .. ")"
   end
   return found
 end
@@ -329,8 +297,7 @@ local MODULATION_WALK_OPS = {
     recall_scene(random(state.scenes))
     count(state, "recalls")
   end },
-  -- a recall of the state in force (captured just now) sends nothing but
-  -- #977's rounding resends
+  -- a recall of the state in force (captured just now) sends nothing (#977)
   { 1, "recall unchanged", function(state)
     capture_scene(state.unchanged_scene)
     local from = #state.context.engine_calls
@@ -595,18 +562,18 @@ h.walk({
   -- engine and Lua, recalls, fades and a fade crossed by a recall, a
   -- recall of the state in force, silent sets, a macro on a depth, routes
   -- set, moved and stopped, channels sent, envelopes seen ended, idle steps
-  -- that sent nothing, and each allowance of WALK_ALLOWED and #977's
+  -- that sent nothing, and each allowance of WALK_ALLOWED and the walk's
   -- (allowed_<name>), so a fault's fix must remove its allowance
   reached = { "lfo_started", "lfo_stopped", "lfo_replaced", "lfo_moved", "home_engine_lua", "recalls", "fades",
     "fades_crossed", "unchanged_recalls", "silent_sets", "macro_depths", "routes_set", "routes_moved", "routes_stopped",
     "offsets_sent", "envelopes_ended", "idle_quiet", "allowed_waiting", "allowed_ended_runs_again",
-    "allowed_ulp_resend", "allowed_bar_sync", "allowed_moving_send" },
+    "allowed_bar_sync", "allowed_moving_send" },
   counts = function(state)
     local counts = {}
     for name, value in pairs(state.model.counts) do counts[name] = value end
     for name, value in pairs(state.counts) do counts[name] = value end
     for name in pairs(WALK_ALLOWED) do counts["allowed_" .. name] = state.model.allowed[name] or 0 end
-    for _, name in ipairs({ "ulp_resend", "bar_sync", "moving_send" }) do
+    for _, name in ipairs({ "bar_sync", "moving_send" }) do
       counts["allowed_" .. name] = state.allowed[name] or 0
     end
     return counts
