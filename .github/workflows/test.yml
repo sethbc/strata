@@ -49,13 +49,15 @@ jobs:
     # #1001's split), plus the setup: under half a minute on a fast mirror;
     # on a slow one, with the list's apt-get update to its 45 s, its kill
     # and its retry to 60 s (#999), about 153 s on a cache hit and 218 s on
-    # a miss. 10 (12 from #993 until #1022) covers the slowest suite
-    # measured since the split (275 s, run 45473005793, luajit 2/2) after
-    # that setup, on a hit (about 428 s) and on a miss (about 493 s), and
-    # the setup's own limits: docs/checks.md, Installs. Before #1001 split
-    # ui_layout_test.lua, shard 1's time was that file's alone, up to 471 s.
-    # The default is 360
-    timeout-minutes: 10
+    # a miss. 11 (12 from #993 until #1022) covers the slowest suite
+    # measured since the split (275 s, run 45473005793, luajit 2/2, the
+    # eight runs all on 2026-11-24) after that setup, on a hit (about
+    # 428 s) and on a miss (about 493 s), and a miss leaves room for 1.61
+    # times that suite: the smallest whole minutes from 10 at which a miss
+    # holds the pre-split outlier's ratio, 1.42 (about 609 s; docs/checks.md,
+    # Installs). Before #1001 split ui_layout_test.lua, shard 1's time was
+    # that file's alone, up to 471 s. The default is 360
+    timeout-minutes: 11
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -80,7 +82,7 @@ jobs:
           persist-credentials: false
         # 7 s at most in 32 jobs (#993). Every step before the suite has a
         # limit of its own, and those limits (9 minutes) and a minute for the
-        # runner's own steps fit inside the job's 10, so a hung step of the
+        # runner's own steps fit inside the job's 11, so a hung step of the
         # setup fails by its own name (docs/checks.md, Installs)
         timeout-minutes: 1
 
