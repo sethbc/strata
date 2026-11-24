@@ -156,14 +156,16 @@ var checkStopStartCycles = { arg voice;
 // live set is the source's: none on a stopped voice, and on a running one
 // its grain and mod synths, its voice synth on the synth source only, and a
 // grain synth built for its source (a slot's \strataGrainBuf, a ring's
-// \strataGrainRing)
-var checkOwnSynths = { arg target, voice;
+// \strataGrainRing). Whether the voice runs and its source are the caller's
+// (running, source: what its own commands made them), never read from the
+// engine checked
+var checkOwnSynths = { arg target, voice, running, source;
     var keys = [target.voiceKey(voice), target.grainKey(voice), target.modKey(voice)];
     var live = keys.collect({ arg key; target.synths[key] }), releasing = target.releasingSynths[voice];
     var fading = target.fadingSynths[voice].asArray, cutting = target.cuttingSynths[voice].asArray;
     var held = live.reject(_.isNil) ++ releasing.values.asArray ++ fading ++ cutting;
     var notes = target.areaState[\notes][\slots][voice].copyToEnd(1).collect({ arg record; [record[\synth], record[\cutting]] }).flatten.reject(_.isNil);
-    var source = target.grainSource[voice], problems = List.new;
+    var problems = List.new;
     var defOf = { arg synth; synth.defName.asSymbol };
     var fadingVoices = fading.count({ arg synth; voiceDefs.includes(defOf.(synth)) });
     var fadingGrains = fading.count({ arg synth; grainDefs.includes(defOf.(synth)) });
@@ -172,11 +174,12 @@ var checkOwnSynths = { arg target, voice;
     if ((fading ++ cutting).any({ arg synth; defOf.(synth) == \strataMod })) { problems.add("a mod synth fading or cutting") };
     keys.do({ arg key, index; if (live[index].notNil and: { releasing[key].notNil }) { problems.add("% releasing under its live key".format(key)) } });
     if ((fadingVoices > 1) or: { fadingGrains > 1 }) { problems.add("% voice and % grain synths fading".format(fadingVoices, fadingGrains)) };
-    if (live[1].isNil) {
+    if (running.not) {
         if (live.any(_.notNil)) { problems.add("a stopped voice with a live synth") };
     } {
-        if (live[2].isNil or: { live[0].isNil != (source != 0) }) { problems.add("the live set is not the source's (source %)".format(source)) };
-        if ((defOf.(live[1]) == \strataGrainBuf) != source.inclusivelyBetween(1, target.numBuffers)) {
+        if (live[1].isNil or: { live[2].isNil } or: { live[0].isNil != (source != 0) }) {
+            problems.add("the live set of a running voice is not the source's (source %, live %)".format(source, live.collect({ arg synth; synth !? _.nodeID }))) };
+        if (live[1].notNil and: { (defOf.(live[1]) == \strataGrainBuf) != source.inclusivelyBetween(1, target.numBuffers) }) {
             problems.add("a live % on source %".format(defOf.(live[1]), source)) };
     };
     problems
@@ -193,20 +196,30 @@ var checkOwnSynths = { arg target, voice;
 // /n_go comes in, so a walk that ran longer than that would forget the
 // starts it made itself. So it syncs with the server (a yield: the /n_go
 // and /n_end so far are handled) once half of startConfirmWait has passed
-// since the walk began or last synced. The commands Lua never sends (an
-// extra note to a stopped voice, one past a full pool) are ignored with a
-// line each, counted here. Returns the first failure ([step, the last eight
-// commands, the problems]), the rows reached, the lines ignored and the syncs
-var walkOwnSynths = { arg target, seed, steps, voices;
+// since the walk began or last synced. The walk keeps its own record of
+// what its commands made of each voice (the model: running or stopped, its
+// source, its live extra notes), never the engine's, and judges the engine
+// by it: a voiceOn runs the voice, a voiceOff stops a running one, a
+// setGrainSource records the source, an extra note on a running voice is
+// live while the pool (pool) has room, and a voiceOff releases the voice's.
+// The commands Lua never sends are ignored with one line each, and only
+// these: an extra note to a stopped voice ("voice <v> is stopped") and one
+// with the pool full of live notes ("the pool of <pool> is full of live
+// notes"); any other line, or a missing one, is a problem. Returns the
+// first failure ([step, the last eight commands, the problems]), the rows
+// reached, the lines ignored, the syncs and the model at the end
+var walkOwnSynths = { arg target, seed, steps, voices, pool;
     var random = Pseed(seed, Pwhite(0.0, 1.0)).asStream, failure, recent = List.new(9), ignored = 0;
-    var lastSync = Main.elapsedTime, syncs = 0, walkStep;
+    var lastSync = Main.elapsedTime, syncs = 0, walkStep, lines = List.new;
+    // the model, from a fresh engine: every voice stopped on the synth source, no extra note
+    var running = Array.fill(target.numVoices, false), sourceOf = Array.fill(target.numVoices, 0), liveNotes = Set.new;
     var reached = IdentityDictionary.new, reach = { arg name; reached[name] = (reached[name] ? 0) + 1 };
     var pick = { arg items; items[(random.next * items.size).floor.asInteger.min(items.size - 1)] };
     var sources = [0, 0, 0, 1, 2, target.inputSource, target.voiceSourceFirst, target.voiceSourceFirst + 6];
     var types = (0 .. (target.numVoiceTypes - 1)), modulation = target.areaState[\modulation], previous = modulation[\postIgnored];
     // one command and its checks
     walkStep = { arg step;
-        var voice = pick.(voices), draw = random.next, message, problems;
+        var voice = pick.(voices), draw = random.next, message, problems, expected = [], wasRunning = running[voice];
         var grainKey = target.grainKey(voice), voiceKey = target.voiceKey(voice);
         var liveGrain = target.synths[grainKey], liveVoice = target.synths[voiceKey];
         var releasing = target.releasingSynths[voice].values.asArray, frozen = target.areaState[\freeze][\frozen][voice];
@@ -219,10 +232,29 @@ var walkOwnSynths = { arg target, seed, steps, voices;
         { draw < 0.74 } { [\setGrainParam, voice, \freeze, pick.([0.0, 1.0])] }
         { draw < 0.84 } { [\setGrainParam, voice, \freezeMode, pick.([0.0, 1.0, 1.0])] }
         { [\noteOn, voice, pick.((0 .. 3)), 60.0, 220.0, 1.0, 1.0] };
+        // the lines the model expects, then the model moved by the command
+        switch (message[0])
+        { \voiceOn } { running[voice] = true }
+        { \voiceOff } {
+            if (wasRunning) { liveNotes = liveNotes.reject({ arg note; note[0] == voice }) };
+            running[voice] = false;
+        }
+        { \setGrainSource } { sourceOf[voice] = message[2] }
+        { \noteOn } {
+            if (message[2] > 0) {
+                case
+                { wasRunning.not } { expected = ["strata: noteOn ignored: voice % is stopped".format(voice)] }
+                { liveNotes.includes([voice, message[2]]) } { }
+                { liveNotes.size >= pool } { expected = ["strata: noteOn ignored: the pool of % is full of live notes".format(pool)] }
+                { liveNotes.add([voice, message[2]]) };
+            };
+        };
+        lines.clear;
         h.commandTo(target, *message);
         recent.add(message);
         if (recent.size > 8) { recent.removeAt(0) };
-        problems = checkOwnSynths.(target, voice);
+        problems = checkOwnSynths.(target, voice, running[voice], sourceOf[voice]);
+        if (lines.asArray != expected) { problems.add("the lines ignored % where % were expected".format(lines.asArray, expected)) };
         if (problems.notEmpty and: { failure.isNil }) { failure = [step, recent.asArray, problems.asArray] };
         // the rows the walk must reach
         switch (message[0])
@@ -231,7 +263,11 @@ var walkOwnSynths = { arg target, seed, steps, voices;
             if (releasing.any({ arg synth; target.fadingSynths[voice].includes(synth) })) { reach.(\superseded) };
             if (releasing.any({ arg synth; target.cuttingSynths[voice].includes(synth) })) { reach.(\cutAtStart) };
         }
-        { \voiceOff } { if (liveGrain.notNil) { reach.(\released) } }
+        // (a release once it took effect: the grain synth gone from the live set into the releasing one)
+        { \voiceOff } {
+            if (wasRunning and: { liveGrain.notNil } and: { target.synths[grainKey].isNil }
+                and: { target.releasingSynths[voice].values.includes(liveGrain) }) { reach.(\released) };
+        }
         { \setGrainSource } { if (liveGrain.notNil and: { target.synths[grainKey] !== liveGrain }) { reach.(\switched) } }
         { \setVoiceType } {
             if (message[2] != type) {
@@ -246,14 +282,14 @@ var walkOwnSynths = { arg target, seed, steps, voices;
         }
         { \noteOn } { if ((message[2] > 0) and: { target.areaState[\notes][\slots][voice][message[2]][\state] == \live }) { reach.(\noteLive) } };
     };
-    modulation[\postIgnored] = { ignored = ignored + 1 };
+    modulation[\postIgnored] = { arg line; ignored = ignored + 1; lines.add(line) };
     {
         steps.do({ arg step;
             if ((Main.elapsedTime - lastSync) > (target.startConfirmWait / 2)) { server.sync; lastSync = Main.elapsedTime; syncs = syncs + 1 };
             walkStep.(step);
         });
     }.protect({ modulation[\postIgnored] = previous });
-    (failure: failure, reached: reached, ignored: ignored, syncs: syncs)
+    (failure: failure, reached: reached, ignored: ignored, syncs: syncs, running: running, sources: sourceOf)
 };
 
 // The walk on a standard engine of its own, voices 0-2 on their own types,
@@ -265,26 +301,28 @@ var walkOwnSynths = { arg target, seed, steps, voices;
 // crashes scsynth, 3.14.1 and 3.13 alike, within a thousand commands (a
 // general protection fault in libscsynth; with a sync every two commands
 // 4000 pass, and a high engine's walk with freezeMode always 0 passes), so
-// the walk would crash the check. Its freezeMode commands only store the
-// mode here
+// the walk would crash the check (https://github.com/sethbc/strata/issues/1000).
+// Its freezeMode commands only store the mode here
 var checkSynthSetWalk = { arg seed;
-    var steps = 2000, voices = [0, 1, 2];
+    var steps = 2000, voices = [0, 1, 2], pool = 6;
     var rows = [\regated, \superseded, \cutAtStart, \released, \switched, \typeSwitched, \frozen, \noteLive];
     var target, result, start, seconds, missing, endProblems;
     target = h.startEngine;
     [0, 1].do({ arg slot; h.commandTo(target, \loadBuffer, slot, h.stereoPath, 0) });
     h.waitFor({ [0, 1].every({ arg slot; target.bufferFrames[slot] > 0 }) }, 3);
-    h.commandTo(target, \setNotePool, 6);
+    h.commandTo(target, \setNotePool, pool);
     server.sync;
     start = Main.elapsedTime;
-    result = walkOwnSynths.(target, seed, steps, voices);
+    result = walkOwnSynths.(target, seed, steps, voices, pool);
     seconds = Main.elapsedTime - start;
     missing = rows.reject({ arg name; (result[\reached][name] ? 0) > 0 });
-    endProblems = voices.collect({ arg voice; checkOwnSynths.(target, voice) }).flatten;
+    endProblems = voices.collect({ arg voice; checkOwnSynths.(target, voice, result[\running][voice], result[\sources][voice]) }).flatten;
     check.(result[\failure].isNil and: { missing.isEmpty } and: { endProblems.isEmpty },
         "lifecycle: a seeded walk of % commands (seed %, % tier, % s, % syncs, % ignored) keeps every voice's synth sets as the table has them after each (first failure at step %, the last commands %: %; rows reached %, never reached %; at the end %)".format(
             steps, seed, target.tier, seconds.round(0.01), result[\syncs], result[\ignored], result[\failure] !? { arg failure; failure[0] },
             result[\failure] !? { arg failure; failure[1] }, result[\failure] !? { arg failure; failure[2] },
+            // (the last three, the spectral rows, are 0 on a standard engine: #1000,
+            // https://github.com/sethbc/strata/issues/1000, keeps the walk off a high one)
             (rows ++ [\typeWaiting, \waitingApplied, \typeStoppedSpectral]).collect({ arg name; [name, result[\reached][name] ? 0] }), missing, endProblems));
     h.stopAllVoices(target);
     h.freeEngine(target);
