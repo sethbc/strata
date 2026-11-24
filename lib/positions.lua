@@ -23,8 +23,10 @@ return function(S)
     -- a bookmark that waits for its beat or bar (#593) blinks between these,
     -- each for waiting_ticks of the playhead clock's ticks (no steady level
     -- stands clear of 6, 10 and 15 on a varibright grid); since #876 every
-    -- waiting key blinks so, through S.lib.grid_core.waiting_level
-    waiting_high = 15, waiting_low = 2, waiting_ticks = 4, waiting_phases = 2,
+    -- waiting key blinks so, through S.lib.grid_core.waiting_level, whose
+    -- levels these name (the grid core's LEVELS, S.constants.GRID_LEVELS)
+    waiting_high = S.constants.GRID_LEVELS.waiting_high, waiting_low = S.constants.GRID_LEVELS.waiting_low,
+    waiting_ticks = S.constants.GRID_LEVELS.waiting_ticks, waiting_phases = S.constants.GRID_LEVELS.waiting_phases,
     -- 3.7's slice rows (design §10): a slice that exists, its key held, the
     -- slice playing, none; the strip's bank keys: the bank shown, one that
     -- holds slices, one that holds none
@@ -230,6 +232,15 @@ return function(S)
   function M.waiting_bookmark(voice_idx)
     if not valid_voice(voice_idx) then return nil end
     return S.lib.quantize.waiting_detail("bookmark" .. voice_idx)
+  end
+
+  -- The cell a voice's waiting jump or two-key loop was pressed on (the
+  -- detail grid_key schedules it with, #876), or nil: none waits, or the
+  -- position key's action is a slice's play, which keeps none
+  function M.waiting_cell(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    local detail = S.lib.quantize.waiting_detail("position" .. voice_idx)
+    return type(detail) == "table" and detail.cell or nil
   end
 
   -- Bookmark n becomes the voice's playhead, or, stopped, its buf_pos mapped
@@ -745,8 +756,7 @@ return function(S)
     if not context then return 0 end
     -- the cell a waiting jump or loop was pressed on blinks once its key
     -- is up (#876; held, it shows the hold)
-    local waiting = S.lib.quantize.waiting_detail("position" .. voice_idx)
-    if type(waiting) == "table" and waiting.cell == cell and not context.held_cells[cell] then
+    if M.waiting_cell(voice_idx) == cell and not context.held_cells[cell] then
       return S.lib.grid_core.waiting_level()
     end
     return cell_level(context, cell)

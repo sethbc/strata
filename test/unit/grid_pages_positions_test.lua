@@ -776,4 +776,38 @@ test("a position cell blinks while its jump or loop waits", function()
   S.lib.quantize.cancel("position2")
 end)
 
+
+-- #876 review (the controller's ruling): one redraw rule for every blink,
+-- #593's: a cell's or a scene's wait repaints no grid while no pane shows
+-- that page; once a pane shows the positions page's cells, the cell's wait
+-- repaints at each phase
+test("a cell or scene wait with no pane on its page repaints no grid", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  local tick = 1 / S.constants.PLAYHEADS.update_hz
+  local pages = S.constants.GRID_PAGES
+  local pane = grid_pane(context, "256 top")
+  pane.show(pages.patterns)
+  local device = pane.device
+  params:set("quantize_actions", 3)  -- bar
+  local function repaints_over(ticks)
+    local before = device.refresh_count
+    context.clock.run_for(tick * ticks)
+    return device.refresh_count - before
+  end
+  assert_equal(repaints_over(8), 0, "nothing waits: no repaint")
+  -- just past a bar, so the next lies two seconds ahead (both windows below)
+  local beats = clock.get_beats()
+  context.clock.run_for((math.floor(beats / 4) * 4 + 4.1 - beats) * clock.get_beat_sec())
+  S.lib.positions.grid_key(1, 1, 9, pages.position_cells, 1); S.lib.positions.grid_key(1, 1, 9, pages.position_cells, 0)
+  S.lib.quantize.schedule("scene", function() end, "S2", 2)
+  assert_equal(S.lib.positions.waiting_cell(1), 9, "the jump waits on cell 9")
+  assert_equal(S.lib.quantize.waiting_detail("scene"), 2, "the recall waits on scene 2")
+  assert_equal(repaints_over(8), 0, "no pane shows positions or scenes: the waits repaint no grid")
+  pane.show(pages.positions)
+  assert_true(repaints_over(8) >= 2, "a pane shows the cells: the wait repaints at each phase")
+  assert_equal(S.lib.positions.waiting_cell(1), 9, "and the jump still waits")
+  S.lib.quantize.cancel("scene"); S.lib.quantize.cancel("position1")
+end)
+
 end
