@@ -276,17 +276,54 @@
     // re-gate it at once; isPlaying only once NodeWatcher watches it: only
     // then can a /n_go come), and kept in unconfirmedStarts with its start
     // time until its /n_go (or /n_end): every voice, grain and mod synth's
-    // and every note synth's (#497)
+    // and every note synth's (#497). A start still unconfirmed
+    // startConfirmWait after it is judged then, by a timer of its own
+    // (judge, a Routine), with no command needed (#1019: until then only
+    // the voice's next voiceOn or cut judged it, and every record kept the
+    // dead node meanwhile): the timer is stopped at the synth's /n_go or
+    // /n_end, whichever path brings it (endFailedStart's included), so a
+    // confirmed start leaves none waiting (startJudged)
     watchStart { arg synth;
-        var unconfirmed = this.unconfirmedStarts, confirm;
+        var unconfirmed = this.unconfirmedStarts, confirm, judge;
         synth.register(true);
         if (synth.isPlaying) {
             unconfirmed[synth] = Main.elapsedTime;
+            judge = Routine({
+                this.startConfirmWait.wait;
+                // (out of reach of confirm before the judging: a Routine never stops itself)
+                judge = nil;
+                this.areaCall(\startJudged, synth);
+            });
             confirm = { arg node, what;
-                if ((what == \n_go) or: { what == \n_end }) { unconfirmed.removeAt(node); node.removeDependant(confirm) };
+                if ((what == \n_go) or: { what == \n_end }) {
+                    unconfirmed.removeAt(node);
+                    node.removeDependant(confirm);
+                    judge !? { judge.stop; judge = nil };
+                };
             };
             synth.addDependant(confirm);
+            judge.play(SystemClock);
         };
+    }
+
+    // A start still unconfirmed at its timer (watchStart): a sync first, so
+    // a /n_go the server sent before it (sclang busy at the timer, a loaded
+    // server) is handled before the judgment (the server answers a /sync
+    // after every reply it sent before it); then, still unconfirmed and
+    // the engine not past stop (pastStop), it failed and every record
+    // forgets it now, as forgetFailedStarts does at a command: out of
+    // synths under any key first, so its onFree starts nothing again, then
+    // endFailedStart (freed quietly, out of the NodeWatcher, its onFree run:
+    // the voice's releasing, fading and cutting sets, ringReaders,
+    // grainSlots and inputReaders, or its note slot). The voice is then
+    // without that synth until its next voiceOn, which starts what it is
+    // missing (gateVoice)
+    startJudged { arg synth;
+        if (this.pastStop or: { this.unconfirmedStarts[synth].isNil }) { ^this };
+        context.server.sync;
+        if (this.pastStop or: { this.unconfirmedStarts[synth].isNil }) { ^this };
+        synths.keys.asArray.do({ arg key; if (synths[key] === synth) { synths.removeAt(key) } });
+        this.endFailedStart(synth);
     }
 
     // A grain synth that frees reads nothing: it leaves grainSlots,

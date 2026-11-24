@@ -25,6 +25,7 @@ The engine check is a runner, `test/engine_check.scd`: it boots a silent scsynth
 | `noteSynths(voice)` | the voice's live extra note synths (3.5, the notes area's `noteSynths`) |
 | `controlFeedsAUGen(def, control)` | whether a UGen of the SynthDef reads the control |
 | `getControl(synth, control)`, `bufferSample(buffer, frame)`, `readBus(bus)`, `readBusValue(bus)`, `measure(probe, bus, seconds)` | read values from the server |
+| `sweepLines(engine, area)` | the bookkeeping sweep's lines for an engine now, one a broken condition, each with the prefix the runner fails on (#943; a check shows them without it, #1019) |
 | `pollMessages`, `pollValues(name)` | every `/poll/value` message received, or the values of one poll |
 | `writeTestFile(path, rate, frames, values)` | a WAV of constant per-channel values; `stereoPath`, `monoPath`, `longPath` and `textPath` are written before the first area |
 | `probeFree(n)` | true when n real-time memory probes of 256 KB fit in the pool |

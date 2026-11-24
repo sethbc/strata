@@ -495,6 +495,89 @@ var checkFailedStartSwitches = { arg voice, before;
     check.(synthNames.(context.xg).size == before, "lifecycle: the voice is back to one trio after the switches");
 };
 
+// ... and one the engine judges itself (#1019): past startConfirmWait, with
+// no command to the voice, a synth whose /s_new failed is in none of the
+// engine's records. Three running voices, each switched from the input to
+// the synth source with its new grain synth's /s_new on a def the server
+// does not have (the switch's packets sent with that message's def
+// renamed, behind /error -1, so the server posts no FAILURE line): the
+// first then left running, the second stopped at once (its failed synth
+// releasing), the third switched to the input and back at once (fading,
+// then cutting). Then twice startConfirmWait and a quarter of a second more, no
+// command, and the records read (the voice's live keys, its releasing,
+// fading and cutting sets, ringReaders, grainSlots, the freeze area's
+// inputReaders, unconfirmedStarts), each judged against the synth the
+// check itself renamed; past twice startConfirmWait, the bookkeeping
+// sweep's unconfirmed starts too. The server posts one "SynthDef
+// strataCheckNoSuchDef not found" line a voice (scsynth prints it
+// whatever /error says; the runner fails on none of it). Each voice is
+// then put back as it was
+var checkFailedStartJudged = { arg voices, before;
+    var failed = Array.newClear(voices.size), kept, swept, realAddr = server.addr, start = Main.elapsedTime;
+    var running = voices.collect({ arg voice; engine.voiceRunning(voice) }), sources = voices.collect({ arg voice; engine.grainSource[voice] });
+    var heldBy = { arg voice, synth;
+        var records = List.new;
+        if ([engine.voiceKey(voice), engine.grainKey(voice), engine.modKey(voice)].any({ arg key; engine.synths[key] === synth })) { records.add(\live) };
+        if (engine.releasingSynths[voice].values.includes(synth)) { records.add(\releasing) };
+        if (engine.fadingSynths[voice].includes(synth)) { records.add(\fading) };
+        if (engine.cuttingSynths[voice].includes(synth)) { records.add(\cutting) };
+        if (engine.ringReaders[synth].notNil) { records.add(\ringReader) };
+        if (engine.grainSlots[synth].notNil) { records.add(\grainSlot) };
+        if (engine.areaState[\freeze][\inputReaders][synth].notNil) { records.add(\inputReader) };
+        if (engine.unconfirmedStarts[synth].notNil) { records.add(\unconfirmed) };
+        records.asArray
+    };
+    // every \strataGrainRing /s_new the function sends, on the missing def
+    var failing = { arg function;
+        var rename = { arg msgs;
+            var renamed = false;
+            msgs = msgs.collect({ arg msg;
+                if ((msg[0] == 9) and: { msg[1].asSymbol == \strataGrainRing }) { renamed = true; msg.copy.put(1, \strataCheckNoSuchDef) } { msg } });
+            if (renamed) { [['/error', -1]] ++ msgs } { msgs }
+        };
+        protect {
+            server.addr = (
+                addr: realAddr.addr, port: realAddr.port, isLocal: realAddr.isLocal, hostname: realAddr.hostname,
+                socket: realAddr.socket, hasBundle: false,
+                sendMsg: { arg self ... msg; realAddr.sendBundle(nil, *rename.([msg])) },
+                sendBundle: { arg self, time ... msgs; realAddr.sendBundle(time, *rename.(msgs)) },
+                sendClumpedBundles: { arg self, time ... msgs; realAddr.sendClumpedBundles(time, *rename.(msgs)) }
+            );
+            function.value;
+        } { server.addr = realAddr };
+    };
+    voices.do({ arg voice;
+        if (engine.voiceRunning(voice).not) { command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0) };
+        command.(\setGrainSource, voice, 9);
+    });
+    server.sync;
+    voices.do({ arg voice, index;
+        failing.({ command.(\setGrainSource, voice, 0) });
+        failed[index] = engine.synths[engine.grainKey(voice)];
+    });
+    server.sync;
+    command.(\voiceOff, voices[1]);
+    [9, 0].do({ arg source; command.(\setGrainSource, voices[2], source); server.sync });
+    kept = voices.collect({ arg voice, index; heldBy.(voice, failed[index]) });
+    // (past twice startConfirmWait, so the sweep's condition of #1019 is
+    // read too; its line shown without the runner's prefix)
+    ((2 * engine.startConfirmWait) + 0.25).wait;
+    server.sync;
+    kept = [kept, voices.collect({ arg voice, index; heldBy.(voice, failed[index]) })];
+    swept = h.sweepLines(engine, "lifecycle's #1019 check").select({ arg line; line.contains("a start unconfirmed") })
+        .collect({ arg line; line.replace("Strata invariant broken: ", "") });
+    check.(kept[0].every(_.notEmpty) and: { kept[1].every(_.isEmpty) } and: { swept.isEmpty },
+        "lifecycle: a synth whose /s_new failed is in no record past startConfirmWait, with no command sent: left running, stopped, switched away twice (#1019; held before the wait %, after it %; the sweep's unconfirmed starts %)".format(
+            kept[0], kept[1], swept));
+    voices.do({ arg voice, index;
+        command.(\voiceOn, voice, 200.0, 0.25, 0.0, 0.1, 10.0, 1.0);
+        command.(\setGrainSource, voice, sources[index]);
+        if (running[index].not) { command.(\voiceOff, voice) };
+    });
+    check.(h.waitFor({ synthNames.(context.xg).size == before }, 4),
+        "lifecycle: the three voices are back as they were after the failed starts (#1019; % nodes, % before; % s in all)".format(synthNames.(context.xg).size, before, (Main.elapsedTime - start).round(0.01)));
+};
+
 // A voiceOn that re-gates a releasing synth (sendToSynth: a bundle quiet
 // for its own messages) still has the server report the starts that follow
 // in the same bundle (#498): /error -1 turns reports off until the end of
@@ -831,6 +914,7 @@ checkInvariantWarnings.(3, before);
 checkQuietNodeSends.(3, before);
 checkFailedStarts.(5, before);
 checkFailedStartSwitches.(5, before);
+checkFailedStartJudged.([4, 5, 6], before);
 checkRegateReportsStarts.(2);
 
 // A re-gated synth whose release ends just as the gate arrives frees
