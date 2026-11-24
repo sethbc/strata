@@ -160,7 +160,13 @@
 
     // One writer per voice (reading its voice bus), then the input's
     // (reading inputBus), each at the tail of voiceGroup. synths, under
-    // ringWriterKeys, is the writers' one record (#943)
+    // ringWriterKeys, is the writers' one record (#943). Each voice's writer
+    // is watched until its first block (watchWriterStart, as the freeze
+    // area's replaced writers are, #1018): the engine reports itself ready
+    // with no sync after the areas' starts, so a freeze sent at once can
+    // reach a writer still waiting for that block, where a pause and a run
+    // break (#1000); a hold's pause or run of a writer still waiting then
+    // replaces it (runRingWriter). The input's writer is never paused
     startRingWriters {
         this.ringWriterKeys.do({ arg key, index;
             var isInput = index == numVoices;
@@ -169,6 +175,7 @@
                 \in, if (isInput) { inputBus } { granBuses[index] },
                 \bufL, buffers[0], \bufR, buffers[1], \phaseOut, buffers[2]
             ], voiceGroup, \addToTail);
+            if (isInput.not) { this.areaCall(\watchWriterStart, index, synths[key], true) };
         });
     }
 
