@@ -1034,13 +1034,19 @@ test("the same file loads again after a record or clear, from the BUFFER page an
   params:set("v1_source", 2)  -- voice 1 reads buffer 1
   context.clear_engine_calls()
   local function loads() return #context.calls_named("loadBuffer") end
-  tap(2); context.fileselect.last.callback("/tmp/foo.wav")
+  -- K2 opens a new browser each time, which picks the file and closes
+  local function pick_on_page(path)
+    context.fileselect.last = nil
+    tap(2); assert_true(context.fileselect.last ~= nil, "K2 opens a new browser")
+    context.fileselect.close(path)
+  end
+  pick_on_page("/tmp/foo.wav")
   assert_equal(loads(), 1, "the BUFFER page loads the picked file")
   assert_equal(params:get("buf1_file"), "/tmp/foo.wav", "and the file param shows it")
   clear_buffer(1)
   assert_equal(params:get("buf1_file"), _path.audio, "clear resets the file param to its starting folder")
   assert_equal(loads(), 1, "the reset is silent (loads nothing)")
-  tap(2); context.fileselect.last.callback("/tmp/foo.wav")
+  pick_on_page("/tmp/foo.wav")
   assert_equal(loads(), 2, "the same file loads again after a clear (BUFFER page)")
   record_buffer(1)
   assert_equal(params:get("buf1_file"), _path.audio, "a recording resets the file param")
@@ -1048,7 +1054,7 @@ test("the same file loads again after a record or clear, from the BUFFER page an
   params:set("buf1_file", "/tmp/foo.wav")
   assert_equal(loads(), 3, "the same file loads again after a recording (PARAMS)")
   assert_true(not local_value("buffers")[1].recording, "the load ended the recording")
-  tap(2); context.fileselect.last.callback("/tmp/foo.wav")
+  pick_on_page("/tmp/foo.wav")
   assert_equal(loads(), 4, "picking the loaded file again on the BUFFER page reloads it")
   assert_equal(context.calls_named("loadBuffer")[4].args[1], 0); assert_equal(context.calls_named("loadBuffer")[4].args[2], "/tmp/foo.wav")
 end)
