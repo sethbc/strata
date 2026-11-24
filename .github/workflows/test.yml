@@ -105,7 +105,8 @@ jobs:
         # ::error:: line; the runner's third-party sources fail nothing and
         # keep their lists (--no-list-cleanup). Then the step checks that the
         # update read Ubuntu's main and universe for the runner's release
-        # (about a second, inside the apt-cache work's 5 s)
+        # (about a second, inside the apt-cache work's 5 s), and the package
+        # list and its sums are read from Ubuntu's lists alone too
         timeout-minutes: 3
         run: |
           set -o pipefail
@@ -134,10 +135,10 @@ jobs:
           done
           : > "$RUNNER_TEMP/empty-status"
           nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
-          apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s lua5.3 luajit \
+          apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" "${nothing_installed[@]}" install -s lua5.3 luajit \
             | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
             > "$RUNNER_TEMP/lua-install.txt"
-          xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/lua-install.txt" \
+          xargs apt-cache "${ubuntu_only[@]}" "${nothing_installed[@]}" show < "$RUNNER_TEMP/lua-install.txt" \
             | awk -v native="$(dpkg --print-architecture)" \
                 '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
                  /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
@@ -348,10 +349,11 @@ jobs:
         # mirror (#999): its apt-get update reads the mirrors whose slowness
         # #785 met. As the Lua job's list: timeout 45, then once more under
         # timeout 60 with https://archive.ubuntu.com first, 115 s at most when
-        # the retry succeeds (about 4 s of apt-cache work), inside the 4 minutes.
+        # the retry succeeds (about 5 s of apt-cache work), inside the 4 minutes.
         # As the Lua job's list too (#1005): Ubuntu's sources alone, a list of
-        # theirs that did not download fails, and the step checks the update
-        # read Ubuntu's main and universe for the runner's release
+        # theirs that did not download fails, the step checks the update read
+        # Ubuntu's main and universe for the runner's release, and the package
+        # list and its sums are read from Ubuntu's lists alone
         timeout-minutes: 4
         run: |
           set -o pipefail
@@ -380,11 +382,11 @@ jobs:
           done
           : > "$RUNNER_TEMP/empty-status"
           nothing_installed=(-o Dir::State::status="$RUNNER_TEMP/empty-status")
-          apt-get $APT_NETWORK_OPTIONS "${nothing_installed[@]}" install -s jackd2 \
+          apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" "${nothing_installed[@]}" install -s jackd2 \
               "supercollider-language=$SC_APT_VERSION" "supercollider-server=$SC_APT_VERSION" \
             | awk '/^Inst / { for (i = 3; i <= NF; i++) if (substr($i, 1, 1) == "(") { print $2 "=" substr($i, 2); break } }' \
             > "$RUNNER_TEMP/sc-install.txt"
-          xargs apt-cache "${nothing_installed[@]}" show < "$RUNNER_TEMP/sc-install.txt" \
+          xargs apt-cache "${ubuntu_only[@]}" "${nothing_installed[@]}" show < "$RUNNER_TEMP/sc-install.txt" \
             | awk -v native="$(dpkg --print-architecture)" \
                 '/^Package: / { p = $2 } /^Version: / { v = $2 } /^Architecture: / { a = $2 } /^SHA512: / { s = $2 }
                  /^$/ { if (s != "" && (a == native || a == "all")) { gsub(/:/, "%3a", v); print s "  " p "_" v "_" a ".deb" }; p = v = a = s = "" }' \
