@@ -1060,8 +1060,11 @@ return function(S)
   -- before the ports let the vports go): each port with a settled zone, or
   -- a takedown owed, gets one takedown when its device is there and nothing
   -- holds it, so a synth keeps no zone a script that ended asked for (#789;
-  -- one owed to a device that left is forgotten, #788); then the express
-  -- queue dropped, and nothing more is sent
+  -- one owed to a device that left is forgotten, #788). A zone whose setup
+  -- still waited (its port was held from the zone's start) is taken down
+  -- too, though its synth was never set up: a waiting setup stands for any
+  -- takedown owed there (#1010). Then the express queue dropped, and nothing
+  -- more is sent
   function M.stop()
     if not state.stopped then
       local zones = zones_of(state.config)
