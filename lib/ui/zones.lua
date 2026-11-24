@@ -251,7 +251,9 @@ return function(S)
     end
   end
 
-  owner = {draw = draw, hints = hints, enc = enc, key = key}
+  -- ZONES in the header while it is on top (#901); close as K2, a learn
+  -- ended (#899)
+  owner = {name = "ZONES", close = function() M.close() end, draw = draw, hints = hints, enc = enc, key = key}
 
   -- Open the editor over the page (from SETUP's mpe & zones row); already
   -- open, nothing

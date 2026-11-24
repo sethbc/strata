@@ -19,7 +19,7 @@
 - **Invariant:** `step editor`: the editor is open exactly while its owner is the modal one (it is the one owner nothing covers: a second open pops and pushes it again).
 - **Test:** `test/unit/grid_core_test.lua`: "the step editor closes when its grid goes away, changes page or the pattern is replaced" (and "a pattern replaced by the step editor itself keeps it open"; `test/unit/pages_seq_test.lua`: "an ALT+K2 held across a second open of the step editor holds nothing").
 
-No test runs this table: it is one of the design's modal owners (its section 5, a table and no test). It lists the events that open, replace or close the editor and the two actions of its own that a grid's close watches for (its pattern replacements, ALT+K2's release); every other key, turn or ring is the editor's own editing of its step and leaves it open. A cleanup leaves it as it is (#899).
+No test runs this table: it is one of the design's modal owners (its section 5, a table and no test). It lists the events that open, replace or close the editor and the two actions of its own that a grid's close watches for (its pattern replacements, ALT+K2's release); every other key, turn or ring is the editor's own editing of its step and leaves it open. At cleanup, cleanup's `modal_owners` step (141) closes it through its record's `close` (#899) first of all, for the port that opened it, as K2 does. Its owner's record names it `STEP`, the header's title while it is on top (#901).
 
 | State | Event | Next | Effect |
 |---|---|---|---|

@@ -429,7 +429,8 @@ test("the editor's invariant holds its own owner and a waiting learn's clock", f
   assert_equal(invariant(), nil, "open, its owner the modal one")
   -- another owner in its owner's place: not the editor's own
   local own = S.lib.ui_modal.top()
-  local stranger = { draw = function() end }
+  local stranger = { name = "PROBE", draw = function() end }
+  stranger.close = function() S.lib.ui_modal.pop(stranger) end
   S.lib.ui_modal.pop(own); S.lib.ui_modal.push(stranger)
   assert_true(invariant() ~= nil, "open, but another owner is on the stack: " .. tostring((invariant())))
   S.lib.ui_modal.pop(stranger); S.lib.ui_modal.push(own)

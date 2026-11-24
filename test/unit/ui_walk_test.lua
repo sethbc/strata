@@ -472,7 +472,8 @@ h.test("the ui walk's end check names a press mark left, an animation, a hint ro
   -- an owner K2 does not close
   S.key_press_page[2], S.key_press_at[2], S.key_press_alt[2] = nil, nil, nil
   S.lib.ui_flash.cancel_all()
-  local stuck = {draw = function() end}
+  local stuck = {name = "PROBE", draw = function() end}
+  stuck.close = function() S.lib.ui_modal.pop(stuck) end
   S.lib.ui_modal.push(stuck)
   problems = table.concat(end_check(state), "\n")
   assert_true(problems:find("an owner is left open after", 1, true), "names the owner left open:\n" .. problems)

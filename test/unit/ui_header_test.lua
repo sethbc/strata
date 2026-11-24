@@ -11,6 +11,9 @@ local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h
 local next_frame, show_page, hint_text, tap = h.next_frame, h.show_page, h.hint_text, h.tap
 local assert_screen_layout, texts_on_row, text_span = h.assert_screen_layout, h.texts_on_row, h.text_span
 local PAGE_TITLES = h.PAGE_TITLES
+-- The room the header's title has: from x 0 to 4 px before the page dots
+-- (HEADER.dots_x 32), the gap assert_screen_layout keeps after a title
+local HEADER_TITLE_ROOM = 28
 
 -- The rects drawn in the header band (above y 9), in drawing order
 local function header_rects(context)
@@ -582,6 +585,156 @@ test("ten dots from x 32 clear the play mark; S16 clears REC", function()
   local _, flash_right = text_span(header_text_starting(context, "x"))
   assert_true(flash_right <= scene_left, "a long header flash ends by S16")
   assert_screen_layout(context, "a long header flash and S16")
+end)
+
+
+-- 3.9 (#901): while a modal owner is on top, the header's title names it
+-- (its record's name, S.lib.ui_modal.top_name()) at x 0, where the page's
+-- title was; once none is, the page's title again. Each owner is opened as
+-- a player opens it and closed with its own key. The title text at x 0 on
+-- the header's row
+local function header_title(context)
+  for _, entry in ipairs(texts_on_row(context, 8)) do
+    if entry.x == 0 and entry.align == "left" then return entry end
+  end
+end
+
+-- The seven owners: the page each opens over, how a player opens it, how
+-- its own key closes it, and whether it reads as open (IO's detail has no
+-- accessor: its invariant ties it to the stack, so the stack says)
+local OWNERS = {
+  {name = "PICK", page = "VOICE",
+    open = function(context, S)
+      S.selected_voice = 1
+      for index, row in ipairs(voice_page_rows(1)) do
+        if row.kind == "preset" then S.lib.pages_voice.place_cursor(index) end
+      end
+      next_frame(context); tap(3)
+    end,
+    close = function() tap(2) end,
+    is_open = function(S) return S.lib.ui_voice_picker.is_open() end},
+  {name = "SLICE", page = "BUFFER",
+    open = function(context, S)
+      local fake = h.slice_doubles(S, nil, {editor = true})
+      load_buffer(1, "/tmp/take1.wav")
+      context.polls.fire("bufferState", context.polls.buffer_state_value(1, S.buffers[1].loads_sent, 2))
+      S.lib.samples.settings(1).mode = 2
+      S.lib.samples.settings(1).count = 4
+      fake.markers[1] = {0, 12000, 24000, 48000}
+      key(1, 1); enc(2, -20); enc(2, 11); key(1, 0)  -- the slices field, the twelfth
+      tap(3)
+    end,
+    close = function() tap(2) end,
+    is_open = function(S) return S.lib.ui_slice_editor.is_open() end},
+  {name = "STEP", page = "MAIN",
+    open = function(context, S)
+      context.grid.plug(1, 16, 16)
+      context.grid.press(1, 5, 3, 1)
+      context.clock.run_for(S.constants.GRID_HOLD.step_edit_seconds + 0.05)
+    end,
+    close = function(context) context.grid.press(1, 5, 3, 0) end,
+    is_open = function(S) return S.lib.pages_seq.step_editor() ~= nil end},
+  {name = "IO+", page = "IO",
+    before = function(S)
+      for index = #S.registry.io_sections, 1, -1 do S.registry.io_sections[index] = nil end
+      for index = #S.registry.note_targets, 1, -1 do S.registry.note_targets[index] = nil end
+      S.register_io_section({name = "voice", title = "voice", rows = function()
+        return {{label = "cc 1", kind = "detail", text = function() return "ch 3" end,
+          fields = {{label = "port", kind = "rig", key = "faders_port"}}}}
+      end})
+    end,
+    open = function() tap(3) end,
+    close = function() tap(2) end,
+    is_open = function(S) return S.lib.ui_modal.top() ~= nil end},
+  {name = "SETS", page = "SETUP",
+    open = function(context, S)
+      while S.lib.pages_setup.setup_rows()[S.setup_cursor].label ~= "factory sets" do enc(2, 1) end
+      tap(3)
+    end,
+    close = function() tap(2) end,
+    is_open = function(S) return S.lib.factory.is_open() end},
+  {name = "ZONES", page = "SETUP",
+    open = function(context, S)
+      while S.lib.pages_setup.setup_rows()[S.setup_cursor].label ~= "mpe & zones" do enc(2, 1) end
+      tap(3)
+    end,
+    close = function() tap(2) end,
+    is_open = function(S) return S.lib.ui_zones.is_open() end},
+  {name = "SCALE", page = "SETUP",
+    open = function(context, S)
+      while S.lib.pages_setup.setup_rows()[S.setup_cursor].label ~= "scale & tuning" do enc(2, 1) end
+      tap(3)
+    end,
+    close = function() tap(2) end,
+    is_open = function(S) return S.lib.ui_scale_editor.is_open() end},
+}
+
+-- A started script on the owner's page with the owner open, as a player
+-- opens it
+local function opened(owner)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  if owner.before then owner.before(S) end
+  show_page(owner.page)
+  owner.open(context, S)
+  assert_true(owner.is_open(S), owner.name .. " opens")
+  return context, S
+end
+
+test("the header names the owner on top and the page again when it closes", function()
+  for _, owner in ipairs(OWNERS) do
+    local context, S = opened(owner)
+    redraw()
+    local title = header_title(context)
+    assert_true(title ~= nil, owner.name .. ": a title at x 0")
+    assert_equal(title.text, owner.name, "open over " .. owner.page .. ": the header names it")
+    assert_equal(title.level, 15, owner.name .. ": as bright as a page's title")
+    assert_equal(S.lib.ui_modal.top_name(), owner.name, "its record's name")
+    assert_true(h.text_width(owner.name) <= HEADER_TITLE_ROOM, owner.name .. " ends before the page dots")
+    assert_screen_layout(context, owner.name .. " in the header")
+    owner.close(context)
+    assert_true(not owner.is_open(S), owner.name .. " closes with its own key")
+    redraw()
+    assert_equal(header_title(context).text, owner.page, owner.name .. " closed: the page's title again")
+  end
+end)
+
+test("the step editor over another owner: the header names the step editor, then the owner beneath", function()
+  local context, S = opened(OWNERS[6])  -- the zones editor
+  OWNERS[3].open(context, S)  -- the grid's step editor over it
+  redraw()
+  assert_equal(header_title(context).text, "STEP", "the step editor on top")
+  OWNERS[3].close(context)
+  redraw()
+  assert_equal(header_title(context).text, "ZONES", "the zones editor beneath it again")
+  tap(2); redraw()
+  assert_equal(header_title(context).text, "SETUP", "and the page")
+end)
+
+-- 3.9 (#899): cleanup's modal_owners step (141) closes every owner still
+-- open from the top down, through each record's close, so the stack is
+-- empty, each owner reads closed and every invariant holds after it
+test("cleanup closes every owner and every invariant holds after it", function()
+  local cases = {}
+  for _, owner in ipairs(OWNERS) do cases[#cases + 1] = {owner} end
+  for _, owner in ipairs(OWNERS) do
+    if owner.name ~= "STEP" then cases[#cases + 1] = {owner, OWNERS[3]} end
+  end
+  for _, case in ipairs(cases) do
+    local context, S = opened(case[1])
+    local label = case[1].name .. (case[2] and " under STEP" or "")
+    if case[2] then
+      case[2].open(context, S)
+      assert_true(case[2].is_open(S), label .. ": the step editor opens over it")
+    end
+    cleanup()
+    assert_equal(S.lib.ui_modal.top(), nil, label .. ": the stack is empty")
+    for _, owner in ipairs(case) do
+      assert_true(not owner.is_open(S), label .. ": " .. owner.name .. " reads closed")
+    end
+    local broken = h.check_invariants()
+    assert_equal(table.concat(broken, "; "), "", label .. ": every invariant holds")
+  end
 end)
 
 end

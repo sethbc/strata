@@ -773,7 +773,8 @@ h.transition_table({
       S.lib.ui_keys.set_ui_page(S.constants.UI_PAGES.index.SETUP)
     end,
     ["modal push"] = function(context)
-      context.owner = {draw = function() end}
+      context.owner = {name = "PROBE", draw = function() end}
+      context.owner.close = function() local_value("S").lib.ui_modal.pop(context.owner) end
       local_value("S").lib.ui_modal.push(context.owner)
     end,
     ["forget_held_keys"] = function() forget_held_keys() end,

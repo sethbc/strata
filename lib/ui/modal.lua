@@ -6,20 +6,29 @@
 -- the file selector's check: the header, then the owner's body and hints)
 -- and lib/arc/core.lua's arc_delta, arc_key and arc_redraw go to top()
 -- while one is pushed. Fields of this module's table (S.lib.ui_modal):
--- push, pop, top, key (strata.lua's K2/K3 while an owner is pushed: a
--- release reaches an owner only if its press did), held_seconds (how long
--- the top owner's key has been held, #866) and forget_presses.
+-- push, pop, top, top_name (the header's title while an owner is on top,
+-- #901), close_all (cleanup's modal_owners step, #899), key (strata.lua's
+-- K2/K3 while an owner is pushed: a release reaches an owner only if its
+-- press did), held_seconds (how long the top owner's key has been held,
+-- #866) and forget_presses.
 --
--- An owner is {draw = fn(), hints = fn(alt_held) -> string, enc = fn(n, d),
--- key = fn(n, z), arc_delta = fn(n, d), arc_key = fn(n, z), arc_redraw =
--- fn(arc_port), animates = fn() -> boolean}: only draw is required; a
--- missing handler ignores its input. animates, read by the frame clock
--- (lib/ui/frame.lua) as a page's is, draws every frame while true (#592).
+-- An owner is {name = string, close = fn(), draw = fn(), hints =
+-- fn(alt_held) -> string, enc = fn(n, d), key = fn(n, z), arc_delta = fn(n,
+-- d), arc_key = fn(n, z), arc_redraw = fn(arc_port), animates = fn() ->
+-- boolean}: name, close and draw are required; a missing handler ignores
+-- its input. name (1 to OWNER_NAME_MAX characters) is what the header's
+-- title shows while the owner is on top; close closes the owner as its own
+-- K2 does, its open flag and its place on the stack together. animates,
+-- read by the frame clock (lib/ui/frame.lua) as a page's is, draws every
+-- frame while true (#592).
 
 return function(S)
   local M = {}
 
   local OWNER_HANDLERS = {"hints", "enc", "key", "arc_delta", "arc_key", "arc_redraw", "animates"}
+  -- The longest name: the header's title must end 4 px before the page dots
+  -- (HEADER.dots_x 32); the owners' names are 23 px at the widest (ZONES)
+  local OWNER_NAME_MAX = 5
 
   -- The pushed owners, the top one last. Local: push and pop are the only
   -- ways on and off
@@ -52,11 +61,16 @@ return function(S)
   -- the arc from now on. The covered owner, or the page, forgets its held
   -- keys (their releases go to the new owner, which never saw the presses;
   -- #866: the grid's step editor may cover any owner). An owner already on
-  -- the stack is an error
+  -- the stack is an error, as is one with no name (or a longer one) or no
+  -- close
   function M.push(owner)
     if type(owner) ~= "table" or type(owner.draw) ~= "function" then
       error("ui_modal.push: an owner is a table with a draw function", 2)
     end
+    if type(owner.name) ~= "string" or #owner.name < 1 or #owner.name > OWNER_NAME_MAX then
+      error("ui_modal.push: an owner's name is a string of 1 to " .. OWNER_NAME_MAX .. " characters", 2)
+    end
+    if type(owner.close) ~= "function" then error("ui_modal.push: an owner's close is a function", 2) end
     for _, field in ipairs(OWNER_HANDLERS) do
       if owner[field] ~= nil and type(owner[field]) ~= "function" then
         error("ui_modal.push: an owner's " .. field .. " is a function", 2)
@@ -85,6 +99,33 @@ return function(S)
   function M.top()
     return stack[#stack]
   end
+
+  -- The top owner's name (the header's title while it is on top), or nil
+  function M.top_name()
+    local owner = M.top()
+    return owner and owner.name
+  end
+
+  -- Close every owner still open, from the top down (the step editor, which
+  -- a grid can push over any owner, first), each through its own close; one
+  -- its close leaves on the stack is popped with a console line, so the
+  -- stack is empty after it
+  function M.close_all()
+    local open = {}
+    for index = #stack, 1, -1 do open[#open + 1] = stack[index] end
+    for _, owner in ipairs(open) do
+      if index_of(owner) then owner.close() end
+      if index_of(owner) then
+        print("strata: the modal owner " .. owner.name .. " stayed open after its close; popped")
+        M.pop(owner)
+      end
+    end
+  end
+
+  -- The cleanup step: every owner still open closed, so none is left on the
+  -- stack (#899; the picker's, the scale editor's and the factory list's own
+  -- steps run first and close theirs)
+  S.register_cleanup(S.constants.CLEANUP_ORDER.modal_owners, function() M.close_all() end)
 
   -- K2 or K3 (z 1 down, 0 up) while an owner is pushed (strata.lua's key):
   -- a press goes to the top owner's key(n, 1), a release to its key(n, 0)

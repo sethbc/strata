@@ -453,7 +453,8 @@ test("a key held across a page change, the menu and a covering owner reads nil",
   _menu.set_mode(true); _menu.set_mode(false)
   assert_equal(keys.held_seconds(2), nil, "across the norns menu: nil")
   key(2, 0)
-  local owner = {draw = function() end}
+  local owner = {name = "PROBE", draw = function() end}
+  owner.close = function() modal.pop(owner) end
   key(2, 1)
   modal.push(owner); modal.pop(owner)
   assert_equal(keys.held_seconds(2), nil, "across a covering owner: nil")

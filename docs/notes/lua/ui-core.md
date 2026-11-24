@@ -32,8 +32,8 @@ No test runs this table: it is one of the design's modal owners (its section 5, 
 | learning high | ALT+K3 | learning low | as above |
 | learning low | K2 | closed | the learn ends, popped |
 | learning high | K2 | closed | the learn ends, popped |
-| open | cleanup (step 117) | open | nothing waits; the owner stays on the stack (#899) |
-| learning low | cleanup | open | the learn ends, its clock canceled, the tap cleared; the editor stays open (#899) |
+| open | cleanup (step 117) | open | nothing waits; step 141 then closes it (`close_all`, its record's `close`, as K2, #899) |
+| learning low | cleanup | open | the learn ends, its clock canceled, the tap cleared; step 141 then closes the editor (#899) |
 | learning high | cleanup | open | as above |
 
 ## Files
@@ -60,8 +60,8 @@ The UI core's notes, one file per part:
 - `lib/ui/keys.lua` (`S.lib.ui_keys`): `S.key_press_page`, `S.alt_held`, `S.key_press_alt`, `forget_held_keys` (global); `set_ui_page` (runs the records' `leave`/`enter` and forgets carried arc ticks), `select_voice_by` (fields of `S.lib.ui_keys`).
 - `lib/ui/alt.lua` (`S.lib.ui_alt`): `alt_action` (global); `set`, `run_release_hooks` and the randomizing pages' shared ALT+K2, `k2_up`, `k2_held`, `k2_hint`, and `join` (the hint row's parts, a nil left out) (fields of `S.lib.ui_alt`). See `docs/notes/lua/ui/alt-and-keys.md`.
 - `lib/ui/detent.lua` (`S.lib.ui_detent`): `delta_with_detent`, `enc_param_delta` (global); `as_turn` and `run_touch_hooks` (fields); the holds at 0 (local). See `docs/notes/lua/ui/detents-and-fine.md`.
-- `lib/ui/modal.lua` (`S.lib.ui_modal`, 3.4): the modal screen owner's stack, `push`, `pop`, `top` (fields), and the `modal owner` invariant. See `docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner.
-- `lib/ui/zones.lua` (`S.lib.ui_zones`, 3.5): the MPE and zones editor (below): `open`, `close`, `is_open`, `learn`, `cancel_learn`, `learning`, `note`, `ZONES_EDITOR` (fields), `S.zones_learn_clock`, the header notice `learn v<i> low|high`, cleanup step 117 and the `zones editor` invariant. Its unit tests: `test/unit/ui_zones_test.lua`.
+- `lib/ui/modal.lua` (`S.lib.ui_modal`, 3.4): the modal screen owner's stack, `push`, `pop`, `top`, `top_name` (the header's title, #901), `close_all` (fields; cleanup step 141, #899), and the `modal owner` invariant. See `docs/notes/lua/ui/pages-and-dispatch.md`, The modal owner.
+- `lib/ui/zones.lua` (`S.lib.ui_zones`, 3.5): the MPE and zones editor (below): `open`, `close`, `is_open`, `learn`, `cancel_learn`, `learning`, `note`, `ZONES_EDITOR` (fields), `S.zones_learn_clock`, the header notice `learn v<i> low|high`, cleanup step 117 and the `zones editor` invariant; its owner's record names it `ZONES` (the header's title while it is on top, #901), and its `close` is `M.close` (cleanup step 141). Its unit tests: `test/unit/ui_zones_test.lua`.
 - `lib/ui/slice_editor.lua` (`S.lib.ui_slice_editor`, 3.7): the slice editor (`docs/notes/lua/ui/slice-editor.md`).
 - `lib/ui/scale_editor.lua` (`S.lib.ui_scale_editor`, 3.8): the scale and tuning editor (`docs/notes/lua/ui/scale-editor.md`).
 - `lib/ui/menu_watch.lua` (`S.lib.ui_menu_watch`): the `_menu.set_mode` wrapper (`watch_menu_opening`, `unwatch_menu_opening`, `forget_keys_held_through_menu`; cleanup step 20).

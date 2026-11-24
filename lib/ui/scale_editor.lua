@@ -263,7 +263,9 @@ return function(S)
     end
   end
 
-  owner = {draw = draw, hints = hints, enc = enc, key = key}
+  -- SCALE in the header while it is on top (#901); close as K2, the note
+  -- tap cleared (#899)
+  owner = {name = "SCALE", close = function() M.close() end, draw = draw, hints = hints, enc = enc, key = key}
 
   -- Open the editor over the page (from SETUP's scale & tuning row): the
   -- tuning row's choices listed once, nothing pending, the note tap taken

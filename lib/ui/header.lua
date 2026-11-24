@@ -83,13 +83,14 @@ return function(S)
     end
   end
 
-  -- The header, y 8: the page title, then a header flash while one shows,
+  -- The header, y 8: the page title (while a modal owner is on top, its
+  -- name in the title's place, #901), then a header flash while one shows,
   -- else the page dots (FX's a bar while anything is frozen) and either the page's header_status (with the play
   -- mark) or the indicators; the scene at the right
   function draw_header()
     screen.level(15)
     screen.move(0, HEADER_Y)
-    screen.text(UI_PAGES[S.ui_page])
+    screen.text(S.lib.ui_modal.top_name() or UI_PAGES[S.ui_page])
 
     local flash = S.lib.ui_flash.text("header")
     if flash then
