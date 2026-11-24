@@ -524,7 +524,9 @@ test("a stale recordState report never acts on a newer recording", function()
   assert_true(buffers[3].recording, "a stale cancel changes nothing")
 end)
 
-test("a playable recording into a 44.1 kHz slot flashes replaced (rate)", function()
+-- Re-based for #1027: the replace the rate makes is a refusal of the
+-- overdub, so it flashes in the header (on BUFFER too), never the hint row
+test("a playable recording into a 44.1 kHz slot flashes buf <n> replaced in the header", function()
   local context = load_strata(); finish_startup(context)
   local buffers = local_value("buffers")
   load_buffer(1, "/tmp/cd.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(1, 1, 8))
@@ -533,7 +535,8 @@ test("a playable recording into a 44.1 kHz slot flashes replaced (rate)", functi
   local_value("S").lib.ui_keys.set_ui_page(local_value("UI_PAGES").index.BUFFER)
   record_buffer(1)
   assert_equal(S_record_state(1).kind, "take")
-  assert_equal(local_value("S").lib.ui_flash.text("hints"), "buf 1: replaced (rate)")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 1 replaced")
+  assert_equal(local_value("S").lib.ui_flash.slots.hints.text, nil, "BUFFER's hint row says nothing of it")
 end)
 
 test("any_recording and any_armed follow every slot", function()
@@ -1179,6 +1182,34 @@ test("an overdub refused from the grid on MAIN flashes in the header", function(
   assert_true(h.screen_shows(context, "buf 1 loading"), "MAIN draws it")
   assert_equal(S.lib.ui_flash.slots.hints.text, nil, "and BUFFER's hint flash is not raised")
   h.assert_screen_layout(context, "MAIN with a refused overdub's flash")
+end)
+
+-- #1027: a grid overdub the slot's rate turns into a replace take says so
+-- in the header, where the player is, whole within its 74 px, and BUFFER's
+-- hint row says nothing of it
+test("a playable recording into a slot at another rate says so in the header on every page (#1027)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local slot = S.constants.NUM_BUFFERS
+  local buffers = local_value("buffers")
+  h.show_page("MAIN")
+  load_buffer(slot, "/tmp/cd.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(slot, 1, 8))
+  buffers[slot].sample_rate = 44100
+  params:set("record_feedback", 50)
+  context.clear_engine_calls()
+  S.lib.grid_core.record_key(slot); h.next_frame(context)
+  local calls = context.calls_named("recordBuffer")
+  assert_equal(#calls, 1, "the take is sent")
+  assert_equal(S_record_state(slot).kind, "take", "a replace take")
+  local text = "buf " .. slot .. " replaced"
+  assert_equal(S.lib.ui_flash.text("header"), text, "the header says so")
+  assert_true(h.text_width(text) <= S.constants.HEADER.flash_width, "whole within the header's room")
+  assert_true(h.screen_shows(context, text), "MAIN draws it whole")
+  assert_equal(S.lib.ui_flash.slots.hints.text, nil, "BUFFER's hint flash is not raised")
+  for _, other in ipairs(context.screen.texts) do
+    assert_true(not other.text:find("(rate)", 1, true), "no replaced (rate) anywhere: " .. other.text)
+  end
+  h.assert_screen_layout(context, "MAIN with a rate's replace flash")
 end)
 
 end

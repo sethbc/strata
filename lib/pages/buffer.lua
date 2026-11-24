@@ -1112,6 +1112,7 @@ return function(S)
     {name = "empty flash", setup = function() save_cursor_slot(false) end},
     {name = "load failed flash", setup = function() header_flash("buf 8 load failed") end},
     {name = "take unsaved flash", setup = function() header_flash("take 8 unsaved") end},
+    {name = "replaced flash", setup = function() header_flash("buf 8 replaced") end},
     -- every slot's remembered file missing on start, long names, every voice
     -- reading the cursor slot (#877; as SETUP's state, the field restore sets)
     {name = "missing slots", setup = function()
