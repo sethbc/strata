@@ -351,8 +351,9 @@ return function(S)
 
   -- Choose an entry (a built-in or a file's: name, period, tones): its name,
   -- then its text, whose action applies it. norns runs a text param's
-  -- action only on a change, so a text tuning_tones holds already whose
-  -- tuning the engine lacks (a silent read's, #842) is applied here
+  -- action only on a change, so a text tuning_tones holds already that the
+  -- tuning never took (a silent params:set of tuning_tones), or whose tuning
+  -- the engine lacks, is applied here (#842)
   function M.select(entry)
     local text = M.text_of(entry.period, entry.tones)
     params:set("tuning_name", entry.name)
@@ -500,11 +501,21 @@ return function(S)
   S.register_pset_hook({name = "tuning", read = function(path_base, number, pset_path, silent)
     local tones_text = params:get("tuning_tones")
     if tones_text ~= current.text then
-      -- a silent read's text is taken, then sent with every chord resent
-      -- and every quantized voice snapped, as its action would (#965)
+      -- a silent read's text is taken, then sent and every quantized
+      -- voice's stored freq snapped, as its action would (#965), ahead of
+      -- the voices' lines: each freq the read left goes back, silently,
+      -- for the voice params' hook to set through its filter, as the
+      -- file's line follows the tuning in a read with actions. The chords
+      -- are resent once, with the scale's sends (lib/params_setup.lua)
       if M.apply_text(tones_text, silent) and silent then
+        local read_freqs = {}
+        for voice_idx = 1, S.constants.NUM_VOICES do read_freqs[voice_idx] = params:get("v" .. voice_idx .. "_freq") end
         M.send()
-        S.lib.variation.tuning_changed()
+        S.lib.variation.snap_quantized_freqs()
+        for voice_idx, freq in ipairs(read_freqs) do
+          local id = "v" .. voice_idx .. "_freq"
+          if params:get(id) ~= freq then params:set(id, freq, true) end
+        end
         request_redraw()
       end
     elseif not silent and engine_text ~= current.text then

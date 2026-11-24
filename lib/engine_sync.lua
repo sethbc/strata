@@ -311,6 +311,17 @@ return function(S)
     return S.engine_param_values[param_id]
   end
 
+  -- Record the id as sent with value and drop its waiting value, as a
+  -- delivered send does, sending nothing and counting nothing: for a send
+  -- that carries the id in another id's command (#965: the engine params'
+  -- PSET hook records every param of a group it changed, then sends the
+  -- group's command once). The one writer of S.engine_param_values outside
+  -- this module's own sends
+  function M.record_as_sent(param_id, value)
+    drop_pending(param_id)
+    S.engine_param_values[param_id] = value
+  end
+
   -- Count n engine messages (a whole number, at least 0) a module sent
   -- itself, outside send_engine_value (3.5's notes, design §6.4), in the
   -- current window, as deliver counts a send (a new window first, with its

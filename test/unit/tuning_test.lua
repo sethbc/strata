@@ -582,23 +582,68 @@ test("a silent read of a PSET with another tuning sends the tuning (#965)", func
     params:read(session)
     context.clear_engine_calls()
     params:read(path, silent)
-    local sent, intervals = {}, {}
+    local sent, intervals, lists = {}, {}, 0
     for _, call in ipairs(sent_tuning(context)) do sent[#sent + 1] = call.name .. " " .. table.concat(call.args, " ") end
     for _, call in ipairs(context.engine_calls) do
       if call.name == "setGrainParam" and tostring(call.args[2]):match("^interval") then
         intervals[call.args[2]] = call.args[3]
+        if call.args[2] == "intervalCount" then lists = lists + 1 end
       end
     end
-    return table.concat(sent, "\n"), intervals
+    return table.concat(sent, "\n"), intervals, lists
   end
   local actions_sent, actions_intervals = read(false)
-  local silent_sent, silent_intervals = read(true)
+  local silent_sent, silent_intervals, silent_lists = read(true)
+  assert_equal(silent_lists, 1, "the chord's list goes once, never twice (fix round 1)")
   assert_true(tuning().engine_has_tuning(), "the engine has the read's tuning")
   assert_equal(tuning().count(), 19, "19 equal")
   assert_equal(silent_sent, actions_sent, "the tuning sent as a read with actions sends it")
   assert_true(next(actions_intervals) ~= nil, "a read with actions resends the chord's intervals")
   for name, value in pairs(actions_intervals) do
     assert_near(silent_intervals[name] or -1, value, 1e-9, "the chord's " .. name .. " in the read's tuning")
+  end
+end)
+
+-- Fix round 1 of #965: the silent read's hook snaps the quantized freqs
+-- inside the read, before the voice params' hook. A PSET whose quantized
+-- voice's freq is no tone of its own tuning (a file written by hand: 450
+-- Hz, or the session's own stored freq, a tone of the session's tuning,
+-- which leaves the voice params' hook nothing to set) ends with
+-- the freq a read with actions leaves, stored and sent
+test("a silent read of a quantized freq off its PSET's tuning snaps it as a read with actions does (#965)", function()
+  local function read(silent, freq_line)
+    local context = load_strata({ data_subdir = "tuning_silent_snap_" .. tostring(silent) })
+    finish_startup(context)
+    local S = local_value("S")
+    util.make_dir(context.data_dir)
+    local path = context.data_dir .. "off.pset"
+    use("19 equal")
+    params:set("v2_quantize", 1)
+    params:write(path, "off")
+    use("ji normal")
+    local lines = {}
+    for line in h.file_text(path):gmatch("[^\n]*\n") do
+      if line:match('^"v2_freq"') then line = '"v2_freq": ' .. freq_line(S) .. '\n' end
+      lines[#lines + 1] = line
+    end
+    h.write_text(path, table.concat(lines))
+    params:read(path, silent)
+    return params:get("v2_freq"), S.voices[2].values.freq, S
+  end
+  local lines = {
+    ["450 Hz"] = function() return "450.0" end,
+    ["the session's freq"] = function(S) return string.format("%.17g", S.voices[2].values.freq) end,
+  }
+  for what, freq_line in pairs(lines) do
+    local actions_param, actions_stored = read(false, freq_line)
+    local silent_param, silent_stored, S = read(true, freq_line)
+    assert_near(silent_param, actions_param, 1e-9, what .. ": the silent read's freq is a read with actions'")
+    assert_near(silent_stored, actions_stored, 1e-9, what .. ": and stored the same")
+    assert_near(silent_stored, silent_param, 1e-9, what .. ": stored as the param holds it")
+    assert_true(S.voices[2].active, "voice 2 runs")
+    if what == "450 Hz" then
+      assert_true(math.abs(actions_param - 450) > 1e-6, "a read with actions snaps 450 Hz to a tone of 19 equal")
+    end
   end
 end)
 
