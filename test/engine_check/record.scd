@@ -1721,63 +1721,63 @@ test.("record: a loop recording's refresh writes its peaks file only when the ov
 
 // #210: a refresh used to rename its .part through a subprocess of its own,
 // whose fork held sclang for 4-6 ms here (2.5 ms per 130 MB of sclang, so
-// more on a Pi), and a command arriving then waited for it: every refresh
-// made a 1 ms SystemClock task wait over refreshGapLimit, and every message
-// sent as a refresh's write starts waited over refreshHoldLimit. The pings
-// are the main proof; the ticker counts only its gaps that span a refresh
-// (the refresh count changed during the gap), so the OS preempting sclang
-// on a loaded machine (four checks at once) between refreshes cannot fail
-// it. Counted, not the largest: fewer than lateLimit late pings of ten, and
-// fewer than lateLimit late refresh gaps of at least minimumRefreshGaps.
-// The engine writes a changing loop's file at most every peakWriteSeconds
-// (#523), so during the ticker the check writes one itself every
-// peakRefreshSeconds, through the refresh's own writeRecordPeaks.
-test.("record: a command sent during a peaks refresh is handled within 2 ms", {
-    var slot = 2, refreshHoldLimit = 0.002, refreshGapLimit = 0.003, lateLimit = 3, tickerSeconds = 4.2, minimumRefreshGaps = 5;
-    var counters = state[\peakWrites], before, refreshes, lastCount;
-    var latenesses = List.new(10), ping, sent, refreshGaps = List.new(16), longestGap = 0, last, ticker, writer, lateGaps, latePings;
-    // noise: every refresh writes (one that finds its overview unchanged writes nothing, #523)
-    var source = noiseSource.value;
+// more on a Pi), and a command arriving then waited for it. A refresh now
+// hands its rename to the mover and goes on, so a command sent as a
+// refresh's write starts is handled once that one refresh's step is done,
+// with its rename still the mover's. Counted, not timed, so a loaded
+// machine cannot fail it (#964): ten rounds, each with the mover held
+// (kill -STOP, so no rename it holds can end), a ping sent and then one
+// refresh (writeRecordPeaks, the refresh's own write, on a slot a take
+// filled with noise: every write changes its file, #523); at the ping's
+// handling exactly that refresh has run since the send, and its rename is
+// still in the mover (its pending count one more, its .part still there).
+// A refresh that renamed by a subprocess, or by systemCmd, leaves the
+// mover's count as it was. No take records during the rounds, so no
+// refresh of the engine's own comes between a ping and its handling.
+test.("record: a command sent during a peaks refresh is handled with the refresh's rename still under way (#210, #964)", {
+    var slot = 2, rounds = 10, counters = state[\peakWrites], mover = engine.areaState[\waveform][\mover];
+    var results = List.new(rounds), ping, usable, source = noiseSource.value, good, round;
+    var partOf = { arg generation; engine.peaksPath(slot).standardizePath ++ "." ++ engine.instanceTag ++ "-" ++ generation ++ ".part" };
     server.sync;
-    record.(slot, 0.25, 1.0, 0, 0, 0, 1);
-    settle.(0.1);
-    before = counters[\refreshes];
-    last = Main.elapsedTime;
-    lastCount = before;
-    ticker = Routine({ loop {
-        var now = Main.elapsedTime, gap = now - last, count = counters[\refreshes];
-        if ((count != lastCount) and: { refreshGaps.size < 16 }) {
-            refreshGaps.add(gap);
-            longestGap = longestGap.max(gap);
-        };
-        last = now;
-        lastCount = count;
-        0.001.wait
-    } }).play(SystemClock);
-    writer = Routine({ loop {
-        engine.writeRecordPeaks(slot, engine.bufferFrames[slot], nil);
-        engine.peakRefreshSeconds.wait
-    } }).play(SystemClock);
-    tickerSeconds.wait;
-    writer.stop;
-    ticker.stop;
-    ping = OSCFunc({ latenesses.add(Main.elapsedTime - sent) }, '/strataCheckRefreshPing');
-    10.do({
-        sent = Main.elapsedTime;
-        NetAddr.localAddr.sendMsg('/strataCheckRefreshPing');
-        engine.writeRecordPeaks(slot, engine.bufferFrames[slot], nil);
-        0.05.wait;
-    });
-    ping.free;
-    h.command(\stopRecord, slot);
+    record.(slot, 0.25, 1.0);
     waitDone.(slot, 2);
     source.free; server.sync;
-    refreshes = counters[\refreshes] - before;
-    lateGaps = refreshGaps.count({ arg gap; gap >= refreshGapLimit });
-    latePings = latenesses.count({ arg value; value >= refreshHoldLimit });
-    check.((refreshGaps.size >= minimumRefreshGaps) and: { latenesses.size == 10 } and: { latePings < lateLimit } and: { lateGaps < lateLimit },
-        "record: a command sent during a peaks refresh is handled within 2 ms (% of 10 pings late, longest % ms; % of % refresh gaps of a 1 ms task over 3 ms, longest % ms; % refreshes)".format(
-            latePings, latenesses.maxItem !? { arg value; (value * 1000).round(0.01) }, lateGaps, refreshGaps.size, (longestGap * 1000).round(0.01), refreshes));
+    // the take's scratch write ended, so no rename of its own comes in a round
+    h.waitFor({ engine.writeGenerations.isEmpty and: { engine.pathRenames.isEmpty } });
+    usable = mover.notNil and: { mover[\alive] };
+    ping = OSCFunc({ arg msg;
+        var each = results[msg[1].asInteger];
+        if (each.notNil and: { each[\heard].isNil }) {
+            each[\heard] = true;
+            each[\refreshes] = counters[\refreshes] - each[\refreshesBefore];
+            each[\pending] = mover[\pending] - each[\pendingBefore];
+            each[\partThere] = File.exists(partOf.(engine.areaState[\waveform][\generation]));
+            each[\generation] = engine.areaState[\waveform][\generation] - each[\generationBefore];
+        };
+    }, '/strataCheckRefreshPing');
+    if (usable) {
+        rounds.do({ arg number;
+            h.waitFor({ mover[\pending] == 0 });
+            ("kill -STOP " ++ mover[\pid]).systemCmd;
+            protect {
+                round = (refreshesBefore: counters[\refreshes], pendingBefore: mover[\pending], generationBefore: engine.areaState[\waveform][\generation]);
+                results.add(round);
+                NetAddr.localAddr.sendMsg('/strataCheckRefreshPing', number);
+                engine.writeRecordPeaks(slot, engine.bufferFrames[slot], nil);
+                h.waitFor({ round[\heard].notNil }, 0.5);
+            } { ("kill -CONT " ++ mover[\pid]).systemCmd };
+        });
+        h.waitFor({ mover[\pending] == 0 });
+    };
+    ping.free;
+    good = results.count({ arg each;
+        (each[\heard] == true) and: { each[\refreshes] == 1 } and: { each[\generation] == 1 } and: { each[\pending] == 1 } and: { each[\partThere] == true }
+    });
+    check.(usable and: { results.size == rounds } and: { good == rounds },
+        "record: a command sent during a peaks refresh is handled with the refresh's rename still under way (#210, #964; mover %, % of % rounds: heard %, refreshes since the send %, renames in the mover %, .part there %)".format(
+            usable, good, rounds, results.collect({ arg each; each[\heard] ? false }).asArray, results.collect({ arg each; each[\refreshes] }).asArray,
+            results.collect({ arg each; each[\pending] }).asArray, results.collect({ arg each; each[\partThere] }).asArray));
+    reset.(slot);
 });
 
 // 3.7's slot gain (design §4.4): every kind of recording sets its slot's

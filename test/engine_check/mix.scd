@@ -467,12 +467,17 @@ var checkReplacementNeverStarts = {
 // no stage is retried until a start succeeds (nothing else would bring it
 // back). The replacement's /s_new and then the restart's are held back
 // from their bundles (the restart, restartVoiceMix, run here as its
-// confirm timeout runs it, a little before the replacement's own timeout,
-// which then finds the restart in its place and does nothing); the third
-// start succeeds. A filterFreq sent inside the window is kept and is on the
+// confirm timeout runs it, before the replacement's own timeout, which
+// then finds the restart in its place and does nothing); the third start
+// succeeds. A filterFreq sent inside the window is kept and is on the
 // stage that starts: the check holds the window's /n_set back from the
 // server, which would only print a FAILURE line for a node it never made
 // and ignore it. Never two stages of the voice in its group meanwhile.
+// The replace, the window's send and the restart run in one step of the
+// check's routine, with no sync or wait between them, so the replacement's
+// own timeout (startConfirmWait after the replace) cannot run before the
+// restart however slow the machine (#964); the stages are counted once
+// the server has had all three
 var checkReplacementFailsTwice = {
     var state = engine.areaState[\mix], key = engine.voiceMixKey(voice), mixGroup = engine.voiceMixGroup(voice);
     var old = stageOf.(voice), held = { arg bundle, synth; bundle.reject({ arg msg; synth.notNil and: { [9, 15].includes(msg[0]) } and: { msg[1 + (msg[0] == 9).binaryValue] == synth.nodeID } }) };
@@ -481,10 +486,8 @@ var checkReplacementFailsTwice = {
     bundle = server.makeBundle(false, { engine.areaCall(\replaceBadVoiceMix, old.nodeID, voice) });
     first = stageOf.(voice);
     server.sendBundle(nil, *held.(bundle, first));
-    server.sync; counts.add(stageCount.value);
     bundle = server.makeBundle(false, { command.(\setGrainParam, voice, \filterFreq, freq) });
     server.sendBundle(nil, *held.(bundle, first));
-    server.sync;
     bundle = server.makeBundle(false, { engine.areaCall(\restartVoiceMix, voice, [old], first) });
     second = stageOf.(voice);
     server.sendBundle(nil, *held.(bundle, second));
