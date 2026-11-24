@@ -537,8 +537,12 @@ local NOTES_WALK_OPS = {
 -- held buffer or input note at its old root's rate) is fixed, the engine
 -- deriving each held note's rate again at a rootNote; its edge, #1002 (a
 -- pitch outside 0-127, whose rate the engine derives from the clamped
--- note), needs a root outside 24-103 the walk never draws (slot 1's keys
--- are 48-72, the MIDI keys 48-73 in twelve equal steps)
+-- note), needs a pitch outside 0-127 at a root outside 24-103, and the
+-- walk draws neither: its roots are 60 or slot 1's key (47 + random(26):
+-- 48-73), and its pitches the MIDI keys 48-73 in twelve equal steps (no
+-- tuning is set) and the patterns' chords around each voice's own pitch,
+-- which may be fractional (36.5 to 78 over the four seeds, read by a
+-- probe in 3.9's package 3g)
 local NOTES_WALK_ALLOWED = {}
 local NOTES_WALK_CUTS = {}
 for _, op in ipairs(NOTES_WALK_OPS) do
