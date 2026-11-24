@@ -386,16 +386,18 @@ var checkSuperseded = {
 };
 
 // A pass that finds its slot changed after its rename was handed on deletes
-// the renamed file only while it is the slot's newest analysis (#888): with
-// the mover stopped, an older pass hands its rename on, the slot changes, a
-// newer pass hands its own on behind it, and the mover then renames both in
-// order while sclang waits (so no acknowledgment is seen between them). The
-// older pass reports failed and leaves the newer pass's file in place. The
-// change is the slot's count alone (slotChanged, as a load of the same audio
-// counts it): a load's own peaks rename would wait in the stopped mover.
+// the renamed file only while it is the slot's newest analysis (#888), and
+// a newer pass's rename waits for it (#963): with the mover stopped, an
+// older pass hands its rename on, the slot changes, and a newer pass
+// writes its .part and waits while the older's rename is under way
+// (pathRenames); once the mover goes on, the older's rename ends (failed:
+// the slot changed), then the newer's lands. The older pass reports failed
+// and leaves the newer pass's file in place. The change is the slot's count
+// alone (slotChanged, as a load of the same audio counts it): a load's own
+// peaks rename would wait in the stopped mover.
 var checkOlderRename = {
     var slot = 6, path = scratchRoot +/+ "onsets-older-rename.wav", frames = (0.5 * rate).asInteger;
-    var mover = engine.areaState[\waveform][\mover], older, newer, pid, handedOlder = false, handedNewer = false, fields, stopped = false;
+    var mover = engine.areaState[\waveform][\mover], older, newer, pid, handedOlder = false, newerWaits = false, fields, stopped = false;
     writeClickFile.(path, frames, [(0.25 * rate).asInteger], [0.5]);
     loadInto.(engine, slot, path);
     if (File.exists(onsetsFile.(engine, slot))) { File.delete(onsetsFile.(engine, slot)) };
@@ -409,20 +411,68 @@ var checkOlderRename = {
             handedOlder = waitFine.({ mover[\pending] == 1 }, 0.5);
             engine.slotChanged(slot);
             newer = startAnalysis.(engine, slot);
-            handedNewer = waitFine.({ mover[\pending] == 2 }, 0.5);
-        } {
-            // both renames land, in order, before any poll can see an acknowledgment
-            ("kill -CONT " ++ pid ++ "; sleep 0.2").systemCmd;
-        };
+            // both .part files there, the older's alone in the mover
+            newerWaits = waitFine.({ partFilesOf.(engine, slot).size == 2 }, 0.5) and: { mover[\pending] == 1 };
+        } { ("kill -CONT " ++ pid).systemCmd };
         finishAnalysis.(older);
         finishAnalysis.(newer);
         waitFor.({ mover[\pending] == 0 });
     };
     fields = readOnsets.(onsetsFile.(engine, slot));
-    check.(stopped and: { handedOlder } and: { handedNewer } and: { older[\failed] == true } and: { newer[\failed] == false }
+    check.(stopped and: { handedOlder } and: { newerWaits } and: { older[\failed] == true } and: { newer[\failed] == false }
         and: { fields.notNil } and: { fields[\frames] == [frames.asString] } and: { partFilesOf.(engine, slot).isEmpty },
-        "onsets: a pass that finds its slot changed after its rename was handed on leaves a newer pass's file (mover held %, handed on %, %; failed %, %; file %)".format(
-            stopped, handedOlder, handedNewer, older !? { older[\failed] }, newer !? { newer[\failed] }, fields.notNil));
+        "onsets: a pass that finds its slot changed after its rename was handed on leaves a newer pass's file, whose rename waits for it (mover held %, handed on %, the newer waiting %; failed %, %; file %)".format(
+            stopped, handedOlder, newerWaits, older !? { older[\failed] }, newer !? { newer[\failed] }, fields.notNil));
+    command.(\clearBuffer, slot); server.sync;
+    File.delete(path);
+};
+
+// #963: an older pass's rename by subprocess can no longer land over a
+// newer pass's file. With the mover stopped, an older pass hands its
+// rename to the mover, renames of the check's own fill the rest of its
+// backlog (peaksMoverBacklog), the slot's audio gains a second click on
+// the server and its count changes, and a newer pass then finds the
+// backlog full, so its rename would go by subprocess at once, while the
+// older's goes by subprocess only past peaksMoverTimeout. The newer waits
+// for the older's rename to end (pathRenames): the file in place once both
+// have ended is the newer pass's, two onsets, never the older's one
+var checkRenameOrder = {
+    var slot = 7, path = scratchRoot +/+ "onsets-order.wav", frames = (0.5 * rate).asInteger;
+    var clicks = [(0.1 * rate).asInteger, (0.4 * rate).asInteger];
+    var mover = engine.areaState[\waveform][\mover], older, newer, pid, fills = [], fields, stopped = false, handedOlder = false, full = false;
+    writeClickFile.(path, frames, [clicks[0]], [0.5]);
+    loadInto.(engine, slot, path);
+    if (File.exists(onsetsFile.(engine, slot))) { File.delete(onsetsFile.(engine, slot)) };
+    if (mover.notNil and: { mover[\alive] }) {
+        waitFor.({ mover[\pending] == 0 });
+        pid = mover[\pid];
+        ("kill -STOP " ++ pid).systemCmd;
+        stopped = true;
+        protect {
+            older = startAnalysis.(engine, slot);
+            handedOlder = waitFine.({ mover[\pending] == 1 }, 0.5);
+            fills = (1 .. (engine.peaksMoverBacklog - 1)).collect({ arg n;
+                var target = scratchRoot +/+ ("onsets-fill-" ++ n), part = target ++ ".part";
+                File.use(part, "w", { arg file; file.write("fill") });
+                engine.renameIntoPlace(part, target, {});
+                target
+            });
+            full = mover[\pending] == engine.peaksMoverBacklog;
+            [engine.buffersL[slot], engine.buffersR[slot]].do({ arg buffer; buffer.set(clicks[1], 0.9) });
+            server.sync;
+            engine.slotChanged(slot);
+            newer = startAnalysis.(engine, slot);
+            finishAnalysis.(older);
+            finishAnalysis.(newer);
+        } { ("kill -CONT " ++ pid).systemCmd };
+        waitFor.({ mover[\pending] == 0 });
+    };
+    fields = readOnsets.(onsetsFile.(engine, slot));
+    check.(stopped and: { handedOlder } and: { full } and: { older[\failed] == true } and: { newer[\failed] == false }
+        and: { onsetFrames.(fields) == clicks.collect({ arg click; click div: hop * hop }) } and: { partFilesOf.(engine, slot).isEmpty },
+        "onsets: the newer pass's file stays in place over an older pass's rename by subprocess (#963; mover held %, handed on %, backlog full %; failed %, %; onsets %)".format(
+            stopped, handedOlder, full, older !? { older[\failed] }, newer !? { newer[\failed] }, onsetFrames.(fields)));
+    fills.do({ arg each; if (File.exists(each)) { File.delete(each) } });
     command.(\clearBuffer, slot); server.sync;
     File.delete(path);
 };
@@ -567,6 +617,7 @@ body = {
         checkInterrupted.value;
         checkSuperseded.value;
         checkOlderRename.value;
+        checkRenameOrder.value;
         checkRefused.value;
         checkRefusedEnding.value;
         checkLong.value;
