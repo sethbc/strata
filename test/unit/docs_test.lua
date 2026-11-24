@@ -1594,14 +1594,14 @@ end)
 -- 13.4 MB at 114 kB/s); #999: the list's updates now run under limits the
 -- workflow sets, and its apt-cache work after the update took 2.1 to
 -- 2.6 s (run 45327275355's Lua jobs; 3.2 to 4.2 s in the engine shards'
--- lists), allowed 5; the restore and the save of an entry under a megabyte are allowed 10 s each
--- (the shard's 111 MB restore took 10 s at most); the refill and the
--- unpacking 15 s (a fast mirror's whole install, its update and download
--- included, took 9 to 11 s); the runner's own steps 3 s at most, allowed 6
--- as the shard's measure; the slowest suite 471 s (run 45320574628 on
--- main, lua (luajit, 1/2) on 4 cores: "60 unit files in 4 processes,
--- 470 s"; shard 1 took 264 to 331 s in every other job, shard 2 121 to
--- 222 s)
+-- lists), allowed 5; the restore and the save of an entry under a
+-- megabyte are allowed 10 s each (the shard's 111 MB restore took 10 s
+-- at most); the refill and the unpacking 15 s (a fast mirror's whole
+-- install, its update and download included, took 9 to 11 s); the
+-- runner's own steps 3 s at most, allowed 6 as the shard's measure; the
+-- slowest suite 471 s (run 45320574628 on main, lua (luajit, 1/2) on 4
+-- cores: "60 unit files in 4 processes, 470 s"; shard 1 took 264 to 331 s
+-- in every other job, shard 2 121 to 222 s)
 CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60, list_work = 5,
   lua = { checkout = 7, restore = 10, save = 10, after_downloads = 15, runner_steps = 6, suite = 471 } }
 
@@ -2573,8 +2573,14 @@ test("a list step's apt-get update runs under a limit, then once more with archi
     end
     assert_equal(#updates, 2, cache.where .. ": the list's update runs under a limit, and once more after the mirrors are reordered")
     assert_equal(calls, #updates, cache.where .. ": every apt-get update of the list is one of its two tries under timeout")
-    assert_true(updates[1].seconds <= 60, cache.where .. ": the first update gives up within a minute (a fast mirror's took 4 to 34 s): "
-      .. updates[1].seconds)
+    -- the tries the budget sums read: the first cut at 45 s (a fast
+    -- mirror's update took 1 to 34 s), the retry at 60, each killed 5 s
+    -- after its signal
+    for index, expected in ipairs({ { seconds = 45, kill = 5 }, { seconds = 60, kill = 5 } }) do
+      local try = updates[index] or {}
+      assert_equal(try.seconds, expected.seconds, cache.where .. ": the list's update try " .. index .. "'s limit, in seconds")
+      assert_equal(try.kill, expected.kill, cache.where .. ": the list's update try " .. index .. "'s kill-after, in seconds")
+    end
     -- the reorder is the download retry's own line, between the two tries
     local first, second = list.text:find("sudo timeout", 1, true), select(2, list.text:find("sudo timeout.-sudo timeout"))
     local reorder = list.text:find(sed, 1, true)
