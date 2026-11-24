@@ -632,8 +632,8 @@ lateCopyChecks = {
     // so the answer is withheld past the 1 s whatever the machine's speed,
     // where a queue of server work sized by a timing came apart from it
     // under load. Every other message passes. The second attempt's read is
-    // answered by its own reply (Bus.get matches by index, so the first
-    // read's responder hears it too and goes), and the check's step before
+    // answered by its own reply (the first read's responder went at its
+    // timeout, #1014), and the check's step before
     // that copy's message waits late, so it is a late copy, and the third
     // lands: one late copy, no line (a missing head counted as late would
     // make two, and the line)
