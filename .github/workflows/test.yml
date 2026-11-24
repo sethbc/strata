@@ -44,10 +44,10 @@ jobs:
   # machine's time (docs/checks.md, The Lua jobs and their times)
   lua-suite:
     name: lua (${{ matrix.lua }}, ${{ matrix.shard }})
-    # The whole suite on 4 cores: about 144 s there x 1.6 = 4 minutes, plus
-    # about 1 for checkout and the install. 10 covers twice that, or the
-    # whole suite on 2 cores (248 s x 1.6 = 6.6 minutes) with the install's
-    # own 3; the default is 360
+    # A shard of the suite on 4 cores, plus about 1 minute for checkout and
+    # the install. 10 covers the whole suite's 7 to 10 minutes there (#991:
+    # what one shard took before the suite was split) with room for a
+    # shard; the default is 360
     timeout-minutes: 10
     runs-on: ubuntu-24.04
     strategy:
@@ -57,12 +57,13 @@ jobs:
         lua: [lua5.3, luajit]
         # The shards of the unit files (test/run.lua --shard K/N; every file
         # in exactly one, test/unit/docs_test.lua checks the list is whole).
-        # One shard while the runner has 4 cores (the aim: no Lua job over 5
-        # minutes). If nproc says 2, or a job's Behavior tests take over 4
-        # minutes, make it ["1/2", "2/2"] (at 2 processes there the shards
-        # took 130 and 117 s); more gain little, since shard 1 holds
-        # ui_layout_test.lua
-        shard: ["1/1"]
+        # Two shards since #991: with 3.9's tables and walks (4419 tests) one
+        # shard's Behavior tests took 432 to 539 s on Lua 5.3 and 512 to 613 s
+        # on LuaJIT on the 4-core runners (runs on 852231b9, 1aec87dc and
+        # 8dafeba0, the last canceled at the job's limit with every test
+        # passing). The aim stays no Lua job over 5 minutes; a third shard
+        # gains little, since shard 1 holds ui_layout_test.lua
+        shard: ["1/2", "2/2"]
     steps:
       # Pinned by commit (a tag can move). To move it: `gh api repos/actions/checkout/releases/latest`
       # names the newest release, its tag's commit goes here with the version in the comment (#533)
