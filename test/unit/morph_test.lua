@@ -1070,6 +1070,42 @@ test("a move cancels a running transition and clears the current scene", functio
   assert_near(params:get("morph"), 0.3, 1e-9, "and leaves the morph where it is")
 end)
 
+-- #1008: a fade from a state the morph holds, canceled partway as the scene
+-- sequencer's stalled wait or a scenes load cancels it (never morph's own
+-- apply, which releases the fade itself), leaves the previous scene (none)
+-- current. The morph applied again at the same position then lands every
+-- value its plan gives there: the values it set at rest before the fade,
+-- and reverb mix's A + x (B - A) worked out here
+test("a fade canceled under the morph: the morph at the same position lands its own values (#1008)", function()
+  local context, S = scrambled_scenes()
+  local position = 0.3
+  settle(context, position)
+  assert_equal(S.current_scene, 0, "the morph holds the sound")
+  assert_near(params:get("reverb_mix"), 0.1 + position * (0.9 - 0.1), 1e-9, "reverb mix on the morph's blend")
+  local morphed = continuous_values(S, 1)
+  local differing = 0
+  for _, entry in ipairs(S.lib.scenes.scene_entries(S.scenes[2].data)) do
+    if entry.kind == "continuous" and math.abs(entry.value - morphed[entry.id]) > 1e-6 then differing = differing + 1 end
+  end
+  assert_true(differing > 120, "a fade to scene 2 moves most of the morph's values (" .. differing .. ")")
+  recall_scene(2, 2)                                              -- step 1 runs at once
+  for _ = 2, 5 do wake(context, "scene_transition_clock") end     -- step 5: f = 0.25, before the switches
+  assert_true(S.scene_transition_active, "the fade runs")
+  assert_true(math.abs(params:get("reverb_mix") - morphed.reverb_mix) > 0.1, "and moved reverb mix")
+  cancel_scene_transition()
+  assert_equal(S.current_scene, 0, "the cancel leaves no scene current, as before the fade")
+  params:lookup_param("morph"):bang()                             -- the morph applied at the same position
+  context.clock.run_for(1)
+  assert_equal(S.morph_clock, nil, "the morph has applied and rested")
+  assert_near(params:get("reverb_mix"), 0.1 + position * (0.9 - 0.1), 1e-9, "reverb mix on the morph's blend again")
+  local stale = {}
+  for id, value in pairs(morphed) do
+    if math.abs(params:get(id) - value) > 1e-9 * math.max(1, math.abs(value)) then stale[#stale + 1] = id end
+  end
+  table.sort(stale)
+  assert_equal(table.concat(stale, ", "), "", "every value the morph sets is its own again")
+end)
+
 test("an empty endpoint flashes once and changes nothing", function()
   local context, S = two_scenes()
   local flashes = {}

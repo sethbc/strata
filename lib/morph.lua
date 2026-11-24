@@ -52,7 +52,9 @@ return function(S)
   -- until first asked). applied: what the morph last set, corner "a" to
   -- "d" (nil: the next apply takes the corner by weight, as after a plan
   -- change), values by param id, owned (the discrete entries, by key, the
-  -- morph set to the current corner's) and the round robin's cursor.
+  -- morph set to the current corner's), the round robin's cursor and the
+  -- scenes' takeover count when it was last applied or forgotten (a recall
+  -- or fade started since moved values under it, #1008).
   -- moved: a position waits for the clock; move_held, move_scene and
   -- move_takeovers: whether morph held the state at the latest move, the
   -- current scene then and the scenes' takeover count (a recall or fade
@@ -62,13 +64,14 @@ return function(S)
   -- next wake and applies nothing); crossed_at: when the last
   -- crossing's discrete switch was applied (util.time()); crossing_waits:
   -- the last apply found a crossing it could not apply yet (#653)
-  local state = {plan = nil, applied = {values = {}, owned = {}, cursor = 1}, moved = false, move_held = false,
+  local state = {plan = nil, applied = {values = {}, owned = {}, cursor = 1, takeovers = 0}, moved = false, move_held = false,
     move_scene = 0, move_takeovers = 0, pending = false, flashed = false, clock = nil, crossed_at = nil,
     crossing_waits = false}
 
-  -- (a waiting crossing is one from the applied corner: it goes with it)
+  -- (a waiting crossing is one from the applied corner: it goes with it;
+  -- nothing applied is stale, so the takeover count is the scenes' now)
   local function forget_applied()
-    state.applied = {corner = nil, values = {}, owned = {}, cursor = 1}
+    state.applied = {corner = nil, values = {}, owned = {}, cursor = 1, takeovers = S.lib.scenes.takeovers()}
     state.crossing_waits = false
   end
 
@@ -672,9 +675,12 @@ return function(S)
 
   -- Something else set the state since morph's last apply: a recall or a
   -- transition, which the scenes say holds the sound (#894: morph's apply
-  -- releases it, so no scene holds it after one)
+  -- releases it, so no scene holds it after one), or one started since and
+  -- ended without landing (a fade canceled by the scene sequencer's wait or
+  -- a scenes load, which leaves no scene holding it: the scenes' takeover
+  -- count moved since the apply, #1008)
   local function taken_over()
-    return S.lib.scenes.held_by_scene()
+    return S.lib.scenes.held_by_scene() or S.lib.scenes.takeovers() ~= state.applied.takeovers
   end
 
   -- A recall or a fade came after the latest move: something took over
