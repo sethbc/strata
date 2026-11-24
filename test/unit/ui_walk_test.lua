@@ -38,18 +38,29 @@ local function page_index(S, name) return S.constants.UI_PAGES.index[name] end
 -- norns' routing of the hardware (lua/core/menu.lua): while the menu is
 -- open its keys and encoders are the menu's; in play mode they go to
 -- _menu.key and norns.encoders.callback, which set_mode(false) copies from
--- the globals key and enc (so a name entry's own key once it took them).
--- While BUFFER's file selector is open they go nowhere: norns' fs.enter
--- puts its own key and enc in the globals, which the stub's does not
--- (#985), so the walk drops them as the selector would take them
+-- the globals key and enc (so a name entry's own key once it took them,
+-- and BUFFER's file selector's while it is open: fs.enter puts its own
+-- there, as the stub's does, #985). Keys and turns under the open selector
+-- reach the selector's handlers, never the script's
 ---------------------------------------------------------------------------
 
 local function selector_open(state) return state.S.BUFFER_PAGE.file_selector_open end
 
 local function where_input_goes(state)
   if state.context.menu.mode then return "menu" end
-  if selector_open(state) then return "selector" end  -- #985
+  if state.context.menu.key == state.context.fileselect.key then return "selector" end
   return "script"
+end
+
+-- A key or turn the play mode's routing delivers, counted when the stub's
+-- selector recorded it (its `inputs`)
+local function deliver(state, handler, goes, n, value)
+  local inputs = state.context.fileselect.inputs
+  local before = #inputs
+  handler(n, value)
+  if goes == "selector" and #inputs > before then
+    state.counts.selector_took_input = state.counts.selector_took_input + 1
+  end
 end
 
 local function hardware_key(state, n, z)
@@ -79,10 +90,10 @@ local function hardware_key(state, n, z)
     end
     state.press_went[n], state.press_top[n] = nil, nil
   end
-  if goes ~= "script" then return end
+  if goes == "menu" then return end
   local handler = state.context.menu.key or rawget(_G, "key")
   local entry_was_open = state.context.textentry.open
-  handler(n, z)
+  deliver(state, handler, goes, n, z)
   -- a name entry's K2 release cancels it (te.key)
   if entry_was_open and not state.context.textentry.open then
     state.counts.name_canceled = state.counts.name_canceled + 1
@@ -90,9 +101,10 @@ local function hardware_key(state, n, z)
 end
 
 local function hardware_enc(state, n, d)
-  if where_input_goes(state) ~= "script" then return end
+  local goes = where_input_goes(state)
+  if goes == "menu" then return end
   local handler = norns.encoders.callback or rawget(_G, "enc")
-  handler(n, d)
+  deliver(state, handler, goes, n, d)
 end
 
 local function hardware_tap(state, n)
@@ -232,8 +244,10 @@ local function open_file_selector(state)
   hardware_tap(state, 2)
 end
 
+-- Only while it has the keys: a selector opened from play mode exits by
+-- its own keys, which the open menu holds
 local function cancel_file_selector(state)
-  if not selector_open(state) then return end
+  if not selector_open(state) or where_input_goes(state) ~= "selector" then return end
   state.context.fileselect.close(nil)
   state.counts.selector_canceled = state.counts.selector_canceled + 1
 end
@@ -426,7 +440,7 @@ end
 ---------------------------------------------------------------------------
 
 local COUNTERS = {"menu_took_release", "released_under_cover", "name_finished", "name_canceled", "selector_canceled",
-  "opened_step_editor"}
+  "selector_took_input", "opened_step_editor"}
 for _, kind in ipairs(WALK.owners) do COUNTERS[#COUNTERS + 1] = "opened_" .. kind end
 
 local function new_state(context)

@@ -40,6 +40,8 @@ test("every encoder, key and arc control is safe on every page; the arc button a
       assert_equal(local_value("ui_page"), page, "E" .. n .. " stays on " .. PAGE_TITLES[page])
     end
     for n = 1, 3 do key(n, 1); key(n, 0) end
+    -- BUFFER's K2 opened the file selector, which holds the keys (#985)
+    if local_value("BUFFER_PAGE").file_selector_open then context.fileselect.close() end
     for ring = 1, 4 do context.arc.turn(1, ring, 5); context.arc.turn(1, ring, -5) end
     arc_redraw()
     -- the button check covers only pages without arc_button (all but MAIN

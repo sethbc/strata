@@ -2858,11 +2858,12 @@ end
 -- back in the global `redraw` and calls it; fs.exit does the same before it
 -- calls the callback with the chosen path or "cancel". The stub calls
 -- norns.menu.init() there too (so a script's _menu.set_mode wrapper runs)
--- and makes those redraw() calls, but does not reroute key/enc (tests keep
--- pressing the script's keys while the selector is "open"). From the menu
--- (a PARAMS file param) neither calls init, as norns.menu.set is used
--- instead. fs.redraw draws the file
--- list; the stub counts the calls in `redraws` and draws nothing. Like
+-- and makes those redraw() calls, and like fs it takes key and enc until
+-- it closes (#985): the globals from play mode, the menu's handlers
+-- through norns.menu.set from the menu (neither enter nor exit calls init
+-- there). Its key and enc record what they get in `inputs`. fs.redraw
+-- draws the file list; the stub counts the calls in `redraws` and draws
+-- nothing. Like
 -- fs.enter, enter stores the callback in `callback`: norns has one selector,
 -- so a second enter (from a PARAMS file param) replaces the first's.
 ---------------------------------------------------------------------------
@@ -2991,6 +2992,42 @@ local function make_fileselect()
     assert(entered, "fileselect.redraw before fileselect.enter")
     fileselect.redraws = fileselect.redraws + 1
   end
+  function fileselect.refresh() fileselect.redraw() end
+  -- fs.key and fs.enc: the stub's record what they get in `inputs`
+  -- ({"key", n, z} or {"enc", n, d}) and do nothing else
+  fileselect.inputs = {}
+  function fileselect.key(n, z) table.insert(fileselect.inputs, {"key", n, z}) end
+  function fileselect.enc(n, d) table.insert(fileselect.inputs, {"enc", n, d}) end
+  -- fs.enter's swap (#985): from play mode it keeps the globals key, enc,
+  -- redraw and refresh, puts its own key and enc and norns.none there, and
+  -- norns.menu.init() routes them (its set_mode(false) puts norns.script's
+  -- redraw back and calls it); from the menu norns.menu.set swaps the
+  -- menu's handlers instead. One restore list, as fs keeps: a second enter
+  -- replaces the first's
+  local restore = {}
+  local function take_input()
+    if norns.menu.status() == false then
+      restore = { key = rawget(_G, "key"), enc = rawget(_G, "enc"), redraw = rawget(_G, "redraw"),
+        refresh = rawget(_G, "refresh") }
+      _G.key, _G.enc = fileselect.key, fileselect.enc
+      _G.redraw, _G.refresh = norns.none, norns.none
+      menu_init_redraw()
+    else
+      restore = { key = norns.menu.get_key(), enc = norns.menu.get_enc(), redraw = norns.menu.get_redraw(),
+        refresh = norns.menu.get_refresh() }
+      norns.menu.set(fileselect.enc, fileselect.key, fileselect.redraw, fileselect.refresh)
+    end
+  end
+  -- fs.exit's: what enter kept goes back (from play mode routed again by
+  -- norns.menu.init()) before the callback runs
+  local function give_input_back()
+    if norns.menu.status() == false then
+      _G.key, _G.enc, _G.redraw, _G.refresh = restore.key, restore.enc, restore.redraw, restore.refresh
+      menu_init_redraw()
+    else
+      norns.menu.set(restore.enc, restore.key, restore.redraw, restore.refresh)
+    end
+  end
   function fileselect.enter(folder, callback, filter)
     -- fs.enter indexes the folder (fs.folder:sub(-1, -1)): anything but a
     -- string raises there (#481)
@@ -2998,7 +3035,7 @@ local function make_fileselect()
     entered = true
     fileselect.last = { folder = folder, callback = callback, filter = filter }
     fileselect.callback = callback
-    menu_init_redraw()
+    take_input()
     fileselect.redraw()
   end
   -- fs.pushd: open the selector in a folder below the one entered (norns'
@@ -3018,7 +3055,7 @@ local function make_fileselect()
   -- chosen, or canceled when path is nil
   function fileselect.close(path)
     local request = assert(fileselect.last, "the file selector is not open")
-    menu_init_redraw()
+    give_input_back()
     request.callback(path or "cancel")
   end
   return fileselect
@@ -3272,9 +3309,17 @@ function stubs.install(options)
   -- _menu.mode is true while the norns menu (K1) owns the keys and screen;
   -- in play mode _menu.key and norns.encoders.callback route the hardware
   -- keys and encoders to the script (set_mode(false) copies them from the
-  -- globals key and enc). page_key and enc are the menu's own handlers while
-  -- it is open (its page's key, _menu.enc); they do nothing in the stub
-  context.menu = { rebuilds = 0, mode = false, key = nil, alt = false, page_key = function() end, enc = function() end }
+  -- globals key and enc). page_key and page_enc are the menu's page's
+  -- handlers, which set_mode(true) puts in key and penc; they do nothing in
+  -- the stub. enc is _menu.enc, the encoders' callback while the menu is
+  -- open: it passes E2, E3 and ALT+E1 to penc (E1's panel change is not
+  -- modeled)
+  context.menu = { rebuilds = 0, mode = false, key = nil, alt = false, page_key = function() end,
+    page_enc = function() end }
+  context.menu.penc = context.menu.page_enc
+  function context.menu.enc(n, delta)
+    if n ~= 1 or context.menu.alt then context.menu.penc(n, delta) end
+  end
   -- lua/core/audio.lua's file_info(path) -> channels, frames, sample rate
   -- (matron's snd_file_inspect: 0, 0, 0 for a file libsndfile cannot open).
   -- A test lists the files it knows: context.audio.files[path] = {channels,
@@ -3358,7 +3403,7 @@ function stubs.install(options)
       context.menu.mode, context.menu.alt = true, false
       _G.redraw, _G.refresh = norns.none, norns.none
       norns.encoders.callback = context.menu.enc
-      context.menu.key = context.menu.page_key
+      context.menu.key, context.menu.penc = context.menu.page_key, context.menu.page_enc
     end
   end
 
@@ -3411,7 +3456,14 @@ function stubs.install(options)
     -- lua/core/menu.lua: norns.menu.status() returns _menu.mode, and
     -- norns.menu.init() (used by fileselect) calls _menu.set_mode(_menu.mode)
     menu = { status = function() return context.menu.mode end,
-      init = function() _menu.set_mode(_menu.mode) end } }
+      init = function() _menu.set_mode(_menu.mode) end,
+      -- the menu's key, page encoder, redraw and refresh, as
+      -- fileselect swaps them (its redraw and refresh are kept, not drawn)
+      set = function(new_enc, new_key, new_redraw, new_refresh)
+        _menu.penc, _menu.key, _menu.redraw, _menu.refresh = new_enc, new_key, new_redraw, new_refresh
+      end,
+      get_enc = function() return _menu.penc end, get_key = function() return _menu.key end,
+      get_redraw = function() return _menu.redraw end, get_refresh = function() return _menu.refresh end } }
   _G._path = { data = options.data_dir, audio = options.data_dir .. "audio/" }
   -- the audio folder and the script's in one mkdir (a process per load)
   local function shell_quoted(path) return "'" .. path:gsub("'", "'\\''") .. "'" end
