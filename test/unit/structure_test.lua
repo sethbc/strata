@@ -3212,7 +3212,7 @@ end)
 -- Its tests never see the caller's settings: one exported while working on
 -- an area (STRATA_ENGINE_CHECK_AREAS=memory) would make a full run one
 -- container per run, and the others change the image and the cap
-local SC313_CALLER_SETTINGS = "unset STRATA_ENGINE_CHECK_AREAS STRATA_SC313_IMAGE STRATA_SC313_MEMORY && "
+local SC313_CALLER_SETTINGS = "unset STRATA_ENGINE_CHECK_AREAS STRATA_SC313_IMAGE STRATA_SC314_IMAGE STRATA_SC313_MEMORY && "
 local function run_313_script(root, arguments, extra_path)
   local shell_quote = h.shell_quote
   local pipe = io.popen("cd " .. shell_quote(repo_root) .. " && " .. SC313_CALLER_SETTINGS .. "PATH=" .. shell_quote(extra_path or "") .. (extra_path and ":" or "")
@@ -3252,9 +3252,9 @@ end)
 -- the image's sources and a fake docker whose run branch is the given text
 local function fake_313_checkout(root, shards, docker_run)
   local shell_quote = h.shell_quote
-  os.execute("mkdir -p " .. shell_quote(root .. "/test/docker/sc313") .. " " .. shell_quote(root .. "/.github/workflows") .. " "
-    .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core"))
-  for _, path in ipairs({ "test/run_engine_check_313.sh", "test/docker/sc313/Dockerfile", "test/docker/sc313/check.sh" }) do
+  os.execute("mkdir -p " .. shell_quote(root .. "/test/docker/sc313") .. " " .. shell_quote(root .. "/test/docker/sc314") .. " "
+    .. shell_quote(root .. "/.github/workflows") .. " " .. shell_quote(root .. "/bin") .. " " .. shell_quote(root .. "/norns/sc/core"))
+  for _, path in ipairs({ "test/run_engine_check_313.sh", "test/docker/sc313/Dockerfile", "test/docker/sc313/check.sh", "test/docker/sc314/Dockerfile" }) do
     os.execute("cp " .. shell_quote(repo_root .. "/" .. path) .. " " .. shell_quote(root .. "/" .. path))
   end
   local lines = { "jobs:", "  engine-shard:", "    strategy:", "      fail-fast: false", "      matrix:", "        areas:" }
@@ -3402,6 +3402,75 @@ test("the 3.13 script reads its shards from the workflow at each start, and refu
     local output = run_fake_313(root, "-n 1 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns"))
     assert_true(output:find("exit=2", 1, true) ~= nil, "a run refuses: " .. output)
     assert_true(not file_exists(root .. "/docker-run.txt"), "no container starts: " .. output)
+  end
+  h.remove_tree(root)
+end)
+
+-- #1039: -s picks the SuperCollider the containers run, 3.13 (the default,
+-- CI's) or 3.14 (the 3.14.1 image); every other option works the same
+test("the Docker script refuses a SuperCollider version it has no image for (#1039)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc314-refuse"
+  fake_313_checkout(root, { "alpha", "beta,gamma" }, "    exit 0")
+  for _, arguments in ipairs({ "-s 3.12 -l", "-s 3.14.1 -l", "-s '' -l",
+      "-s 4.0 -n 1 -o " .. shell_quote(root .. "/logs") .. " " .. shell_quote(root .. "/norns") }) do
+    local output = run_fake_313(root, arguments)
+    assert_true(output:find("exit=2\n", 1, true) ~= nil, arguments .. " is refused: " .. output)
+    assert_true(output:find("usage: ", 1, true) ~= nil and output:find("[-s version]", 1, true) ~= nil,
+      arguments .. " prints the usage line: " .. output)
+    assert_true(output:find("alpha", 1, true) == nil, arguments .. " lists no shard: " .. output)
+  end
+  assert_true(not file_exists(root .. "/docker-run.txt"), "no container starts")
+  h.remove_tree(root)
+end)
+
+test("the Docker script's -l prints the same shards under either SuperCollider (#1039)", function()
+  local root = data_root .. "sc314-list"
+  fake_313_checkout(root, { "alpha", "beta,gamma" }, "    exit 0")
+  for _, arguments in ipairs({ "-l", "-s 3.13 -l", "-s 3.14 -l", "-l -s 3.14" }) do
+    assert_equal(run_fake_313(root, arguments), "alpha\nbeta,gamma\nexit=0\n", arguments .. " prints this checkout's shards")
+  end
+  h.remove_tree(root)
+end)
+
+test("the Docker script's -s picks the image, its sources, its containers' names and its logs' version line (#1039)", function()
+  local shell_quote, root = h.shell_quote, data_root .. "sc314-image"
+  fake_313_checkout(root, { "alpha", "beta,gamma" }, "    echo \"ENGINE CHECK PASSED\"; exit 0")
+  -- this fake docker also notes each build: its image, its Dockerfile and its context
+  local fake = assert(io.open(root .. "/bin/docker", "w"))
+  fake:write("#!/bin/sh\ncase \"$1\" in\n  image) exit 1 ;;\n  build) echo \"$*\" >> " .. shell_quote(root .. "/docker-build.txt") .. "; exit 0 ;;\n"
+    .. "  run) echo \"$*\" >> " .. shell_quote(root .. "/docker-run.txt") .. "; echo \"ENGINE CHECK PASSED\"; exit 0 ;;\nesac\nexit 0\n")
+  fake:close()
+  local norns = shell_quote(root .. "/norns")
+  local cases = {
+    { arguments = "", folder = "default", version = "3.13", image = "strata-sc313", dockerfile = "/test/docker/sc313/Dockerfile", context = "/test/docker/sc313" },
+    { arguments = "-s 3.13", folder = "313", version = "3.13", image = "strata-sc313", dockerfile = "/test/docker/sc313/Dockerfile", context = "/test/docker/sc313" },
+    { arguments = "-s 3.14", folder = "314", version = "3.14", image = "strata-sc314", dockerfile = "/test/docker/sc314/Dockerfile", context = "/test/docker" },
+  }
+  for _, case in ipairs(cases) do
+    os.remove(root .. "/docker-run.txt"); os.remove(root .. "/docker-build.txt")
+    local logs = root .. "/" .. case.folder
+    local output = run_fake_313(root, case.arguments .. " -o " .. shell_quote(logs) .. " " .. norns)
+    assert_true(output:find("passed 1 of 1;", 1, true) ~= nil and output:find("exit=0", 1, true) ~= nil, case.folder .. ": the run passed: " .. output)
+    local builds = read_lines(root .. "/docker-build.txt")
+    assert_equal(#builds, 1, case.folder .. ": one build: " .. output)
+    assert_true((builds[1] or ""):find(" -t " .. case.image .. " ", 1, true) ~= nil, case.folder .. ": builds " .. case.image .. ": " .. (builds[1] or ""))
+    assert_true((builds[1] or ""):find(" -f " .. root .. case.dockerfile .. " ", 1, true) ~= nil, case.folder .. ": from " .. case.dockerfile .. ": " .. (builds[1] or ""))
+    assert_true((builds[1] or ""):sub(-#(root .. case.context) - 1) == " " .. root .. case.context, case.folder .. ": in the context " .. case.context .. ": " .. (builds[1] or ""))
+    local runs = read_lines(root .. "/docker-run.txt")
+    assert_equal(#runs, 2, case.folder .. ": a container a shard: " .. output)
+    for _, line in ipairs(runs) do
+      assert_true(line:sub(-#case.image - 7) == " " .. case.image .. " check", case.folder .. ": runs " .. case.image .. ": " .. line)
+      assert_true(line:find("%-%-name " .. case.image:gsub("%-", "%%-") .. "%-%d+%-1%-") ~= nil, case.folder .. ": the container's name: " .. line)
+    end
+    for _, stem in ipairs({ "1-alpha", "1-beta_gamma" }) do
+      local lines = read_lines(logs .. "/run-" .. stem .. ".log")
+      assert_equal(lines[1], "strata engine check on SuperCollider " .. case.version .. " (image " .. case.image .. ")", case.folder .. ": run-" .. stem .. ".log names its version first")
+    end
+  end
+  -- a default log folder is named by its version
+  for _, case in ipairs({ { arguments = "", prefix = "strata%-sc313%-logs%." }, { arguments = "-s 3.14", prefix = "strata%-sc314%-logs%." } }) do
+    local output = run_fake_313(root, case.arguments .. " " .. norns)
+    assert_true(output:match("logs: " .. (root:gsub("%p", "%%%0")) .. "/" .. case.prefix) ~= nil, "the default log folder: " .. output)
   end
   h.remove_tree(root)
 end)

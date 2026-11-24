@@ -3297,6 +3297,26 @@ test("the 3.13 Docker image pins CI's SuperCollider and Ubuntu", function()
   assert_true(runner:find("docker/sc313", 1, true) ~= nil, "the runner builds test/docker/sc313")
 end)
 
+-- #1039: the 3.14.1 image (test/run_engine_check_313.sh -s 3.14) runs the
+-- local machines' SuperCollider: an Ubuntu release's 3.14.1 package, pinned
+-- as the 3.13 image pins CI's, and named where docs/checks.md gives the pins
+test("the 3.14.1 Docker image pins a 3.14.1 package, the one docs/checks.md names", function()
+  local dockerfile = read_repo_file("test/docker/sc314/Dockerfile")
+  local version = dockerfile:match("\nARG SC_APT_VERSION=(%S+)")
+  local release = dockerfile:match("\nFROM ubuntu:(%S+)")
+  assert_true(version ~= nil and release ~= nil, "test/docker/sc314/Dockerfile pins SC_APT_VERSION on an Ubuntu release")
+  assert_true(version:match("^%d+:3%.14%.1[+~]") ~= nil, "the pin is a 3.14.1 package: " .. version)
+  assert_true(dockerfile:find("\"supercollider-language=$SC_APT_VERSION\" \"supercollider-server=$SC_APT_VERSION\"", 1, true) ~= nil,
+    "the image installs both packages at the pin")
+  local checks = read_repo_file("docs/checks.md")
+  assert_true(checks:find("SuperCollider 3.14.1 `" .. version .. "` (Ubuntu " .. release .. "'s package", 1, true) ~= nil,
+    "docs/checks.md names the 3.14.1 pin and its Ubuntu release")
+  local notes = read_repo_file("docs/notes/test-harness/engine-check-runner.md")
+  assert_true(notes:find("`" .. version .. "`", 1, true) ~= nil and notes:find("Ubuntu " .. release, 1, true) ~= nil,
+    "the runner notes name the 3.14.1 pin and its Ubuntu release")
+  assert_true(read_repo_file("test/run_engine_check_313.sh"):find("docker/sc314", 1, true) ~= nil, "the runner builds test/docker/sc314")
+end)
+
 -- #581: a full run on 3.13 is CI's shards, each in a fresh sclang, read from
 -- the workflow at each start; -l prints them and starts nothing
 test("the 3.13 runner's shard list is the workflow's", function()
@@ -3311,9 +3331,9 @@ end)
 
 test("the 3.13 runner's synopsis is the same in its usage, AGENTS.md, docs/checks.md and the runner notes", function()
   local script = read_repo_file("test/run_engine_check_313.sh")
-  local usage = script:match('echo "usage: %$0 (%[[^"]-)" >&2')
-  assert_true(usage ~= nil, "the script prints a usage line")
-  for _, flag in ipairs({ "[-1]", "[-l]", "[-c]" }) do assert_true(usage:find(flag, 1, true) ~= nil, "the usage names " .. flag) end
+  local usage = script:match('\nusage="usage: %$0 (%[[^"]-)"\n')
+  assert_true(usage ~= nil and script:find('echo "$usage" >&2', 1, true) ~= nil, "the script prints a usage line")
+  for _, flag in ipairs({ "[-s version]", "[-1]", "[-l]", "[-c]" }) do assert_true(usage:find(flag, 1, true) ~= nil, "the usage names " .. flag) end
   assert_equal(script:match("\n# usage: [^\n]-test/run_engine_check_313%.sh (%[[^\n]*)"), usage, "the header comment's usage")
   for _, path in ipairs({ "AGENTS.md", "docs/checks.md", "docs/notes/test-harness/engine-check-runner.md" }) do
     local count = 0

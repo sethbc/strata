@@ -9,7 +9,7 @@ The test harness's notes, one file per part:
 - [stubs](test-harness/stubs.md): the norns stubs: params, param types and group sizes, the libraries.
 - [clock](test-harness/clock.md): the clock stub, after matron's scheduler: time, waits, tempo, event slots, driving it from a test, errors in clocks.
 - [engine-stub-and-sync](test-harness/engine-stub-and-sync.md): the engine stub (signatures, ranges, param names, the parsed spec) and the sync check.
-- [engine-check-runner](test-harness/engine-check-runner.md): `test/run_engine_check.sh` and the engine check, and `test/run_engine_check_313.sh` (SuperCollider 3.13 in Docker).
+- [engine-check-runner](test-harness/engine-check-runner.md): `test/run_engine_check.sh` and the engine check, and `test/run_engine_check_313.sh` (SuperCollider 3.13 or 3.14.1 in Docker).
 
 ## Owns
 
