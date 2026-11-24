@@ -1185,6 +1185,52 @@ test("a silent read sends a command of several params once (#965)", function()
   end
 end)
 
+-- #995 (fix round 2 of #965): the scale's and the root's actions snap every
+-- quantized voice's stored freq ahead of the voices' lines; a silent read
+-- does it in the engine params' hook. The probe: voice 2 quantized on C#4
+-- (277.18 Hz) in a chromatic session, a PSET in C major whose v2_freq line
+-- is that same freq (so the voice params' hook has nothing to set); a read
+-- with actions ends on C4, and so must a silent one, in the param, the
+-- stored value and what the engine holds
+test("a silent read snaps a quantized voice to the PSET's scale, as a read with actions does (#995)", function()
+  local function read(silent)
+    local context = load_strata({ data_subdir = "pset_engine_scale_snap_" .. tostring(silent) })
+    finish_startup(context)
+    local S = local_value("S")
+    util.make_dir(context.data_dir)
+    local path = context.data_dir .. "major.pset"
+    if not S.voices[2].active then toggle_voice(2) end
+    params:set("v2_quantize", 1)
+    params:set("v2_freq", 277.18)
+    local session_freq = S.voices[2].values.freq
+    local major
+    for index, name in ipairs(params:lookup_param("scale").options) do if name == "Major" then major = index end end
+    params:set("scale", major)
+    params:write(path, "major")
+    params:set("scale", 1)
+    params:set("v2_freq", session_freq)
+    assert_near(S.voices[2].values.freq, session_freq, 1e-9, "the session's voice 2 is back on C#4")
+    local lines = {}
+    for line in h.file_text(path):gmatch("[^\n]*\n") do
+      if line:match('^"v2_freq"') then line = '"v2_freq": ' .. string.format("%.17g", session_freq) .. '\n' end
+      lines[#lines + 1] = line
+    end
+    h.write_text(path, table.concat(lines))
+    params:read(path, silent)
+    local engine_freq
+    for _, call in ipairs(context.engine_calls) do
+      if call.name == "setVoiceParam" and call.args[1] == 1 and call.args[2] == "freq" then engine_freq = call.args[3] end
+    end
+    return params:get("v2_freq"), S.voices[2].values.freq, engine_freq, session_freq
+  end
+  local actions_param, actions_stored, actions_engine, session_freq = read(false)
+  local silent_param, silent_stored, silent_engine = read(true)
+  assert_true(math.abs(actions_param - session_freq) > 1, "a read with actions snaps C#4 off C major")
+  assert_near(silent_param, actions_param, 1e-9, "the silent read's freq is a read with actions'")
+  assert_near(silent_stored, actions_stored, 1e-9, "stored the same")
+  assert_near(silent_engine, actions_engine, 1e-6, "and the engine holds the same freq")
+end)
+
 -- Fix round 1 of #965: a value waiting in the send budget (a macro's move,
 -- morph or a gesture writes inside deferrable) for a param the PSET sets is
 -- dropped by the read, as each action's send drops it in a read with
