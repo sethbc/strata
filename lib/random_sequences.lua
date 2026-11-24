@@ -137,10 +137,11 @@ return function(S)
   end
 
   -- New values for all sixteen of sequence n, the old ones held by the
-  -- undo on MOD's sequences (#922: the row's press, the param's trigger)
+  -- undo on MOD at the sequence's own section, its source key (#922: undone
+  -- on its row or in its settings; the row's press, the param's trigger)
   function M.new(n)
     if not valid(n) then return end
-    S.lib.mutation.hold_sequence(n, {page = S.constants.UI_PAGES.index.MOD, section = "sequences"})
+    S.lib.mutation.hold_sequence(n, {page = S.constants.UI_PAGES.index.MOD, section = "rseq" .. n})
     local values = sequences[n].values
     for index = 1, RSEQ.values do values[index] = draw() end
     save_live()

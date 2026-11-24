@@ -539,10 +539,11 @@ test("a random sequence's new can be undone (#922)", function()
   local before, other = sequences.values(3), sequences.values(1)
   params:set("rseq3_new", 1)
   assert_true(math.abs(sequences.values(3)[1] - before[1]) > 1e-12, "new drew again")
-  assert_true(mutation.undo_for(MOD_PAGE, "sequences", nil), "held on MOD's sequences")
+  assert_true(mutation.undo_for(MOD_PAGE, "rseq3", nil), "held on MOD's rseq3 (its row and its settings)")
+  assert_true(not mutation.undo_for(MOD_PAGE, "rseq1", nil), "not on another sequence")
   assert_true(not mutation.undo_for(MOD_PAGE, "matrix", nil), "and nowhere else")
   sequences.set_value(1, 4, 0.9)
-  assert_true(mutation.undo_for(MOD_PAGE, "sequences", nil), "an edit of another sequence keeps it")
+  assert_true(mutation.undo_for(MOD_PAGE, "rseq3", nil), "an edit of another sequence keeps it")
   assert_equal(mutation.undo(), true, "undone")
   local after = sequences.values(3)
   for index = 1, 16 do assert_equal(after[index], before[index], "v" .. index .. " is back") end
@@ -551,7 +552,7 @@ test("a random sequence's new can be undone (#922)", function()
   assert_equal(S.undo, nil, "the undo is used")
   -- the row's press holds it too
   sequences.new(3)
-  assert_true(mutation.undo_for(MOD_PAGE, "sequences", nil), "M.new holds it")
+  assert_true(mutation.undo_for(MOD_PAGE, "rseq3", nil), "M.new holds it")
 end)
 
 end

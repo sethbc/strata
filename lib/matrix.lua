@@ -58,7 +58,6 @@ return function(S)
   M.MATRIX = MATRIX
 
   local function depth_id(k) return "matrix_" .. k .. "_depth" end
-  M.depth_id = depth_id  -- routing k's depth param (the undo holds a learn's, #927)
   local function on_id(k) return "matrix_" .. k end
 
   local function is_index(k)
@@ -769,7 +768,7 @@ return function(S)
     local k = learning.k
     M.cancel_learn()
     S.lib.mutation.hold_routing(k, LEARN_UNDO, function() M.edit_routing(k, S.matrix[k].source, id) end,
-      param_id, before)
+      depth_id(k), param_id, before)
     header_flash("R" .. k .. " > " .. (current_catalog().labels[id] or id))
   end)
 

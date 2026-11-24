@@ -55,7 +55,7 @@ return function(S)
 
   -- Run the touch hooks (S.registry.param_touch, 3.4) after a user edit has
   -- set param_id: source is "enc", "arc" or "grid" (lib/grid/faders.lua's
-  -- set_param_from_column calls this too), before the param's value from
+  -- set_param_from_column calls this too), with before, the value from
   -- before the edit (#927: a matrix learn's undo puts it back)
   function M.run_touch_hooks(param_id, source, before)
     for _, hook in ipairs(S.registry.param_touch) do hook(param_id, source, before) end
@@ -94,8 +94,7 @@ return function(S)
     local source = opts.source or (opts.arc_ticks and "arc" or "enc")
     local before = params:get(param_id)
 
-    -- a turn, marked as one (S.turning_param); the hold's own set to 0
-    -- below is a set
+    -- a turn, marked as one (S.turning_param); so is the stop at 0 below
     local function apply()
       M.as_turn(param_id, function()
         if raw_delta then
@@ -136,7 +135,10 @@ return function(S)
       new = util.clamp(old + d, param.min, param.max)
     end
     if old ~= 0 and reaches_zero(old, new) then
-      params:set(param_id, 0)
+      -- the stop at 0 is the turn's too (#927: a learn's hold keeps through
+      -- the turn that learned); no filtered param spans 0, so it changes
+      -- no filter's result
+      M.as_turn(param_id, function() params:set(param_id, 0) end)
       detent_holds[param_id] = {units = HOLD_UNITS, started = util.time()}
       M.run_touch_hooks(param_id, source, before)
     else
