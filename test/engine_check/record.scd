@@ -713,6 +713,7 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
     // check's own), so every report sent before the command arrives before
     // it and every report the command causes after it
     var markIndex = -1, marks = 0, poll = engine.bufferStatePoll, period = poll.period, periodic;
+    var gains = engine.areaState[\buffers][\gains], heldGain = 4;
     var holdMover = { ("kill -STOP " ++ mover[\pid]).systemCmd };
     var freeMover = { ("kill -CONT " ++ mover[\pid]).systemCmd };
     // The slot's recording phase, from the engine's records: no take; a
@@ -751,9 +752,18 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
     var playableTake = { record.(slot, 0.05, 1.0, 0.5) };
     // Each state: the phase it is in, what the table calls it, and reach,
     // which gets there from an empty slot and calls fire (the command) once
-    // it is there; release runs after the command (a held mover let go). The
-    // audio is walk-audio.wav, 0.5 s of 0.5 at the server's rate; the other
-    // rate's, 0.5 s of 0.25 at 44.1 kHz
+    // it is there; release runs after the command (a held mover let go).
+    // Where the phase cannot tell the state from its neighbor, holds says
+    // how (read when fire runs): a load's reads pending or its peaks file
+    // held (the mover's pending count), a take not yet prepared (the slot's
+    // gain still heldGain: a preparation sets it to 1), a stopped take's
+    // frame count awaited (stopReplies). reached: the reports from reach's
+    // begin (a mark of its own) to the command, record numbers counted from
+    // before the state's take (1 that take): a held take reports armed.
+    // freedAtOnce: no record synth is left right after the command (a take
+    // in its stop fade is freed at once, never left to fade). The audio is
+    // walk-audio.wav, 0.5 s of 0.5 at the server's rate; the other rate's,
+    // 0.5 s of 0.25 at 44.1 kHz
     var walkStates = (
         noTake: (phase: \none, about: "no take, the slot's audio at the server's rate", reach: { arg fire;
             load.(audioPath); fire.value }),
@@ -761,26 +771,34 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
         noTakeOtherRate: (phase: \none, about: "no take, the slot's audio at another rate", reach: { arg fire;
             load.(otherPath); fire.value }),
         loadReading: (phase: \none, about: "a load taking effect over audio at another rate, its reads pending", reach: { arg fire;
-            load.(otherPath); h.command(\loadBuffer, slot, audioPath, 0); fire.value }),
+            load.(otherPath); h.command(\loadBuffer, slot, audioPath, 0); fire.value },
+            holds: { (engine.bufferFrames[slot] == 0) and: { mover[\pending] == 0 } }),
         loadPeaks: (phase: \none, about: "a load of a 44.1 kHz file taking effect, its peaks file held", reach: { arg fire;
             holdMover.value;
             h.command(\loadBuffer, slot, otherPath, 0);
             soon.({ mover[\pending] > 0 }, 0.8);
-            fire.value }, release: freeMover),
-        waitingReplace: (phase: \waiting, about: "a replace take waiting, unprepared", reach: { arg fire;
-            load.(audioPath); record.(slot, 0.2, 1.0, 0, 0, 0, 0, 0.3); fire.value }),
-        waitingPlayable: (phase: \waiting, about: "a playable recording waiting, unprepared", reach: { arg fire;
-            load.(audioPath); record.(slot, 0.2, 1.0, 0.5, 0, 0, 0, 0.3); fire.value }),
-        sentReplace: (phase: \sent, about: "a replace take prepared, not started (below its level)", reach: { arg fire;
-            load.(audioPath); record.(slot, 0.3, 1.0, 0, 0, 0.9); reachPhase.(\sent); fire.value }),
-        sentPlayable: (phase: \sent, about: "a playable recording prepared, not started (below its level)", reach: { arg fire;
-            load.(audioPath); record.(slot, 0.3, 1.0, 0.5, 0, 0.9); reachPhase.(\sent); fire.value }),
+            fire.value }, release: freeMover,
+            holds: { (engine.bufferFrames[slot] == 0) and: { mover[\pending] > 0 } }),
+        waitingReplace: (phase: \waiting, about: "a replace take waiting, unprepared", reach: { arg fire, begin;
+            load.(audioPath); h.command(\setSlotGain, slot, heldGain); begin.value;
+            record.(slot, 0.2, 1.0, 0, 0, 0, 0, 0.3); fire.value },
+            holds: { gains[slot] == heldGain }, reached: ['armed 1']),
+        waitingPlayable: (phase: \waiting, about: "a playable recording waiting, unprepared", reach: { arg fire, begin;
+            load.(audioPath); h.command(\setSlotGain, slot, heldGain); begin.value;
+            record.(slot, 0.2, 1.0, 0.5, 0, 0, 0, 0.3); fire.value },
+            holds: { gains[slot] == heldGain }, reached: ['armed 1']),
+        sentReplace: (phase: \sent, about: "a replace take prepared, not started (below its level)", reach: { arg fire, begin;
+            load.(audioPath); begin.value; record.(slot, 0.3, 1.0, 0, 0, 0.9); reachPhase.(\sent); fire.value },
+            reached: ['armed 1', 'length 0.0']),
+        sentPlayable: (phase: \sent, about: "a playable recording prepared, not started (below its level)", reach: { arg fire, begin;
+            load.(audioPath); begin.value; record.(slot, 0.3, 1.0, 0.5, 0, 0.9); reachPhase.(\sent); fire.value },
+            reached: ['armed 1']),
         recordingReplace: (phase: \recording, about: "a replace take recording", reach: { arg fire;
             record.(slot, 1.0); reachPhase.(\recording); fire.value }),
         recordingPlayable: (phase: \recording, about: "a playable recording recording, shorter than the slot's audio", reach: { arg fire;
             load.(audioPath); record.(slot, 0.3, 1.0, 0.5); reachPhase.(\recording); fire.value }),
         stoppingReplace: (phase: \stopping, about: "a replace take in its stop fade", reach: { arg fire;
-            record.(slot, 1.0); reachPhase.(\recording); stopTake.value; fire.value }),
+            record.(slot, 1.0); reachPhase.(\recording); stopTake.value; fire.value }, freedAtOnce: true),
         // (the peaks mover, stopped, holds the take's end open)
         endingReplace: (phase: \ending, about: "a replace take ending, its peaks file held", reach: { arg fire;
             holdMover.value; replaceTake.value; reachPhase.(\ending); fire.value }, release: freeMover),
@@ -796,7 +814,7 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             responder = OSCFunc({ arg msg; if ((msg[1] == node) and: { fired.not }) { fired = true; fire.value } }, '/n_end', server.addr);
             stopTake.value;
             soon.({ fired }, 2);
-            responder.free })
+            responder.free }, holds: { engine.stopReplies[slot].notNil })
     );
     var walkRows = [
         (row: 1, state: \noTake, does: "recordBuffer, feedback 0 and loop 0", command: replaceTake,
@@ -811,6 +829,8 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             events: ['length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
         (row: 4, state: \loadReading, does: "recordBuffer, feedback > 0", command: playableTake,
             events: ['recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        (row: 4, state: \loadReading, does: "recordBuffer, feedback 0 and loop 0", command: replaceTake,
+            events: ['length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
         (row: 4, state: \loadPeaks, does: "recordBuffer, feedback > 0", command: playableTake,
             events: ['recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
         // (held past the dropped preparation, 0.09 s after the take's command)
@@ -883,15 +903,16 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
         (row: 18, state: \recordingPlayable, does: "recordBuffer, feedback > 0", command: playableTake,
             events: ['canceled 0', 'recording 1', 'ended 1'], frames: levelFrames)
     ];
-    // The slot's reports after the row's mark, as the rows write them (nil
-    // when the mark has not arrived)
-    var walkEvents = { arg mark, records, loads;
-        var start = h.pollMessages.array.detectIndex({ arg msg; (msg[1] == markIndex) and: { msg[2] == mark } }), stride = engine.numBuffers, lengthStride = engine.bufferStateStride, events = List.new(64);
+    // The slot's reports after a mark (up to the mark until, when given),
+    // as the rows write them (nil when the mark has not arrived)
+    var markAt = { arg mark; h.pollMessages.array.detectIndex({ arg msg; (msg[1] == markIndex) and: { msg[2] == mark } }) };
+    var walkEvents = { arg mark, records, loads, until;
+        var start = markAt.(mark), stop = until !? { markAt.(until) } ? h.pollMessages.size, stride = engine.numBuffers, lengthStride = engine.bufferStateStride, events = List.new(64);
         var stateIndex = CronePollRegistry.getPollFromName(\recordState).index;
         var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index;
         var failedIndex = CronePollRegistry.getPollFromName(\bufferLoadFailed).index;
-        if (start.isNil) { start = h.pollMessages.size; events = nil };
-        h.pollMessages.array.copyRange(start + 1, h.pollMessages.size - 1).do({ arg msg;
+        if (start.isNil or: { stop.isNil }) { start = h.pollMessages.size; stop = start; events = nil };
+        h.pollMessages.array.copyRange(start + 1, stop - 1).do({ arg msg;
             var value = msg[2], whole = value.round.asInteger, code = whole div: stride;
             case
             { (msg[1] == stateIndex) and: { (whole % stride) == slot } } {
@@ -912,8 +933,17 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
     };
     var walkRow = { arg row;
         var entry = walkStates[row[\state]], phase, mark, records, loads, quiet, events, frames, sample, left, passed;
+        var held, reachMark, reachRecords, reachLoads, reachedEvents, fading, reachedState;
+        var begin = {
+            marks = marks + 1;
+            reachMark = marks;
+            NetAddr.localAddr.sendMsg('/poll/value', markIndex, reachMark);
+            reachRecords = state[\recordCounts][slot];
+            reachLoads = engine.bufferLoads[slot];
+        };
         var fire = {
             phase = walkPhase.(slot);
+            held = entry[\holds].isNil or: { entry[\holds].value };
             marks = marks + 1;
             mark = marks;
             NetAddr.localAddr.sendMsg('/poll/value', markIndex, mark);
@@ -923,7 +953,9 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
         };
         clearSlot.value;
         soon.({ mover[\pending] == 0 });
-        entry[\reach].value(fire);
+        entry[\reach].value(fire, begin);
+        // (asked at once: a synth left to its 5 ms fade is still there)
+        if (entry[\freedAtOnce] == true) { fading = h.synthNames(state[\tapGroup]).count({ arg name; name == \strataRecord }) };
         entry[\release].value;
         quiet = soon.({ engine.recordSynths[slot].isNil and: { state[\takes][slot].isNil } and: { mover[\pending] == 0 }
             and: { row[\load].isNil or: { loaded.value } } });
@@ -931,15 +963,20 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
         // (the tree query answers after every message sent before it)
         left = h.synthNames(state[\tapGroup]).includes(\strataRecord) or: { engine.stopReplies[slot].notNil } or: { engine.slotRecording(slot) };
         events = mark !? { walkEvents.(mark, records, loads) };
+        reachedEvents = reachMark !? { walkEvents.(reachMark, reachRecords, reachLoads, mark) };
+        reachedState = (phase == entry[\phase]) and: { held == true }
+            and: { entry[\reached].isNil or: { reachedEvents == entry[\reached] } };
         frames = engine.bufferFrames[slot];
         sample = row[\kept] !? { h.bufferSample(engine.buffersL[slot], 100) };
-        passed = (phase == entry[\phase]) and: { quiet } and: { left.not } and: { walkMatches.(events, row[\events]) }
+        passed = reachedState and: { (fading ? 0) == 0 } and: { quiet } and: { left.not } and: { walkMatches.(events, row[\events]) }
             and: { if (row[\frames] == \held) { frames > 0 } { frames == row[\frames] } }
             and: { row[\kept].isNil or: { (sample - row[\kept]).abs < 1e-4 } };
-        check.(passed, "record: the state table's row % (%; %)%: %, % frames% (phase %, reports %, % frames, sample %%)".format(
+        check.(passed, "record: the state table's row % (%; %)%: %, % frames% (%phase %, reports %, % frames, sample %%%)".format(
             row[\row], entry[\about], row[\does], row[\known] !? { arg issue; " (known, #%)".format(issue) } ? "",
             row[\events].join(", "), row[\frames], row[\kept] !? { arg level; ", the audio kept" } ? "",
-            phase, events, frames, sample ? "not read", if (quiet and: { left.not }) { "" } { ", a take or a rename left" }));
+            if (reachedState) { reachedEvents !? { arg each; "reached with %; ".format(each) } ? "" } { "the state not reached: % held %, its reports %; ".format(entry[\about], held, reachedEvents) },
+            phase, events, frames, sample ? "not read", if (quiet and: { left.not }) { "" } { ", a take or a rename left" },
+            fading !? { arg count; ", % record synths right after the command".format(count) } ? ""));
     };
     h.writeTestFile(otherPath, 44100, 22050, [0.25, 0.25]);
     check.(tableRows.every({ arg number; walkRows.any({ arg each; each[\row] == number }) or: { notWalked.includes(number) } }),
@@ -959,6 +996,22 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             check.(false, "record: the state table's row % (threw %)".format(row[\row], error.errorString)) };
     });
     poll.stop; poll.setTime(period); poll.start;
+    // Not a row of the table, but row 4's first guard (#374): a load that
+    // takes effect puts the slot at the server's rate at once, over audio
+    // at another rate (applyLoad), so a recording sent while its reads are
+    // pending is judged on an empty slot at the server's rate
+    test.("record: a load that takes effect over a 44.1 kHz slot puts it at the server's rate at once", {
+        var before, rate, frames;
+        load.(otherPath);
+        before = engine.bufferSampleRates[slot];
+        h.command(\loadBuffer, slot, audioPath, 0);
+        rate = engine.bufferSampleRates[slot];
+        frames = engine.bufferFrames[slot];
+        soon.(loaded);
+        check.((before == 44100) and: { rate == sampleRate } and: { frames == 0 },
+            "record: a load that takes effect over a 44.1 kHz slot puts it at the server's rate at once (rate % before, % at the command, % frames)".format(
+                before, rate, frames));
+    });
     reset.(slot);
 }.value;
 test.("record: with a delay and a threshold, arming begins at the delay and the level starts the take", {
