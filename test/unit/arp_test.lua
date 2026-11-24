@@ -689,6 +689,41 @@ test("a key held again at its pitch sends no list; a restarted voice's start sti
   assert_equal(list_sends(context, 1), S.lib.arp.ARP.max_steps + 1, "the start's sync sends the list")
 end)
 
+-- #994: the send-if-changed a silent PSET read's hook calls (lib/params_setup.lua)
+test("send_if_changed sends nothing for the list the engine holds and the list, counted, once it changed (#994)", function()
+  local context, S = started()
+  local NINE = S.lib.arp.ARP.max_steps + 1
+  params:set("v1_intervals", S.lib.variation.VARIATION.set_index.chord)
+  params:set("v1_arp", mode("up"))
+  lfo_step(context, S)
+  context.clear_engine_calls()
+  local before = S.lib.engine_sync.budget_state().sent
+  S.lib.arp.send_if_changed(1)
+  assert_equal(list_sends(context, 1), 0, "the list the engine holds: none sent")
+  assert_equal(S.lib.engine_sync.budget_state().sent - before, 0, "nothing counted")
+  -- the scale set silently moves the chord's list without sending it
+  params:set("scale", option_index("scale", "Major Pentatonic"), true)
+  before = S.lib.engine_sync.budget_state().sent
+  S.lib.arp.send_if_changed(1)
+  assert_equal(list_sends(context, 1), NINE, "a changed list: 9 messages")
+  assert_equal(S.lib.engine_sync.budget_state().sent - before, NINE, "counted")
+  assert_list(context, 1, {0, 4, 9, 14}, "Major Pentatonic's chord, ascending")
+  context.clear_engine_calls()
+  S.lib.arp.send_if_changed(1)
+  assert_equal(list_sends(context, 1), 0, "sent once: none again")
+  -- a stopped voice is sent nothing
+  params:set("scale", 1, true)
+  toggle_voice(1)
+  context.clear_engine_calls()
+  before = S.lib.engine_sync.budget_state().sent
+  S.lib.arp.send_if_changed(1)
+  assert_equal(#context.engine_calls, 0, "a stopped voice: nothing sent")
+  assert_equal(S.lib.engine_sync.budget_state().sent - before, 0, "nor counted")
+  -- a voice out of range is refused, sending nothing
+  for _, voice in ipairs({0, S.constants.NUM_VOICES + 1, 1.5}) do S.lib.arp.send_if_changed(voice) end
+  assert_equal(#context.engine_calls, 0, "no voice out of range is sent")
+end)
+
 test("turning the arpeggiator on moves held notes into the list with no off or on at MIDI out; a lift sends its one off", function()
   local context, S = started()
   release_mode()
