@@ -679,4 +679,30 @@ test("a failed target's row is marked until the patterns stop", function()
   broken = false
 end)
 
+
+-- #973: the voice section's state for IO's mark of a cursor that moved by
+-- itself: ALT+E2 takes voice 1's jf row away, and the draw marks the row
+-- the cursor fell to (at the row indent, its label moved right)
+test("the voice section's moved-cursor state ends with the cursor's row marked", function()
+  local context, S = started()
+  local state
+  for _, entry in ipairs(S.registry.pages[S.constants.UI_PAGES.index.IO].layout_states) do
+    if entry.name == "voice: a cursor that moved by itself" then state = entry end
+  end
+  assert_true(state ~= nil, "the state is listed")
+  show_page("IO")
+  state.setup(context); redraw()
+  local page = S.lib.pages_io.IO_PAGE
+  local row = S.lib.pages_io.rows()[S.io_cursor]
+  assert_equal(S.selected_voice, 2, "voice 2 selected")
+  assert_equal(row.param_id, "v2_out_jf", "the cursor fell to voice 2's row in its place")
+  local mark, label
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.text == page.unseen_mark and entry.x == page.row_indent then mark = entry end
+    if entry.text == row.label and entry.x == page.row_indent + page.mark_width then label = entry end
+  end
+  assert_true(mark ~= nil and label ~= nil and mark.y == label.y, "the mark, then the label after it")
+  assert_screen_layout(context, "IO voice section, a cursor that moved by itself")
+end)
+
 end
