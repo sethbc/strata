@@ -43,11 +43,11 @@ return function(S)
     if not ring then return end
     local synced = synced_param(ring)
     if synced then
-      -- the carry belongs to the division alone
-      local steps = arc_whole_steps("fx:" .. n, delta, ARC_FX.ticks_per_step, synced)
+      local steps = arc_whole_steps("fx:" .. n, delta, ARC_FX.ticks_per_step)
       if steps ~= 0 then delta_with_detent(synced, steps, {source = "arc"}) end
       return
     end
+    forget_arc_ticks("fx:" .. n)  -- the carry belongs to the division alone
     arc_sweep_param(ring.param_id, delta)
   end
 
