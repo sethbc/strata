@@ -40,6 +40,12 @@ return function(S)
     -- a row whose param is not used now (interval prob while the
     -- arpeggiator is on, #845): selected, and not
     unused_levels = {selected = 10, other = 2},
+    -- a row whose param a step lock holds (#882, a base override:
+    -- S.lib.engine_sync.is_overridden): the tag after the label, at full
+    -- level; the value drawn is still the stored one
+    step_lock_tag = "[S]",
+    step_lock_gap = 3,       -- between the label and the tag
+    step_lock_level = 15,
   }
   local LAYOUT = M.LAYOUT
 
@@ -162,6 +168,12 @@ return function(S)
     return param_key(row) == "interval_prob" and S.lib.arp.on(S.selected_voice)
   end
 
+  -- Whether a step lock holds the row's param now (#882): the engine plays
+  -- the lock, not the stored value the row shows. Read at each draw
+  local function step_locked(row)
+    return row.param_id ~= nil and S.lib.engine_sync.is_overridden(row.param_id)
+  end
+
   local function draw_row(row, y, selected, marked)
     if row.selectable == false then
       screen.level(2)
@@ -174,14 +186,22 @@ return function(S)
       screen.rect(LAYOUT.mark_x, y - (LAYOUT.mark_height - 1), 1, LAYOUT.mark_height)
       screen.fill()
     end
+    local level = selected and 15 or 4
     if row_unused(row) then
-      screen.level(selected and LAYOUT.unused_levels.selected or LAYOUT.unused_levels.other)
-    else
-      screen.level(selected and 15 or 4)
+      level = selected and LAYOUT.unused_levels.selected or LAYOUT.unused_levels.other
     end
+    screen.level(level)
     screen.move(LAYOUT.field_x, y)
     screen.text(row.label)
-    local room = LAYOUT.value_right - (LAYOUT.field_x + screen.text_extents(row.label)) - LAYOUT.value_gap
+    local label_right = LAYOUT.field_x + screen.text_extents(row.label)
+    if step_locked(row) then
+      screen.level(LAYOUT.step_lock_level)
+      screen.move(label_right + LAYOUT.step_lock_gap, y)
+      screen.text(LAYOUT.step_lock_tag)
+      label_right = label_right + LAYOUT.step_lock_gap + screen.text_extents(LAYOUT.step_lock_tag)
+      screen.level(level)
+    end
+    local room = LAYOUT.value_right - label_right - LAYOUT.value_gap
     -- a pending type choice (3.8) is drawn dim until it applies
     if row.kind == S.lib.ui_voice_rows.TYPE_KIND and S.lib.types.pending(S.selected_voice) then
       screen.level(LAYOUT.pending_level)
@@ -447,6 +467,23 @@ return function(S)
     S.selected_voice = 1
     params:set("v1_arp", S.lib.arp.ARP.mode_index.up)
     M.place_cursor(M.row_of("v1_interval_prob"))
+  end})
+  -- #882: rows a step lock or note holds, marked [S]: a buffer voice's
+  -- position (the longest such label), rate, size and pitch, and a synth
+  -- voice's freq (a step's note), on the selected voice (a fresh load's)
+  table.insert(layout_states, {name = "step locks on a buffer voice", setup = function()
+    local prefix = "v" .. S.selected_voice .. "_"
+    params:set(prefix .. "source", source_option("buf 1"))
+    for _, key in ipairs({"buf_pos", "buf_rate", "grain_size", "grain_pitch"}) do
+      S.lib.engine_sync.set_base_override(prefix .. key, params:get(prefix .. key))
+    end
+    M.place_cursor(M.row_of(prefix .. "buf_pos"))
+  end})
+  table.insert(layout_states, {name = "a step's note on a synth voice", setup = function()
+    local prefix = "v" .. S.selected_voice .. "_"
+    params:set(prefix .. "source", S.constants.SOURCE_SYNTH)
+    S.lib.engine_sync.set_base_override(prefix .. "freq", params:get(prefix .. "freq"))
+    M.place_cursor(M.row_of(prefix .. "freq"))
   end})
   -- ALT's hint row: the widest, K2:locked K3:unlock (on a row that draws),
   -- and ALT+K2 held past the hold time (K2:reset); on the type row, no

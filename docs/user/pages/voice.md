@@ -40,6 +40,8 @@ Frozen grains play from about half a second before the moment you froze. `spectr
 
 Each value is the parameter's own text with its unit, shortened when it does not fit beside its name. The row under the cursor is bright.
 
+While a pattern step's step lock or note holds a parameter (the step locks `pos`, `pitch` and `size`, on the `buffer position`, `grain pitch` and `grain size` rows, and a step's note, which moves `freq` on a synth voice, `buffer rate` on a buffer voice and `grain pitch` on an input voice), its row shows `[S]` after the name. The value shown is still the voice's own setting, not the one the step plays, and turning the row by hand ends the lock at once, so the mark goes. The mark goes too when the lock ends on its own: at the voice's next step that plays without it, or when the patterns stop (see [What a step holds](../sequencer.md#what-a-step-holds)).
+
 - **E2** - Move the cursor; past a section's last row it goes on into the next section
 - **E3** - Adjust the row under the cursor (ALT+E3 in finer steps)
 - **K2** - Jump to the previous section's first row (in the first section, to its first row)

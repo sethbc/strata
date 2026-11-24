@@ -1330,4 +1330,99 @@ test("interval prob is dimmed while the arpeggiator is on", function()
   assert_true(reverse_label == nil or reverse_label.level == 4, "another row is not dimmed")
 end)
 
+
+-- #882: a row whose param a step lock (a base override) holds carries the
+-- step lock's tag after its label, read from S.lib.engine_sync.is_overridden
+-- at each draw; the stored value is still the one drawn
+test("VOICE marks a row while a step lock holds its param, and the mark goes when the lock ends", function()
+  local context, S = started_voice_page()
+  local tag = S.lib.pages_voice.LAYOUT.step_lock_tag
+  assert_true(type(tag) == "string" and tag:match("^%[.+%]$"), "the mark is a [BRACKETS] tag")
+  S.buffers[1].seconds = 8
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  local seq, pages = S.lib.sequencer, S.constants.UI_PAGES
+  S.patterns[1][1] = 15; S.patterns[1][2] = 15
+  seq.set_step_attr(1, 1, "size", 0.3)
+  seq.set_step_attr(1, 1, "pitch", 2)
+  put_cursor(S, "v1_grain_size")
+  local function name(id) return params:lookup_param(id).name end
+  -- the tag drawn on the row labeled label, or nil (the row must be drawn)
+  local function row_tag(label)
+    local entry, value = drawn_row(context, label)
+    assert_true(entry and value, "the " .. label .. " row is drawn")
+    for _, other in ipairs(texts_on_row(context, entry.y)) do
+      if other.text == tag then
+        local _, label_right = text_span(entry)
+        local tag_left, tag_right = text_span(other)
+        local value_left = text_span(value)
+        assert_true(tag_left > label_right and tag_right < value_left, label .. ": the tag sits between the label and the value")
+        return other
+      end
+    end
+  end
+  local function marks()
+    redraw()
+    return row_tag(name("v1_grain_size")), row_tag(name("v1_grain_pitch")), row_tag(name("v1_grain_density"))
+  end
+  local size, pitch, density = marks()
+  assert_true(not size and not pitch and not density, "no step lock: no mark")
+  pattern_clock_start()
+  size, pitch, density = marks()
+  assert_true(size, "step 1's size lock marks the selected row")
+  assert_true(pitch, "its pitch lock marks a row the cursor is not on")
+  assert_true(not density, "a param no lock holds is not marked")
+  local _, size_value = drawn_row(context, name("v1_grain_size"))
+  assert_equal(trimmed(size_value.text), trimmed(params:string("v1_grain_size")), "the row still shows the stored value")
+  local _, pitch_value = drawn_row(context, name("v1_grain_pitch"))
+  assert_equal(size.level, S.lib.pages_voice.LAYOUT.step_lock_level, "the tag at its own level")
+  assert_equal(size_value.level, 15, "the selected row's value stays bright")
+  assert_equal(pitch_value.level, 4, "another row's value keeps its level, not the tag's")
+  pages.screen_dirty = false
+  context.clock.advance_until(S.pattern_clocks[1])  -- step 2, plain: the locks end
+  assert_true(pages.screen_dirty, "the locks' end asks the screen to redraw")
+  size, pitch = marks()
+  assert_true(not size and not pitch, "the marks go when the locks end")
+  for _ = 1, 15 do context.clock.advance_until(S.pattern_clocks[1]) end  -- the next pass's step 1
+  assert_equal(seq.sounding_step(1), 1, "step 1 again")
+  size, pitch = marks()
+  assert_true(size and pitch, "locked and marked again")
+  enc(3, 1)  -- a hand edit of the cursor's param ends its lock
+  size, pitch = marks()
+  assert_true(not size, "a hand edit ends the size lock and its mark")
+  assert_true(pitch, "the pitch lock still holds and is marked")
+  pattern_clock_stop()
+  size, pitch = marks()
+  assert_true(not size and not pitch, "the stop ends every lock and its mark")
+end)
+
+
+-- #882's layout states: each held row drawn with the tag, for the layout
+-- tests and the page renders
+test("VOICE's step lock layout states draw the tag on every held row they show", function()
+  local cases = {
+    ["step locks on a buffer voice"] = { "v1_buf_pos", "v1_buf_rate" },
+    ["a step's note on a synth voice"] = { "v1_freq" },
+  }
+  for state_name, ids in pairs(cases) do
+    local context, S = started_voice_page()
+    local found
+    for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.VOICE].layout_states) do
+      if state.name == state_name then found = state end
+    end
+    assert_true(found, "a layout state " .. state_name)
+    found.setup(context)
+    redraw()
+    for _, id in ipairs(ids) do
+      assert_true(S.lib.engine_sync.is_overridden(id), state_name .. ": " .. id .. " held")
+      local entry = drawn_row(context, params:lookup_param(id).name)
+      assert_true(entry, state_name .. ": " .. id .. "'s row drawn")
+      local tagged = false
+      for _, other in ipairs(texts_on_row(context, entry.y)) do
+        if other.text == S.lib.pages_voice.LAYOUT.step_lock_tag then tagged = true end
+      end
+      assert_true(tagged, state_name .. ": " .. id .. "'s row carries the tag")
+    end
+  end
+end)
+
 end
