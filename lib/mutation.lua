@@ -38,7 +38,13 @@ return function(S)
   -- section, voice (nil off a voice's page), values = {[param_id] = the
   -- value before the randomize}, ids = the values' ids in the order the
   -- randomize set them, pattern = {voice, steps} (a pattern spec's old steps)
-  -- or nil, until_time = util.time() at which it expires}, or nil. undo_clock
+  -- or nil, until_time = util.time() at which it expires}, or nil; 3.9
+  -- (#922, #927) adds three holds: patterns = {[voice] = levels} and steps =
+  -- {[voice] = {[step] = attributes}} (a chain start's, hold_patterns; its
+  -- per-voice chain keys in values and ids), sequence = {n, values} (a
+  -- random sequence's new, hold_sequence) and routing = {k, source, dest,
+  -- param, before} (a learn's rewire, hold_routing; its depth in values and
+  -- ids), each nil when not held. undo_clock
   -- wakes at until_time to clear it and ask for a redraw (the ALT hint goes
   -- back without input); it runs on the clock helper (S.lib.clocks, #870):
   -- undo_handle is its handle and undo_clock its id (the tests read it),
@@ -115,10 +121,12 @@ return function(S)
   -- load: capture), for UNDO_SECONDS. A clock still running (an undo held
   -- inside this one's own write: a nested randomize) is stopped before its
   -- replacement starts, so it never clears the new undo at its own wake
-  local function hold_undo(spec, values, ids, pattern, capture)
+  -- held: the 3.9 holds' fields (patterns and steps, sequence, routing), or nil
+  local function hold_undo(spec, values, ids, pattern, capture, held)
     S.lib.clocks.stop(undo_handle)
     S.undo = {page = spec.page, section = spec.section, voice = spec.voice, values = values, ids = ids,
       pattern = pattern, capture = capture, until_time = util.time() + UNDO_SECONDS}
+    for key, value in pairs(held or {}) do S.undo[key] = value end
     undo_handle = S.lib.clocks.run(function(handle)
       if not handle.sleep(UNDO_SECONDS) then return end
       undo_handle, undo_clock = nil, nil  -- first: clear_undo would stop this clock
@@ -173,12 +181,127 @@ return function(S)
 
   -- Whether a quick ALT+K2 on page `page`, section `section`, voice `voice`
   -- (nil off a voice's page) would undo: the undo held is that one's (a
-  -- held voice undo, 3.8: any section of its page and voice) and its window
-  -- has not ended
+  -- held voice undo, 3.8: any section of its page and voice; a chain
+  -- start's patterns, 3.9: any voice of its section) and its window has
+  -- not ended
   function M.undo_for(page, section, voice)
     local undo = S.undo
     return undo ~= nil and undo.page == page and (undo.section == section or undo.capture ~= nil)
-      and undo.voice == voice and util.time() < undo.until_time
+      and (undo.voice == voice or undo.patterns ~= nil) and util.time() < undo.until_time
+  end
+
+  -- 3.9 (#922, #927): the holds made outside a page randomize. where is
+  -- {page = a UI_PAGES index, section = a string}: the undo is held there
+  -- (undo_for), with no voice. A malformed call is a bug in its caller
+  local function check_where(where, name)
+    if type(where) ~= "table" or not is_index(where.page, S.constants.NUM_UI_PAGES)
+      or type(where.section) ~= "string" then
+      error(name .. ": where is {page, section}", 3)
+    end
+  end
+
+  -- Two values alike, tables by their contents
+  local function same(a, b)
+    if type(a) ~= "table" or type(b) ~= "table" then return a == b end
+    for key, value in pairs(a) do
+      if not same(value, b[key]) then return false end
+    end
+    for key in pairs(b) do
+      if a[key] == nil then return false end
+    end
+    return true
+  end
+
+  -- A copy of a table of plain values and tables of them
+  local function copy_of(value)
+    if type(value) ~= "table" then return value end
+    local copy = {}
+    for key, inner in pairs(value) do copy[key] = copy_of(inner) end
+    return copy
+  end
+
+  -- What a chain start can replace: every voice's levels, step attributes
+  -- and the keys a link carries (S.lib.sequencer.SEQ.chain_keys)
+  local function capture_patterns()
+    local patterns, steps, values, ids = {}, {}, {}, {}
+    for voice_idx = 1, NUM_VOICES do
+      patterns[voice_idx] = copy_of(S.patterns[voice_idx])
+      steps[voice_idx] = copy_of(S.pattern_steps[voice_idx] or {})
+      for _, key in ipairs(S.lib.sequencer.SEQ.chain_keys) do
+        local param_id = "v" .. voice_idx .. "_" .. key
+        values[param_id] = params:get(param_id)
+        ids[#ids + 1] = param_id
+      end
+    end
+    return patterns, steps, values, ids
+  end
+
+  -- Hold all seven patterns, their step attributes and each voice's chain
+  -- keys around writes (a chain start's link, lib/sequencer.lua): captured
+  -- before, the writes made as the undo's own (their pattern and param
+  -- edits end nothing), then held at where when they changed any of it.
+  -- Writes that change nothing leave an earlier undo as it was. Returns
+  -- whether it holds
+  function M.hold_patterns(where, writes)
+    check_where(where, "hold_patterns")
+    if type(writes) ~= "function" then error("hold_patterns: writes is a function", 2) end
+    local patterns, steps, values, ids = capture_patterns()
+    write_as_undo(writes)
+    local now_patterns, now_steps, now_values = capture_patterns()
+    if same(patterns, now_patterns) and same(steps, now_steps) and same(values, now_values) then return false end
+    clear_undo()
+    hold_undo(where, values, ids, nil, nil, {patterns = patterns, steps = steps})
+    request_redraw()
+    grid_redraw()
+    return true
+  end
+
+  -- Hold random sequence n's sixteen values (S.lib.random_sequences) at
+  -- where, before its new draws them again
+  function M.hold_sequence(n, where)
+    check_where(where, "hold_sequence")
+    local values = S.lib.random_sequences.values(n)
+    if not values then error("hold_sequence: a sequence number", 2) end
+    clear_undo()
+    hold_undo(where, {}, {}, nil, nil, {sequence = {n = n, values = values}})
+    request_redraw()
+  end
+
+  -- Hold matrix routing k (its source, destination and depth) around writes
+  -- (a learn's rewire, lib/matrix.lua), and the touched param_id's value
+  -- before the touch (the touch hooks' third argument; nil holds none), at
+  -- where. The depth is held as a param, so its edit ends the undo; the
+  -- touched param is not: the turn that learned goes on through the same
+  -- param, and the undo puts back the value from before it
+  function M.hold_routing(k, where, writes, param_id, before)
+    check_where(where, "hold_routing")
+    local matrix = S.lib.matrix
+    local routing = matrix.routing(k)
+    if not routing or type(writes) ~= "function" then error("hold_routing: a routing and writes", 2) end
+    local depth_id = matrix.depth_id(k)
+    local values, ids = {[depth_id] = routing.depth}, {depth_id}
+    write_as_undo(writes)
+    clear_undo()
+    hold_undo(where, values, ids, nil, nil, {routing = {k = k, source = routing.source, dest = routing.dest,
+      param = param_id, before = before}})
+    request_redraw()
+  end
+
+  -- Put back a chain start's step attributes, through the sequencer's own
+  -- set (a key the step did not have is cleared first)
+  local function restore_steps(steps)
+    local sequencer = S.lib.sequencer
+    for voice_idx = 1, NUM_VOICES do
+      for step = 1, S.constants.PATTERN_LENGTH do
+        local old = steps[voice_idx][step] or {}
+        local gone = {}
+        for key in pairs(S.pattern_steps[voice_idx][step] or {}) do
+          if old[key] == nil then gone[#gone + 1] = key end
+        end
+        for _, key in ipairs(gone) do sequencer.set_step_attr(voice_idx, step, key, nil) end
+        for key, value in pairs(old) do sequencer.set_step_attr(voice_idx, step, key, value) end
+      end
+    end
   end
 
   -- 3.8 (package 3b, design §8.3, ruling 46 as amended): the held voice
@@ -219,7 +342,10 @@ return function(S)
   -- values (what a load can change) through S.lib.scenes.apply_voice, every
   -- other scene key of that type (the Out keys) at its present value, with
   -- the voice's present active and source (ruling 46 as amended), and puts
-  -- back the name the voice's preset row showed before (#869)
+  -- back the name the voice's preset row showed before (#869). 3.9's holds
+  -- (#922, #927): a routing first, then the held params (a chain start's
+  -- keys, a routing's depth), the touched param, the seven patterns and
+  -- their steps, a sequence's values
   function M.undo()
     local undo = S.undo
     if not undo or util.time() >= undo.until_time then return false end
@@ -237,8 +363,20 @@ return function(S)
           type = undo.capture.type, values = values})
         S.lib.voice_presets.restore_name(undo.voice, undo.capture.preset_name)
       end
+      local routing = undo.routing
+      if routing then S.lib.matrix.set_routing(routing.k, routing.source, routing.dest) end
       for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
+      if routing and routing.param and routing.before ~= nil then set_randomized_param(routing.param, routing.before) end
       if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end
+      if undo.patterns then
+        for voice_idx = 1, NUM_VOICES do S.lib.sequencer.replace_pattern(voice_idx, undo.patterns[voice_idx]) end
+        restore_steps(undo.steps)
+      end
+      if undo.sequence then
+        for index, value in ipairs(undo.sequence.values) do
+          S.lib.random_sequences.set_value(undo.sequence.n, index, value)
+        end
+      end
     end)
     request_redraw()
     grid_redraw()
@@ -297,11 +435,27 @@ return function(S)
   end
 
   -- Called by every edit of voice_idx's pattern (lib/sequencer.lua): it
-  -- ends a pattern undo of that voice. The randomize's and the undo's own
-  -- writes are not edits
+  -- ends a pattern undo of that voice, and a chain start's of all seven
+  -- (#922). The randomize's and the undo's own writes are not edits
   function M.note_pattern_edit(voice_idx)
     if undo_writing then return end
-    if S.undo and S.undo.pattern and S.undo.pattern.voice == voice_idx then clear_undo() end
+    local undo = S.undo
+    if undo and ((undo.pattern and undo.pattern.voice == voice_idx) or undo.patterns) then clear_undo() end
+  end
+
+  -- Called by every write of random sequence n's values but new's and the
+  -- drift's (lib/random_sequences.lua: a hand edit, a stored list loaded):
+  -- it ends a held new of that sequence (#922)
+  function M.note_sequence_edit(n)
+    if undo_writing then return end
+    if S.undo and S.undo.sequence and S.undo.sequence.n == n then clear_undo() end
+  end
+
+  -- Called by every write of matrix routing k's source or destination
+  -- (lib/matrix.lua): it ends a held learn of that routing (#927)
+  function M.note_routing_edit(k)
+    if undo_writing then return end
+    if S.undo and S.undo.routing and S.undo.routing.k == k then clear_undo() end
   end
 
   -- MAIN's whole-voice randomize (M.voice_spec). Returns whether it ran: an

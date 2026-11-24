@@ -55,9 +55,10 @@ return function(S)
 
   -- Run the touch hooks (S.registry.param_touch, 3.4) after a user edit has
   -- set param_id: source is "enc", "arc" or "grid" (lib/grid/faders.lua's
-  -- set_param_from_column calls this too)
-  function M.run_touch_hooks(param_id, source)
-    for _, hook in ipairs(S.registry.param_touch) do hook(param_id, source) end
+  -- set_param_from_column calls this too), before the param's value from
+  -- before the edit (#927: a matrix learn's undo puts it back)
+  function M.run_touch_hooks(param_id, source, before)
+    for _, hook in ipairs(S.registry.param_touch) do hook(param_id, source, before) end
   end
 
   -- Change a param by an encoder's d detents (as params:delta takes them) or,
@@ -75,8 +76,8 @@ return function(S)
   -- long ago never swallows a detent, even if the value is back at 0).
   -- Every change that set the param then runs the touch hooks once, with
   -- opts.source when given (an arc ring's whole steps pass "arc"), else
-  -- "arc" for arc ticks and "enc" for detents; a detent the hold swallows
-  -- runs none
+  -- "arc" for arc ticks and "enc" for detents, and the value before the
+  -- change; a detent the hold swallows runs none
   function delta_with_detent(param_id, d, opts)
     opts = opts or {}
     local param = params:lookup_param(param_id)
@@ -91,6 +92,7 @@ return function(S)
       units = math.abs(d) * DETENT.arc_ticks
     end
     local source = opts.source or (opts.arc_ticks and "arc" or "enc")
+    local before = params:get(param_id)
 
     -- a turn, marked as one (S.turning_param); the hold's own set to 0
     -- below is a set
@@ -102,7 +104,7 @@ return function(S)
           params:delta(param_id, d)
         end
       end)
-      M.run_touch_hooks(param_id, source)
+      M.run_touch_hooks(param_id, source, before)
     end
 
     -- a wrapping range has no center to stop at
@@ -136,7 +138,7 @@ return function(S)
     if old ~= 0 and reaches_zero(old, new) then
       params:set(param_id, 0)
       detent_holds[param_id] = {units = HOLD_UNITS, started = util.time()}
-      M.run_touch_hooks(param_id, source)
+      M.run_touch_hooks(param_id, source, before)
     else
       apply()
     end

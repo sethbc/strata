@@ -1201,4 +1201,106 @@ test("the undo clock stopped as its wake is posted: no clock error, and nothing 
   assert_equal(#context.clock.take_errors(), 0, "no clock error")
 end)
 
+
+-- #922, #927: the holds the undo takes beyond a page randomize's, each made
+-- as a player makes it; each returns where the undo is held (page, section,
+-- a voice of it)
+local HOLDS = {
+  chain = function(S)
+    for voice_idx = 1, 7 do
+      for step = 1, 16 do S.patterns[voice_idx][step] = 0 end
+    end
+    S.patterns[1][1] = 15
+    capture_scene(1)
+    S.patterns[1][1], S.patterns[1][2] = 0, 9
+    params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
+    pattern_clock_start(); pattern_clock_stop()
+    return S.constants.UI_PAGES.index.SEQ, "pattern", 4
+  end,
+  new = function(S)
+    capture_scene(1)
+    params:set("rseq2_new", 1)
+    return S.constants.UI_PAGES.index.MOD, "sequences", nil
+  end,
+  learn = function(S)
+    capture_scene(1)
+    S.lib.matrix.set_routing(3, "macro1", "")
+    S.lib.matrix.learn(3)
+    enc_param_delta(3, "v3_grain_pitch", 1)
+    return S.constants.UI_PAGES.index.MOD, "matrix", nil
+  end,
+}
+
+-- What ends each hold besides the three every hold has (a randomize, a
+-- recall, the window): an edit of what it holds. And what keeps it
+local HOLD_EDITS = {
+  chain = {
+    ends = {
+      ["a step toggled"] = function() toggle_pattern_step(5, 3) end,
+      ["a step's attribute"] = function(S) S.lib.sequencer.set_step_attr(2, 1, "prob", 30) end,
+      ["a length"] = function() params:set("v6_seq_length", 7) end,
+    },
+    keeps = {["an edit of a param it does not hold"] = function() params:set("v1_grain_density", 77) end},
+  },
+  new = {
+    ends = {
+      ["a value of the sequence set by hand"] = function(S) S.lib.random_sequences.set_value(2, 3, 0.5) end,
+      ["a PSET's lists loaded"] = function(_, context)
+        local path = context.data_dir .. "strata-01.pset"
+        params:write(path)
+        params:read(path)
+      end,
+    },
+    keeps = {["a value of another"] = function(S) S.lib.random_sequences.set_value(1, 3, 0.5) end},
+  },
+  learn = {
+    ends = {
+      ["the routing edited"] = function(S) S.lib.matrix.edit_routing(3, "macro2", "v3_grain_pitch") end,
+      ["its depth"] = function() params:set("matrix_3_depth", 40) end,
+    },
+    keeps = {["the touched param's turn going on"] = function() enc_param_delta(3, "v3_grain_pitch", 1) end},
+  },
+}
+
+test("each hold ends as a page randomize's does (#922, #927)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local mutation = S.lib.mutation
+  local MAIN_PAGE = S.constants.UI_PAGES.index.MAIN
+  for _, kind in ipairs({"chain", "new", "learn"}) do
+    local function held(page, section, voice) return mutation.undo_for(page, section, voice) end
+    local ends = {
+      ["a randomize"] = function()
+        randomize_voice(1)
+        assert_true(mutation.undo_for(MAIN_PAGE, "voice", 1), kind .. ": the randomize holds its own")
+      end,
+      ["a recall"] = function() recall_scene_instant(1) end,
+      ["the window"] = function() context.clock.run_for(S.constants.UNDO_SECONDS + 0.1) end,
+    }
+    for name, edit in pairs(HOLD_EDITS[kind].ends) do ends[name] = function() edit(S, context) end end
+    for name, event in pairs(ends) do
+      local page, section, voice = HOLDS[kind](S)
+      assert_true(held(page, section, voice), kind .. " is held before " .. name)
+      event()
+      assert_true(not held(page, section, voice), kind .. ": " .. name .. " ends it")
+      if name ~= "a randomize" then
+        assert_equal(mutation.undo(), false, kind .. ": after " .. name .. " there is nothing to undo")
+      end
+      clear_undo()
+    end
+    for name, edit in pairs(HOLD_EDITS[kind].keeps) do
+      local page, section, voice = HOLDS[kind](S)
+      edit(S)
+      assert_true(held(page, section, voice), kind .. ": " .. name .. " keeps it")
+      clear_undo()
+    end
+    -- a hold replaces whatever is held, as a randomize does
+    randomize_voice(1)
+    local page, section, voice = HOLDS[kind](S)
+    assert_true(not mutation.undo_for(MAIN_PAGE, "voice", 1), kind .. " replaces MAIN's undo")
+    assert_true(held(page, section, voice), kind .. " holds its own")
+    clear_undo()
+  end
+end)
+
 end

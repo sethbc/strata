@@ -94,7 +94,8 @@ return function(S)
   -- Key x (1..width) of a fader sets a param across its range. Control
   -- params follow their controlspec warp; number params (mod sources) and
   -- option params (an option index) map linearly to integers. A zero key
-  -- sets exactly 0. Then the touch hooks run, as "grid" (3.4)
+  -- sets exactly 0. Then the touch hooks run, as "grid" (3.4), with the
+  -- value from before the set (#927)
   function set_param_from_column(param_id, x, width)
     local spec = params:lookup_param(param_id).controlspec
     local value = 0
@@ -107,8 +108,9 @@ return function(S)
         value = util.round(util.linlin(0, 1, minval, maxval, fraction))
       end
     end
+    local before = params:get(param_id)
     params:set(param_id, value)
-    S.lib.ui_detent.run_touch_hooks(param_id, "grid")
+    S.lib.ui_detent.run_touch_hooks(param_id, "grid", before)
   end
 
   -- 3.7 (ruling 34): the param an FX fader sets and shows: its own, but

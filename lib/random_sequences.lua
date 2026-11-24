@@ -131,13 +131,16 @@ return function(S)
   function M.set_value(n, index, value)
     if not valid(n) or not valid_index(index) or not finite(value) then return false end
     sequences[n].values[index] = util.clamp(value, -1, 1)
+    S.lib.mutation.note_sequence_edit(n)  -- a hand edit ends a held new (#922)
     save_live()
     return true
   end
 
-  -- New values for all sixteen of sequence n
+  -- New values for all sixteen of sequence n, the old ones held by the
+  -- undo on MOD's sequences (#922: the row's press, the param's trigger)
   function M.new(n)
     if not valid(n) then return end
+    S.lib.mutation.hold_sequence(n, {page = S.constants.UI_PAGES.index.MOD, section = "sequences"})
     local values = sequences[n].values
     for index = 1, RSEQ.values do values[index] = draw() end
     save_live()
@@ -245,9 +248,12 @@ return function(S)
     return nil
   end
 
+  -- Stored lists replace the values (a scene, a PSET's or the live file):
+  -- each ends a held new of its sequence (#922)
   local function load_lists(lists)
     for n = 1, RSEQ.count do
       for index = 1, RSEQ.values do sequences[n].values[index] = lists[n][index] end
+      S.lib.mutation.note_sequence_edit(n)
     end
   end
 

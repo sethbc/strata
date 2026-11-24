@@ -58,6 +58,7 @@ return function(S)
   M.MATRIX = MATRIX
 
   local function depth_id(k) return "matrix_" .. k .. "_depth" end
+  M.depth_id = depth_id  -- routing k's depth param (the undo holds a learn's, #927)
   local function on_id(k) return "matrix_" .. k end
 
   local function is_index(k)
@@ -630,6 +631,7 @@ return function(S)
   function M.set_routing(k, source_key, dest_id)
     if not (is_index(k) and is_text(source_key) and is_text(dest_id)) then return false end
     S.matrix[k] = {source = source_key, dest = dest_id}
+    S.lib.mutation.note_routing_edit(k)  -- ends a held learn of k (#927)
     routings_changed()
     return true
   end
@@ -649,6 +651,7 @@ return function(S)
     local k = home_slot(n)
     local changed = S.matrix[k].dest ~= dest_id
     S.matrix[k] = {source = empty_routing(k).source, dest = dest_id}
+    S.lib.mutation.note_routing_edit(k)
     routings_changed()
     if changed then S.lib.lfos.home_changed(n) end
     return true
@@ -752,7 +755,11 @@ return function(S)
     return nil
   end
 
-  S.register_param_touch(function(param_id)
+  -- A learn's rewire is held by the undo on MOD's matrix (#927): the
+  -- routing as it was, and the touched param's value from before the touch
+  -- (the hooks' third argument)
+  local LEARN_UNDO = {page = S.constants.UI_PAGES.index.MOD, section = "matrix"}
+  S.register_param_touch(function(param_id, _, before)
     if not learning then return end
     local id = learnable(param_id)
     if not id then
@@ -761,7 +768,8 @@ return function(S)
     end
     local k = learning.k
     M.cancel_learn()
-    M.edit_routing(k, S.matrix[k].source, id)
+    S.lib.mutation.hold_routing(k, LEARN_UNDO, function() M.edit_routing(k, S.matrix[k].source, id) end,
+      param_id, before)
     header_flash("R" .. k .. " > " .. (current_catalog().labels[id] or id))
   end)
 

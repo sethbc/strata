@@ -5280,4 +5280,79 @@ do
   })
 end
 
+
+-- #922: a start with the chain on replaces the live patterns with the
+-- range's first scene's; the one undo holds what it replaced, on SEQ
+test("a start with the chain on can be undone: the live patterns are back (#922)", function()
+  local context, S = setup()
+  local seq, mutation = S.lib.sequencer, S.lib.mutation
+  local SEQ_PAGE, MAIN_PAGE = S.constants.UI_PAGES.index.SEQ, S.constants.UI_PAGES.index.MAIN
+  -- scene 1: voice 1's four steps, reversed, one step's chance
+  voice_1_only(S, 4)
+  params:set("v1_seq_direction", DIRECTION.reverse)
+  seq.set_step_attr(1, 2, "prob", 50)
+  capture_scene(1)
+  -- the live patterns, made by hand, with their own lengths and settings
+  for voice_idx = 1, 7 do
+    for step = 1, 16 do S.patterns[voice_idx][step] = (voice_idx * 3 + step) % 16 end
+  end
+  seq.set_step_attr(1, 2, "prob", nil)
+  seq.set_step_attr(3, 5, "ratchet", 2)
+  seq.set_step_attr(6, 9, "notes", {2, -1})
+  params:set("v1_seq_length", 12); params:set("v1_seq_direction", DIRECTION.forward)
+  params:set("v2_seq_misstep", 20); params:set("v3_seq_division", 2)
+  local live_patterns, live_steps = h.deep_copy(S.patterns), h.deep_copy(S.pattern_steps)
+  local live_settings = {}
+  for voice_idx = 1, 7 do
+    for _, key in ipairs({"seq_length", "seq_division", "seq_direction", "seq_misstep"}) do
+      local id = "v" .. voice_idx .. "_" .. key
+      live_settings[id] = params:get(id)
+    end
+  end
+  -- an empty chain replaces nothing, and holds nothing over MAIN's undo
+  params:set("seq_chain", 1); params:set("seq_chain_from", 5); params:set("seq_chain_scenes", 1)
+  randomize_voice(2)
+  pattern_clock_start(); pattern_clock_stop()
+  assert_true(mutation.undo_for(MAIN_PAGE, "voice", 2), "a chain that links nothing keeps the earlier undo")
+  -- the chain on scene 1: the start replaces the patterns
+  params:set("seq_chain_from", 1)
+  pattern_clock_start()
+  assert_equal(S.patterns[1][2], 15, "the scene's patterns play")
+  assert_equal(seq.step_attr(3, 5, "ratchet"), nil, "and its steps")
+  assert_equal(params:get("v1_seq_length"), 4, "and its lengths")
+  assert_true(not mutation.undo_for(MAIN_PAGE, "voice", 2), "the start's hold replaces MAIN's")
+  for voice_idx = 1, 7 do
+    assert_true(mutation.undo_for(SEQ_PAGE, "pattern", voice_idx), "held on SEQ for voice " .. voice_idx)
+  end
+  -- a quick ALT+K2 on SEQ puts back what the start replaced
+  h.show_page("SEQ")
+  key(1, 1); key(2, 1); key(2, 0); key(1, 0)
+  assert_equal(S.undo, nil, "the undo is used")
+  for voice_idx = 1, 7 do
+    for step = 1, 16 do
+      assert_equal(S.patterns[voice_idx][step], live_patterns[voice_idx][step],
+        "voice " .. voice_idx .. " step " .. step .. "'s level is back")
+    end
+  end
+  assert_equal(seq.step_attr(1, 2, "prob"), nil, "the scene's chance is gone")
+  assert_equal(seq.step_attr(3, 5, "ratchet"), 2, "the hand-set ratchet is back")
+  assert_equal(table.concat(seq.step_attr(6, 9, "notes"), " "), "2 -1", "and the chord")
+  for voice_idx = 1, 7 do
+    for step = 1, 16 do
+      local live = live_steps[voice_idx] and live_steps[voice_idx][step]
+      local now = S.pattern_steps[voice_idx][step]
+      assert_equal(now == nil, live == nil, "voice " .. voice_idx .. " step " .. step .. " has attributes as before")
+    end
+  end
+  for id, value in pairs(live_settings) do assert_equal(params:get(id), value, id .. " is back") end
+  pattern_clock_stop()
+  -- the chain's next link ends the start's hold: it edits the patterns
+  params:set("seq_chain_bars", 1)
+  pattern_clock_start()
+  assert_true(mutation.undo_for(SEQ_PAGE, "pattern", 1), "a new start holds again")
+  context.clock.run_for(2.01)                 -- a bar at 120 bpm
+  assert_true(not mutation.undo_for(SEQ_PAGE, "pattern", 1), "the next link at the bar ends it")
+  pattern_clock_stop()
+end)
+
 end

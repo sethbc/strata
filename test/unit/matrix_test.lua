@@ -1125,6 +1125,9 @@ h.transition_table({
       learned("reverb_mix")()
       assert_equal(clock.threads[context.learn_clock], nil, "the clock canceled")
       assert_equal(local_value("S").lib.ui_flash.text("header"), "R3 > rev mix")
+      local S = local_value("S")
+      assert_true(S.lib.mutation.undo_for(S.constants.UI_PAGES.index.MOD, "matrix", nil),
+        "the undo holds the rewire on MOD's matrix (#927)")
     end },
     { "armed", "a touch of another param", "armed", check = function(context)
       learning_routing(LEARN_ROUTING, true)(context)
@@ -2007,6 +2010,49 @@ test("a home on a voice's main follows a source switch and leaves no stale offse
   assert_near(S.engine_param_values[main], params:get(main) + 0.25 * (high - low), 1e-9)
   context.clear_engine_calls(); lfo_step(context, 10)
   assert_equal(#fast_calls(context, 0, 1), 0, "after the 0, later steps send nothing more on the position's channel")
+end)
+
+
+-- #927: a learn armed by mistake rewires its routing at the next touch; the
+-- one undo holds the routing as it was and the touched param's value from
+-- before the touch, on MOD's matrix
+test("a learn's rewiring can be undone: the routing's destination and the param's value are back (#927)", function()
+  local _, S, matrix = loaded()
+  local mutation = S.lib.mutation
+  local MOD_PAGE = S.constants.UI_PAGES.index.MOD
+  -- a complete routing at depth 0 (a learn of an incomplete one would set 25 %)
+  matrix.set_routing(3, "macro1", "v2_grain_size")
+  params:set("matrix_3_depth", 0)
+  params:set("v3_grain_pitch", 1.5)
+  matrix.learn(3)
+  h.show_page("MAIN")                         -- learn waits across pages
+  enc_param_delta(3, "v3_grain_pitch", 1)     -- the touch that learns
+  enc_param_delta(3, "v3_grain_pitch", 1)     -- the same turn goes on
+  assert_equal(matrix.routing(3).dest, "v3_grain_pitch", "rewired")
+  assert_true(params:get("v3_grain_pitch") > 1.5, "the turn moved the pitch")
+  assert_true(mutation.undo_for(MOD_PAGE, "matrix", nil), "held on MOD's matrix, the turn's later detents too")
+  assert_true(not mutation.undo_for(MOD_PAGE, "sequences", nil), "and nowhere else")
+  assert_equal(mutation.undo(), true, "undone")
+  local routing = matrix.routing(3)
+  assert_equal(routing.source, "macro1", "the source")
+  assert_equal(routing.dest, "v2_grain_size", "the destination from before the learn")
+  assert_equal(routing.depth, 0, "the depth")
+  assert_near(params:get("v3_grain_pitch"), 1.5, 1e-9, "the pitch from before the touch")
+  assert_equal(S.undo, nil, "the undo is used")
+  -- an incomplete routing: the learn's 25 % goes too
+  matrix.set_routing(4, "macro2", "")
+  params:set("matrix_4_depth", 0)
+  matrix.learn(4)
+  enc_param_delta(3, "reverb_mix", 1)
+  assert_equal(params:get("matrix_4_depth"), 25, "completed: 25 %")
+  assert_equal(mutation.undo(), true, "undone")
+  assert_equal(matrix.routing(4).dest, "", "no destination again")
+  assert_equal(params:get("matrix_4_depth"), 0, "and depth 0")
+  -- a touch that is no destination learns nothing and holds nothing
+  matrix.learn(5)
+  enc_param_delta(3, "filter_type", 1)
+  assert_equal(S.undo, nil, "nothing held")
+  matrix.cancel_learn()
 end)
 
 end

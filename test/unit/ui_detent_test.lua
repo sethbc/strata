@@ -300,6 +300,28 @@ test("an encoder edit runs the touch hooks once; a detent the hold swallows runs
   assert_equal(#log, 1, "a plain set is no touch")
 end)
 
+-- #927: each touch passes the param's value from before the edit, third
+test("the touch hooks get the value from before the edit (#927)", function()
+  local context = load_strata(); finish_startup(context)
+  local log = {}
+  local_value("S").register_param_touch(function(param_id, source, before)
+    log[#log + 1] = {id = param_id, source = source, before = before, now = params:get(param_id)}
+  end)
+  params:set("reverb_mix", 0.4)
+  enc_param_delta(3, "reverb_mix", 1)
+  assert_near(log[1].before, 0.4, 1e-9, "a turn: the value before it")
+  assert_true(log[1].now > 0.4, "and the hook runs after the edit")
+  params:set("v1_pan", 0.02)
+  enc_param_delta(3, "v1_pan", -5)
+  assert_equal(log[2].now, 0, "the stop at 0")
+  assert_near(log[2].before, 0.02, 1e-9, "passes the value before it")
+  params:set("v1_pan", 0.3)
+  set_param_from_column("v1_pan", 1, 8)
+  assert_equal(log[3].source, "grid", "a grid fader")
+  assert_near(log[3].before, 0.3, 1e-9, "passes the value before its set")
+  assert_true(log[3].now ~= 0.3, "which moved it")
+end)
+
 -- #875: in the running script S.selected_voice changes only in
 -- select_voice_by (lib/ui/keys.lua). The other assignments are its
 -- initialization (lib/voices.lua's constructor) and the setups of the

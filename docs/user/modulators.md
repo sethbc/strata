@@ -9,7 +9,7 @@ Four sequences, **RS1** to **RS4**, each a row of sixteen values between -1 and 
 - **Clock**: each sequence steps on its own clock. A division of the norns clock's tempo (`1/32` to `1 bar`, triplets and dotted values among them; `1/8` by default) steps it on the beat, with the tempo, Link and MIDI clock. A voice (`voice 1` to `voice 7`) steps it at each of that voice's hits: each step the sequencer plays on it (a chord step is one), each MIDI note it plays, and its start. A clock that jumps ahead (a transport start, a tempo change) steps the sequence once, not once per division it skipped.
 - **Length** (2 to 16, default 8): how many of the sixteen values play. A shorter length keeps the values past it, and a longer one plays them again.
 - **Drift** (0 to 100 %, default 0): at each step, the chance that the value just played is replaced by a new random one. At 0 the sequence is a fixed loop you can program by hand; at 100 every value is new as it plays; in between, the pattern wanders slowly.
-- **New**: draws all sixteen values again.
+- **New**: draws all sixteen values again. Within 5 seconds a quick ALT+K2 on MOD, on the sequence's row or in its settings, brings the old values back; editing one of its values ends the undo.
 
 ### On MOD
 
@@ -27,7 +27,7 @@ K2:back E2:row E3:edit
 
 - **E2** - Move between the rows: `length`, `drift`, `clock`, `new`, then one row per value in play (`v1` to `v8` at the default length)
 - **E3** - Change the row: the length, the drift, the clock, or a value, 0.01 a detent (**ALT+E3** 0.001)
-- **K3** - On `new`, draw all sixteen values again
+- **K3** - On `new`, draw all sixteen values again (a quick ALT+K2 within 5 seconds brings the old ones back)
 - **K2** - Back to the list
 
 To use a sequence, set a matrix routing's source to it (`RS1` to `RS4`) and choose its destination and depth.

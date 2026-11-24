@@ -528,4 +528,30 @@ test("MOD's settings view names E3 only on a row that turns", function()
   key(1, 0)
 end)
 
+
+-- #922: new overwrites sixteen values; the one undo holds them, on MOD's
+-- sequences (the row and its settings)
+test("a random sequence's new can be undone (#922)", function()
+  local _, S, sequences = loaded()
+  local mutation = S.lib.mutation
+  local MOD_PAGE = S.constants.UI_PAGES.index.MOD
+  distinct(sequences, 3); distinct(sequences, 1)
+  local before, other = sequences.values(3), sequences.values(1)
+  params:set("rseq3_new", 1)
+  assert_true(math.abs(sequences.values(3)[1] - before[1]) > 1e-12, "new drew again")
+  assert_true(mutation.undo_for(MOD_PAGE, "sequences", nil), "held on MOD's sequences")
+  assert_true(not mutation.undo_for(MOD_PAGE, "matrix", nil), "and nowhere else")
+  sequences.set_value(1, 4, 0.9)
+  assert_true(mutation.undo_for(MOD_PAGE, "sequences", nil), "an edit of another sequence keeps it")
+  assert_equal(mutation.undo(), true, "undone")
+  local after = sequences.values(3)
+  for index = 1, 16 do assert_equal(after[index], before[index], "v" .. index .. " is back") end
+  assert_equal(sequences.values(1)[4], 0.9, "the other sequence keeps its edit")
+  assert_equal(sequences.values(1)[5], other[5], "and its values")
+  assert_equal(S.undo, nil, "the undo is used")
+  -- the row's press holds it too
+  sequences.new(3)
+  assert_true(mutation.undo_for(MOD_PAGE, "sequences", nil), "M.new holds it")
+end)
+
 end
