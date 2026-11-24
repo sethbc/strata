@@ -561,6 +561,8 @@ return function(S)
     buffer.pending_loads = {}  -- a failure reported for an earlier load changes nothing now
     S.lib.samples.drop_own(slot)  -- 3.7: a take's settings go with it
     S.lib.samples.unbind(slot)
+    -- no overview, and no mark of a load it superseded (#976)
+    S.lib.waveforms.changed(slot)
     buffer_display_changed()
   end
 

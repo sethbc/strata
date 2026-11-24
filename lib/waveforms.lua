@@ -42,6 +42,13 @@ return function(S)
   -- fn(slot) after every successful read (on_read), and their errors
   local read_listeners, listener_errors = {}, {}
 
+  -- Whether the slot holds or awaits audio: not free (a load, a take, a
+  -- file, a settled-empty load a report may adopt), or the engine reports
+  -- a length in it
+  local function holds_or_awaits(slot)
+    return S.buffers[slot].seconds > 0 or not S.lib.buffers.is_free(slot)
+  end
+
   -- lib/buffers.lua's one slot check (#402)
   local function valid_slot(slot)
     return S.lib.buffers.valid_buffer_slot(slot)
@@ -111,13 +118,20 @@ return function(S)
     if S.lib.grid_core.any_page(GRID_WAVEFORM_PAGE) then grid_redraw() end
   end
 
+  -- Mark the slot for a read, ending a load's wait; a slot that holds and
+  -- awaits no audio (a failed load's undo to an empty slot, a dub that
+  -- ended from 0 s) keeps no mark: it has nothing to read (#976)
+  local function mark(slot)
+    awaiting[slot] = nil
+    marked[slot] = holds_or_awaits(slot) or nil
+  end
+
   -- A slot's audio changed: its peaks are stale (read on a later frame
   -- tick). The caller knows the file is the slot's now (a report of its
   -- audio, a dub's end, a failed load's undo), so a load's wait ends
   function M.stale(slot)
     if not valid_slot(slot) then return end
-    awaiting[slot] = nil
-    marked[slot] = true
+    mark(slot)
   end
 
   -- Points of the slot's overview, gone at once (a redraw, and a page-5
@@ -146,12 +160,12 @@ return function(S)
   -- A slot's length changed: its audio is new, so its points go now (the
   -- old ones describe other audio, or the old length) and it is read on a
   -- later tick. A playable recording's rereads only mark it (stale), so
-  -- a dub's waveform never blinks
+  -- a dub's waveform never blinks. A clear calls it too (its length is 0
+  -- now): a cleared slot keeps no mark of a load it superseded (#976)
   function M.changed(slot)
     if not valid_slot(slot) then return end
     drop_points(slot)
-    awaiting[slot] = nil
-    marked[slot] = true
+    mark(slot)
   end
 
   -- A slot's peaks (WAVEFORM_POINTS values, 0-1), or nil when it has none
@@ -241,6 +255,19 @@ return function(S)
     end)
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.waveforms, stop)
+
+  -- A slot is marked for a read, or awaits a load's peaks, only while it
+  -- holds or awaits audio: it is not free (S.lib.buffers.is_free), or the
+  -- engine reports a length in it (3.9, #976)
+  S.register_invariant("waveform marks", function()
+    for slot = 1, NUM_BUFFERS do
+      if (marked[slot] or awaiting[slot]) and not holds_or_awaits(slot) then
+        return "slot " .. slot .. (awaiting[slot] and " awaits a load's peaks" or " is marked for a read")
+          .. " but holds and awaits no audio (" .. tostring(S.lib.buffers.status(slot)) .. ", "
+          .. S.buffers[slot].seconds .. " s)"
+      end
+    end
+  end)
 
   return M
 end
