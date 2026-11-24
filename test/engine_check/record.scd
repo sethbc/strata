@@ -588,7 +588,9 @@ test.("record: synced takes sent with waits across the server's period all start
 // /n_go (from a responder of the check's own, which runs before the
 // engine's, made later) sends nothing, so no run reaches the stopped take's
 // node, which the stop's sync then frees: the take is canceled, with no
-// recording or ended after the stop, and the server prints nothing
+// state change after the stop (no recording, no ended). That is what the
+// check proves; a run reaching a freed node would print nothing it could
+// see, as sendToSynth wraps it in /error -1
 test.("record: a stop between a synced take's send and its /n_go sends it no run (#981)", {
     var slot = 3, path = writeLevelFile.("synced-stop.wav", 0.5, 0.5), start, stopped = false, responder, states, ended;
     h.command(\loadBuffer, slot, path, 0);
@@ -608,6 +610,30 @@ test.("record: a stop between a synced take's send and its /n_go sends it no run
         "record: a stop between a synced take's send and its /n_go sends it no run (#981; stopped %, ended %, states % (0 armed, 1 recording, 2 ended, 3 canceled))".format(
             stopped, ended, states));
     reset.(slot);
+});
+// ... and a stop leaves no responder behind: the take's second-run
+// responder (take[\startWatch]) is freed by the stop itself, before any
+// /n_go, not by a timer or the /n_go. The stop is sent as soon as the take
+// is marked sent (1 ms steps), while its responder is still waiting; a try
+// whose /n_go came first is tried again, five at most
+test.("record: a stop frees a synced take's second-run responder at once (#981)", {
+    var slot = 3, path = writeLevelFile.("synced-free.wav", 0.5, 0.5), tries = 0, watch, take, freed, waiting = false;
+    while { waiting.not and: { tries < 5 } } {
+        tries = tries + 1;
+        h.command(\loadBuffer, slot, path, 0);
+        h.awaitLoad(slot);
+        record.(slot, 0.05, 1.0, 0, 0, 0, 0, 0.3);
+        take = state[\takes][slot];
+        while { take.notNil and: { take[\sent] != true } and: { state[\takes][slot] === take } } { 0.001.wait };
+        watch = take !? { take[\startWatch] };
+        waiting = watch.notNil;
+        h.command(\stopRecord, slot);
+        freed = waiting and: { watch.enabled.not } and: { take[\startWatch].isNil };
+        h.waitFor({ engine.recordSynths[slot].isNil and: { state[\takes][slot].isNil } }, 1);
+        reset.(slot);
+    };
+    check.(waiting and: { freed },
+        "record: a stop frees a synced take's second-run responder at once (#981; waiting at the stop %, freed %, tries %)".format(waiting, freed, tries));
 });
 // #565: of the messages that arrive while sclang is held, sclang stamps only
 // the first with its arrival and reads the later ones when the hold ends.
@@ -882,7 +908,23 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             responder = OSCFunc({ arg msg; if ((msg[1] == node) and: { fired.not }) { fired = true; fire.value } }, '/n_end', server.addr);
             stopTake.value;
             soon.({ fired }, 2);
-            responder.free }, holds: { engine.stopReplies[slot].notNil })
+            responder.free }, holds: { engine.stopReplies[slot].notNil }),
+        // (#966 behind the other kind of ending replace take: recorded
+        // 0.15 s, longer than the queued recording, so the slot keeps the
+        // take's length; the recording queued and the command sent from
+        // the same /n_end responder, while the frame count is awaited)
+        endingStoppedQueued: (phase: \ending, about: "a stopped replace take, its frame count awaited, a playable recording queued behind it", reach: { arg fire, begin;
+            var node, fired = false, responder;
+            record.(slot, 1.0);
+            reachPhase.(\recording);
+            0.15.wait;
+            node = engine.recordSynths[slot] !? { arg synth; synth.nodeID };
+            responder = OSCFunc({ arg msg;
+                if ((msg[1] == node) and: { fired.not }) { fired = true; begin.value; playableTake.value; fire.value } }, '/n_end', server.addr);
+            stopTake.value;
+            soon.({ fired }, 2);
+            responder.free },
+            holds: { engine.stopReplies[slot].notNil and: { state[\takes][slot] !? { arg take; take[\queued].notNil } ? false } }, reached: [])
     );
     var walkRows = [
         (row: 1, state: \noTake, does: "recordBuffer, feedback 0 and loop 0", command: replaceTake,
@@ -966,6 +1008,14 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             events: ['loadFailed 1 0', 'length 0.05', 'ended -1', 'recording 0', 'ended 0'], frames: takeFrames),
         (row: 17, state: \endingQueued, does: "stopRecord", command: stopTake,
             events: ['canceled 0', 'length 0.0', 'length 0.05', 'ended -1'], frames: takeFrames),
+        (row: 15, state: \endingStoppedQueued, does: "clearBuffer", command: clearSlot,
+            events: ['ended -1', 'canceled 0', 'length 0.0'], frames: 0),
+        (row: 15, state: \endingStoppedQueued, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['canceled 0', 'length F', 'ended -1', 'recording 1', 'ended 1'], frames: \held),
+        (row: 14, state: \endingStoppedQueued, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['loadFailed 1 0', 'length F', 'ended -1', 'recording 0', 'ended 0'], frames: \held),
+        (row: 17, state: \endingStoppedQueued, does: "stopRecord", command: stopTake,
+            events: ['canceled 0', 'length 0.0', 'length F', 'ended -1'], frames: \held),
         (row: 15, state: \endingPlayable, does: "clearBuffer", command: clearSlot,
             events: ['ended 0', 'length 0.0'], frames: 0),
         (row: 15, state: \endingStopped, does: "clearBuffer", command: clearSlot,
@@ -1891,11 +1941,16 @@ test.("record: a loop recording's refresh writes its peaks file only when the ov
 // (kill -STOP, so no rename it holds can end), a ping sent and then one
 // refresh (writeRecordPeaks, the refresh's own write, on a slot a take
 // filled with noise: every write changes its file, #523); at the ping's
-// handling exactly that refresh has run since the send, and its rename is
-// still in the mover (its pending count one more, its .part still there).
-// A refresh that renamed by a subprocess, or by systemCmd, leaves the
-// mover's count as it was. No take records during the rounds, so no
-// refresh of the engine's own comes between a ping and its handling.
+// handling the refresh's rename is still in the mover. What catches a
+// refresh that holds sclang for its rename is that pair: the mover's
+// pending count one more (a refresh renaming by a subprocess of its own,
+// unixCmd or systemCmd, never adds to it) and the refresh's .part still
+// there (a rename done inside the refresh's step, systemCmd, has moved
+// it). The refreshes and generations counted since the send are printed
+// only: writeRecordPeaks counts its refresh before the check's routine
+// yields, so they are 1 whatever the refresh does. No take records during
+// the rounds, so no refresh of the engine's own comes between a ping and
+// its handling.
 test.("record: a command sent during a peaks refresh is handled with the refresh's rename still under way (#210, #964)", {
     var slot = 2, rounds = 10, counters = state[\peakWrites], mover = engine.areaState[\waveform][\mover];
     var results = List.new(rounds), ping, usable, source = noiseSource.value, good, round;
@@ -1933,7 +1988,7 @@ test.("record: a command sent during a peaks refresh is handled with the refresh
     };
     ping.free;
     good = results.count({ arg each;
-        (each[\heard] == true) and: { each[\refreshes] == 1 } and: { each[\generation] == 1 } and: { each[\pending] == 1 } and: { each[\partThere] == true }
+        (each[\heard] == true) and: { each[\pending] == 1 } and: { each[\partThere] == true }
     });
     check.(usable and: { results.size == rounds } and: { good == rounds },
         "record: a command sent during a peaks refresh is handled with the refresh's rename still under way (#210, #964; mover %, % of % rounds: heard %, refreshes since the send %, renames in the mover %, .part there %)".format(
