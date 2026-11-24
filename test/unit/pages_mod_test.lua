@@ -1009,4 +1009,44 @@ test("MOD's layout states draw the envelope and sequence rows at their widest", 
   assert_equal(found, 5, "the five states")
 end)
 
+
+-- #922, #927: a quick ALT+K2 undoes a sequence's new on its row and in its
+-- settings, and a learn on the matrix; with nothing held it does nothing
+test("a quick ALT+K2 undoes a sequence's new on its row and in its settings, and a learn on the matrix", function()
+  local context, S = loaded()
+  local sequences = S.lib.random_sequences
+  for index = 1, 16 do sequences.set_value(2, index, index / 20 - 0.4) end
+  local before = sequences.values(2)
+  -- on the row
+  place(S, "source:rseq2")
+  key(1, 1); redraw()
+  assert_true(not hint_text(context):find("K2:", 1, true), "nothing held: no K2 in the row's ALT hint")
+  key(1, 0)
+  params:set("rseq2_new", 1)
+  key(1, 1); redraw()
+  assert_true(hint_text(context):find("K2:undo", 1, true) ~= nil, "K2:undo while it is held")
+  key(1, 0)
+  alt_k2_quick()
+  assert_equal(sequences.values(2)[1], before[1], "undone on the row")
+  alt_k2_quick()
+  assert_equal(sequences.values(2)[1], before[1], "with nothing held a quick press does nothing")
+  -- in its settings (K3 opens them)
+  tap(3); redraw()
+  assert_equal(S.mod_page.view, "settings", "the settings view")
+  params:set("rseq2_new", 1)
+  assert_true(sequences.values(2)[1] ~= before[1], "drawn again")
+  alt_k2_quick()
+  assert_equal(sequences.values(2)[1], before[1], "undone in the settings")
+  assert_equal(S.mod_page.view, "settings", "the view stays")
+  key(2, 1); key(2, 0)
+  -- a learn on the matrix: undone on a routing's row
+  S.lib.matrix.set_routing(1, "macro1", "")
+  S.lib.matrix.learn(1)
+  enc_param_delta(3, "v3_grain_pitch", 1)
+  assert_equal(S.lib.matrix.routing(1).dest, "v3_grain_pitch", "learned")
+  place(S, "routing:1")
+  alt_k2_quick()
+  assert_equal(S.lib.matrix.routing(1).dest, "", "undone on the matrix")
+end)
+
 end

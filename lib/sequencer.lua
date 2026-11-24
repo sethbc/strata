@@ -1567,7 +1567,8 @@ return function(S)
   end
 
   -- Start (or start again) the patterns now: every voice and the transport
-  -- at step 1 on this beat, a running chain at its first scene, and every
+  -- at step 1 on this beat, a running chain at its first scene (the
+  -- patterns it replaces held by the undo on SEQ, #922), and every
   -- output that failed is played again. A start the play key left waiting
   -- is dropped (a followed transport start, #625; the waiting start's own
   -- run has left the quantizer already). The clocks that ran end through
@@ -1587,7 +1588,7 @@ return function(S)
     play.transport.due = beat
     chain.current, chain.next_beat = nil, nil
     if params:get("seq_chain") == 1 then
-      chain_link()
+      S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, chain_link)
       chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
     end
     for voice_idx = 1, NUM_VOICES do M.restart_voice(voice_idx, beat) end

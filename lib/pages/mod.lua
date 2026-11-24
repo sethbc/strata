@@ -721,13 +721,23 @@ return function(S)
     return {page = UI_PAGES.index.MOD, section = "matrix", voice = nil, draws = draws}
   end
 
+  -- A random sequence's row and its settings (#922): no draws, so a quick
+  -- ALT+K2 there only undoes the new held there
+  local SEQUENCES_SPEC = {page = UI_PAGES.index.MOD, section = "sequences", voice = nil, draws = {}}
+
   local function mod_randomize_section()
     local view = S.mod_page.view
     if view == "routing" then return matrix_spec() end
-    if view == "targets" or view == "settings" then return nil end
+    if view == "settings" then
+      local record = settings_source()
+      if record and record.section == "sequences" then return SEQUENCES_SPEC end
+      return nil
+    end
+    if view == "targets" then return nil end
     local section = cursor_row().section
     if section == "scatter" then return SCATTER_SPEC end
     if section == "matrix" then return matrix_spec() end
+    if section == "sequences" then return SEQUENCES_SPEC end
     return nil
   end
 
