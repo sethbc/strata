@@ -3137,6 +3137,64 @@ test("a plain load forgotten and settled unsettled is undone by its own late fai
   assert_equal(S.lib.buffers.status(3), "empty", "a later report of audio adopts nothing")
 end)
 
+-- #1040: a repeat of that failure (the engine's poll sends its last value
+-- again at a value request, CronePoll's requestValue, which Lua's
+-- poll:update() makes) after a take has settled in the slot: the slot
+-- tracks no load and awaits nothing, but holds the take, which is kept
+test("a repeated emptied failure of a forgotten load leaves a take recorded since (#1040)", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  load_buffer(3, "/tmp/a.wav")
+  for number = 2, tracked + 1 do load_buffer(3, "/tmp/missing" .. number .. ".wav") end
+  for number = 2, tracked + 1 do context.polls.fire("bufferLoadFailed", load_failed_value(3, number)) end
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 1, true))
+  assert_equal(S.lib.buffers.status(3), "empty", "a.wav's own failure empties the slot")
+  record_buffer(3); wake_buffer_clock(context, 3)          -- a replace take, its timer ended
+  state_report(context, 3, buffers[3].loads_sent, 2)
+  assert_equal(S.lib.buffers.status(3), "loaded", "the take settled")
+  assert_equal(#buffers[3].pending_loads, 0, "no load tracked"); assert_equal(buffers[3].confirm_since, nil)
+  context.set_time(util.time() + 2)                        -- the failure's flash has lapsed
+  context.polls.fire("bufferLoadFailed", load_failed_value(3, 1, true))
+  assert_equal(S.lib.buffers.status(3), "loaded", "the repeat leaves the take")
+  assert_equal(buffers[3].name, "take 3"); assert_equal(buffers[3].path, scratch_take_path(3))
+  assert_equal(S.lib.ui_flash.text("header"), nil, "and flashes nothing")
+end)
+
+-- #1040: #980's restore, given back by four bad loads, then settled
+-- `unsettled` by a 0 s report past confirm_seconds (restoring cleared,
+-- settled_empty "restore") before its own late failure (load 1, emptied):
+-- the slot is empty and buffers.data no longer names the restore
+test("a forgotten restore settled unsettled is undone by its own late failure (#1040)", function()
+  local subdir = "forgotten-restore-settled-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  util.make_dir(context.audio_dir)
+  local corrupt = context.audio_dir .. "corrupt.wav"
+  io.open(corrupt, "w"):close()
+  load_buffer(4, corrupt)
+  cleanup()
+  context = load_strata({ data_subdir = subdir })
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  for number = 2, tracked + 1 do load_buffer(4, "/tmp/bad" .. number .. ".wav") end
+  for number = 2, tracked + 1 do context.polls.fire("bufferLoadFailed", load_failed_value(4, number)) end
+  assert_true(buffers[4].restoring, "the last failure gives the restore back")
+  context.set_time(util.time() + 2); state_report(context, 4, buffers[4].loads_sent, 0)
+  assert_equal(S.lib.buffers.status(4), "unsettled", "a 0 s past confirm_seconds settles the restore")
+  assert_true(not buffers[4].restoring, "no longer restoring"); assert_equal(buffers[4].settled_empty, "restore")
+  context.clock.run_for(0.11)
+  local path = context.data_dir .. "strata/buffers.data"
+  local restore, opened = watch_writes("buffers.data")
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 1, true))
+  assert_equal(S.lib.buffers.status(4), "empty", "the restore's own failure empties the slot")
+  assert_equal(buffers[4].path, nil); assert_equal(buffers[4].settled_empty, false, "nothing left to adopt")
+  assert_equal(params:get("buf4_file"), _path.audio, "the file param is back at its starting folder")
+  context.clock.run_for(0.11)
+  restore()
+  assert_true(#data_writes(opened) > 0, "buffers.data is written")
+  assert_equal(S.lib.data_files.read(path).paths[4], "", "and no longer names the restore")
+end)
+
 -- #1040 (2): a.wav (load m) pushed out of the tracked loads while the load
 -- sent right after it is still tracked, the oldest: a.wav's own failure
 -- (emptied 1) is spliced into that load's `previous`, as a tracked one's

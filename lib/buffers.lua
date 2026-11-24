@@ -961,9 +961,14 @@ return function(S)
     -- (#1035) A plain load's, awaiting its read or (#1040) settled
     -- `unsettled` since, on an emptied report: the engine's slot is empty
     -- with no load applied since (every later load was rejected),
-    -- whichever load the report names
+    -- whichever load the report names; so is a restore's (load 1) once it
+    -- has settled `unsettled` (no longer restoring). Only those settled
+    -- states: a repeat of the report (a value request sends the poll's
+    -- last value again) finds the slot it emptied, or what came since
     local forgotten_restore = buffer.restoring and load_number == 1
-    local forgotten_load = emptied and (buffer.confirm_since ~= nil or buffer.settled_empty == "load")
+    local settled_forgotten = buffer.settled_empty == "load"
+      or (buffer.settled_empty == "restore" and load_number == 1)
+    local forgotten_load = emptied and (buffer.confirm_since ~= nil or settled_forgotten)
       and not buffer.restoring and buffer.checking_from == nil and not buffer.recording and not buffer.finishing
     -- (#1040) A failure with no entry, emptied, of the load just before
     -- the oldest tracked one, which was sent over that load's own state
