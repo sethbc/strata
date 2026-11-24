@@ -1291,7 +1291,7 @@ test("every CI job has a timeout", function()
   end
   -- lua-suite runs one shard of a Lua suite a runner, in parallel on its
   -- cores (3.8's package x5); lua gathers them, as engine gathers the shards
-  local expected = { ["lua-suite"] = 10, lua = 5, ["engine-shard"] = 37, engine = 5 }
+  local expected = { ["lua-suite"] = 11, lua = 5, ["engine-shard"] = 37, engine = 5 }
   for _, name in ipairs(order) do
     assert_true(jobs[name].minutes ~= nil, "job " .. name .. " has a timeout-minutes at its own indent")
     assert_true(expected[name] ~= nil, "job " .. name .. " has no expected timeout in this test")
@@ -1612,6 +1612,14 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
         assert_true(path[2] <= limit, path[1] .. " on a slow mirror with the slowest suite measured (" .. lua.suite .. " s) takes "
           .. path[2] .. " s, over the Lua job's " .. job.minutes .. " minutes")
       end
+      -- #1022: and room for a slower runner than any measured: a miss with
+      -- the slowest suite times the pre-split outlier's ratio fits, and the
+      -- limit is the smallest whole minutes from 10 at which it does
+      local slow_miss = miss - lua.suite + lua.suite * lua.outlier
+      assert_true(slow_miss <= limit, "a miss with the slowest suite times " .. lua.outlier .. " takes " .. slow_miss
+        .. " s, over the Lua job's " .. job.minutes .. " minutes")
+      assert_true(job.minutes <= 10 or slow_miss > limit - 60, "a miss with the slowest suite times " .. lua.outlier
+        .. " (" .. slow_miss .. " s) fits in " .. (job.minutes - 1) .. " minutes too")
     end
   end
   assert_true(installing["lua-suite"] and installing["engine-shard"], "both the Lua suites and the engine shards install with apt-get")
@@ -1643,10 +1651,15 @@ end)
 -- slowest suite 275 s (#1022: in 32 jobs of eight runs on main with
 -- #1001's split, 45375122515 to 45494781524, run 45473005793's
 -- lua (luajit, 2/2) on 4 cores: "66 unit files in 4 processes, 275 s";
--- shard 1 took 124 to 224 s, shard 2 158 to 275 s; 471 s before the
--- split, run 45320574628's lua (luajit, 1/2))
+-- shard 1 took 124 to 224 s, shard 2 158 to 275 s; all eight runs fell
+-- on one day, 2026-11-24; 471 s before the split, run 45320574628's
+-- lua (luajit, 1/2)). The limit is the smallest whole minutes from 10 at
+-- which a hit and a miss fit and a miss holds the suite times the
+-- pre-split outlier's ratio (471 s against the next slowest job's 331 s,
+-- 1.42): about 609 s, so 11 minutes (#1022; a false failure costs a
+-- rerun, a minute more only delays a hung suite)
 CI_WORKFLOW.SECONDS = { after_downloads = 60, runner_steps = 60, list_work = 5,
-  lua = { checkout = 7, restore = 10, save = 10, after_downloads = 15, runner_steps = 6, suite = 275 } }
+  lua = { checkout = 7, restore = 10, save = 10, after_downloads = 15, runner_steps = 6, suite = 275, outlier = 1.42 } }
 
 -- #999: a list step's `apt-get update` runs, each with its limit and its
 -- kill-after in seconds, in the order of the step's text (empty without a
@@ -3011,7 +3024,7 @@ test("a kept package reaches apt only through the hash check in the Lua jobs too
     { name = "a line above the install's first", expect = "lua-suite: the install step's start is not the script's first line: line 1 is `set +o errexit`",
       edits = { first, "          set +o errexit\n" .. first } },
     { name = "PATH in the Lua job's env", expect = "lua-suite: PATH is set in an env block (every command under it runs with that PATH): PATH: /tmp/shadow:/usr/bin:/bin",
-      edits = { "    timeout-minutes: 10\n    runs-on: ubuntu-24.04\n", "    timeout-minutes: 10\n    runs-on: ubuntu-24.04\n    env:\n      PATH: /tmp/shadow:/usr/bin:/bin\n" } },
+      edits = { "    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    env:\n      PATH: /tmp/shadow:/usr/bin:/bin\n" } },
     { name = "a directory added to GITHUB_PATH in the list step",
       expect = 'lua-suite: GITHUB_PATH is written (its directories come first in PATH for every later step): echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"',
       edits = { '          prefix="lua-debs-', '          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"\n          prefix="lua-debs-' } },
