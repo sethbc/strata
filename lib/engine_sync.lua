@@ -14,7 +14,7 @@
 -- add_voice_sender for lib/params_setup.lua's voice params, whose sends
 -- to a stopped voice the send budget leaves uncounted (#642).
 -- 3.4's hooks are fields too: the base override (set_base_override,
--- clear_base_override, engine_base_value), extra offsets
+-- clear_base_override, engine_base_value; 3.9's is_overridden), extra offsets
 -- (set_extra_offset) and the send budget (deferrable, budget_state;
 -- S.deferrable_write, S.engine_budget_clock). 3.5's: count_sends (direct
 -- sends counted in the budget's window) and the voice-stop hooks
@@ -390,14 +390,25 @@ return function(S)
     if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
       error("set_base_override: " .. tostring(param_id) .. "'s override is a finite number, not " .. tostring(value), 2)
     end
+    local started = base_overrides[param_id] == nil
     base_overrides[param_id] = value
     send_base(param_id)
+    -- VOICE marks the row while one holds it (#882): a redraw when one
+    -- comes or goes, never for a held one's new value (no arc ring shows it)
+    if started then S.lib.ui_frame.request_screen_redraw() end
   end
 
   function M.clear_base_override(param_id)
     if base_overrides[param_id] == nil then return end
     base_overrides[param_id] = nil
     send_base(param_id)
+    S.lib.ui_frame.request_screen_redraw()
+  end
+
+  -- Whether a base override holds the param (#882: VOICE marks its row);
+  -- read from base_overrides at each call
+  function M.is_overridden(param_id)
+    return base_overrides[param_id] ~= nil
   end
 
   -- The value the engine starts from: the override, else the stored value

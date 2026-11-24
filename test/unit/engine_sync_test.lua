@@ -468,6 +468,39 @@ test("a hand edit clears the override; the drift's write does not", function()
   assert_near(last_grain_send(context, 1, "bufPos"), stored, 1e-9, "and the engine gets the stored value")
 end)
 
+-- #882: VOICE marks a row a step lock overrides, from is_overridden; the
+-- screen is asked to redraw when an override comes or goes, never when a
+-- held one only changes its value (no arc ring shows it)
+test("is_overridden says a base override holds the param, and its coming and going asks the screen to redraw (#882)", function()
+  local _, S = buffer_voice()
+  local sync, pages = S.lib.engine_sync, S.constants.UI_PAGES
+  local function requested(fn)
+    pages.screen_dirty, pages.arc_dirty = false, false
+    fn()
+    local screen, arc = pages.screen_dirty, pages.arc_dirty
+    pages.screen_dirty, pages.arc_dirty = false, false
+    return screen, arc
+  end
+  assert_equal(sync.is_overridden("v1_buf_pos"), false, "no override at the start")
+  assert_equal(sync.is_overridden("v1_grain_size"), false, "nor on another param")
+  local screen, arc = requested(function() sync.set_base_override("v1_buf_pos", 0.3) end)
+  assert_equal(sync.is_overridden("v1_buf_pos"), true, "a set override holds the param")
+  assert_equal(sync.is_overridden("v1_grain_size"), false, "and only that param")
+  assert_true(screen, "an override's start asks the screen to redraw")
+  assert_true(not arc, "and not the arc: no ring shows it")
+  screen = requested(function() sync.set_base_override("v1_buf_pos", 0.4) end)
+  assert_equal(sync.is_overridden("v1_buf_pos"), true, "still held at a new value")
+  assert_true(not screen, "a held override's new value asks for no redraw: the mark stays")
+  screen = requested(function() sync.clear_base_override("v1_buf_pos") end)
+  assert_equal(sync.is_overridden("v1_buf_pos"), false, "a cleared override holds nothing")
+  assert_true(screen, "an override's end asks the screen to redraw")
+  screen = requested(function() sync.clear_base_override("v1_buf_pos") end)
+  assert_true(not screen, "clearing a param with no override asks for no redraw")
+  sync.set_base_override("v1_buf_pos", 0.3)
+  enc_param_delta(3, "v1_buf_pos", 1)
+  assert_equal(sync.is_overridden("v1_buf_pos"), false, "a hand edit ends it (the touch hook)")
+end)
+
 test("extra offsets sum with the LFOs' and clamp once", function()
   local context, S = buffer_voice()
   local sync = S.lib.engine_sync
