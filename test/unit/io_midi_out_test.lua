@@ -1443,32 +1443,72 @@ test("cleanup pays the offs MIDI out owes a synth on a port a remote holds (#101
   assert_true(S.lib.io_remote.holds(3), "the remote still holds port 3 as cleanup begins")
   assert_equal(note_lines(c), "note_on 59 127 1", "the off is owed")
   local before_cleanup = #c.sent
-  -- the test's own record: what c got in each cleanup step after the targets' (142)
-  local after_targets = {}
+  -- the test's own record: what c got in each cleanup step, tagged by the
+  -- step's order, so a line sent at another step than its own reads apart
+  local by_step, logged = {}, {}
   for _, record in ipairs(S.registry.cleanup) do
-    if record.order > S.constants.CLEANUP_ORDER.io_targets then
-      local step_fn = record.fn
-      record.fn = function(...)
-        local before = #c.sent
-        step_fn(...)
-        for index = before + 1, #c.sent do after_targets[#after_targets + 1] = line(midi.to_msg(c.sent[index])) end
+    local step_fn, order = record.fn, record.order
+    record.fn = function(...)
+      local before = #c.sent
+      step_fn(...)
+      for index = before + 1, #c.sent do
+        local text = line(midi.to_msg(c.sent[index]))
+        by_step[order] = by_step[order] and (by_step[order] .. "|" .. text) or text
+        logged[#logged + 1] = {order = order, text = text}
       end
     end
   end
   cleanup()
   local in_cleanup = {}
   for index = before_cleanup + 1, #c.sent do in_cleanup[#in_cleanup + 1] = line(midi.to_msg(c.sent[index])) end
-  assert_equal(table.concat(in_cleanup, "|"), table.concat(after_targets, "|"),
-    "everything c got at cleanup came after the targets' step")
-  assert_equal(note_lines(c), "note_on 59 127 1|note_off 59 1", "c gets the off it was owed")
-  for _, text in ipairs(after_targets) do
-    -- a setup's zone size (cc 6 of 1 or more) and its bend ranges (RPN 0, cc 100 0)
-    assert_true(text:match("^cc 6 0 ") ~= nil or not text:match("^cc 6 "), "no zone size set after 142: " .. text)
-    assert_true(not text:match("^cc 100 0 "), "no bend range set after 142: " .. text)
+  assert_equal(#logged, #in_cleanup, "every line c got at cleanup was sent inside a step")
+  local order = S.constants.CLEANUP_ORDER
+  assert_equal(by_step[order.io_remote], "note_off 59 1", "the owed off goes at the remote's step, as it lets port 3 go")
+  assert_equal(by_step[order.io_midi_out], TAKEDOWN, "the zone's takedown goes at MIDI out's own step")
+  for step_order in pairs(by_step) do
+    assert_true(step_order == order.io_remote or step_order == order.io_midi_out,
+      "c gets nothing at step " .. step_order .. ": " .. by_step[step_order])
   end
-  assert_equal(table.concat(in_cleanup, "|"), "note_off 59 1|" .. TAKEDOWN,
-    "the owed off as the port is let go, then the zone's takedown")
+  for _, entry in ipairs(logged) do
+    if entry.order > order.io_targets then
+      -- a setup's zone size (cc 6 of 1 or more) and its bend ranges (RPN 0, cc 100 0)
+      local text = entry.text
+      assert_true(text:match("^cc 6 0 ") ~= nil or not text:match("^cc 6 "), "no zone size set after 142: " .. text)
+      assert_true(not text:match("^cc 100 0 "), "no bend range set after 142: " .. text)
+    end
+  end
+  assert_equal(note_lines(c), "note_on 59 127 1|note_off 59 1", "c gets the off it was owed, once")
   balanced(c, "synth c")
+end)
+
+-- #1010's review: remote_stopped() reads the remote's started flag, which
+-- is down before the remote's start step (95) too, so no port may settle
+-- before it, or a setup due then would be held back. Devices present at
+-- load, a remote and a controller named by the rig: the probe hears every
+-- settle from init on, and none comes before the remote has started
+test("no port settles before the remote's start step, so no setup is held back at init (#1010 review)", function()
+  local heard = {}
+  local context, S = started({
+    before_load = function(context)
+      context.midi.plug(1, "synth a"); context.midi.plug(2, "e16"); context.midi.plug(3, "synth c")
+    end,
+    before_init = function(context)
+      local script = local_value("S")
+      os.execute("mkdir -p '" .. context.data_dir .. "strata'")
+      h.write_text(context.data_dir .. "strata/io.data", script.lib.data_files.encode({ version = 1,
+        values = { remote_grid_port = 3, e16_port = 2 } }))
+      script.lib.io_ports.on_settled("settle probe", function(port)
+        heard[#heard + 1] = port .. " " .. tostring(script.lib.io_remote.started())
+      end)
+    end,
+  })
+  assert_equal(S.lib.io_ports.owner(2), "e16", "the E16 claimed its port at its start step (94)")
+  assert_equal(S.lib.io_ports.owner(3), "remote grid", "the remote claimed port 3 at its start step (95)")
+  for _, entry in ipairs(heard) do
+    assert_true(not entry:match(" false$"), "a port settled before the remote started: " .. entry)
+  end
+  context.midi.plug(5, "synth b")
+  assert_equal(heard[#heard], "5 true", "the probe hears a settle once started: a hot-plug")
 end)
 
 test("two debts for one channel and note pay two offs (#997)", function()
