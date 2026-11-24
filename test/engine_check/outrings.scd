@@ -538,7 +538,7 @@ lateCopyChecks = {
     var reach = engine.tryPerform(\frozenReachSeconds) ? 3.0;
     var roomSeconds = (engine.tryPerform(\copyRoomFrames, frames) ? sampleRate) / sampleRate;
     var lines = List.new, attempts = List.new, copyTimes, values, frozenState, late;
-    var holdBuffer, perPartial, holdQueue, endedCount, endedReport, endedBefore;
+    var holdHead, endedCount, endedReport, endedBefore;
     copyTimes = { arg voice;
         var ring = copyRing.(voice), size = ring[0].numFrames, span = (reach * sampleRate).round.asInteger.min(size);
         var bus = Bus.control(server, 2), probe, times, last;
@@ -622,30 +622,42 @@ lateCopyChecks = {
         "outrings: a reader's hold whose bound of attempts is spent (2, each % s late) is abandoned with its line and reported on freezeEnded (#858): unfrozen on its live ring (attempts %, [frozen, copied, freeze] %, lines %, bound back to %, ended % then %, report %)".format(
             late.round(0.001), attempts, frozenState.(3), lines, engine.copyAttempts, endedBefore, endedCount.(3),
             engine.tryPerform(\freezeEndedPoll) !? { arg poll; poll.value }));
-    // The missing head (#835): the server's command queue held 1.5 s (a
-    // /b_gen sine1 runs in its non-real-time thread, and every reply after
-    // it, a /c_get's among them, waits for it), so the copy's first head
-    // read gets no answer within ringHeadFrame's 1 s and the attempt goes
-    // on without a copy (no beforeCopyHook). A missing head is no late
-    // copy: the late line counts late copies only. The second attempt's
-    // read is answered by the first's late reply (Bus.get matches by
-    // index), an older head, so its copy counts as late, and the third
-    // lands: one late copy, no line
-    holdBuffer = Buffer.alloc(server, 2 ** 20, 1);
-    server.sync;
-    perPartial = {
-        var started = Main.elapsedTime;
-        holdBuffer.sine1(Array.fill(20, 0.001), false, false, true);
-        server.sync;
-        (Main.elapsedTime - started) / 20
-    }.value;
-    holdQueue = { arg seconds; holdBuffer.sine1(Array.fill((seconds / perPartial).round.asInteger.clip(1, 4000), 0.001), false, false, true) };
+    // The missing head (#835): the server's reply to the copy's first head
+    // read is held, so that read gets no answer within ringHeadFrame's 1 s
+    // and the attempt goes on without a copy (no beforeCopyHook). A missing
+    // head is no late copy: the late line counts late copies only. The
+    // hold (holdHead, #998) keeps the first /c_set of the read voice's
+    // phase bus from the dispatcher Bus.get's responders hear on and lets
+    // it go only when the hold ends, after the engine has given up on it:
+    // so the answer is withheld past the 1 s whatever the machine's speed,
+    // where a queue of server work sized by a timing came apart from it
+    // under load. Every other message passes. The second attempt's read is
+    // answered by its own reply (Bus.get matches by index, so the first
+    // read's responder hears it too and goes), and its copy lands
+    holdHead = { arg body;
+        var dispatcher = OSCFunc.defaultDispatcher, index = outRing.(2)[2].index, held, filter, keeper;
+        // a responder of its own keeps the dispatcher registered while the
+        // filter stands in for it (one left with none unregisters itself)
+        keeper = OSCFunc({}, '/strataCheckHoldHead', server.addr);
+        filter = { arg msg, time, addr, recvPort;
+            if (held.isNil and: { msg[0] == '/c_set' } and: { msg[1] == index } and: { addr == server.addr }) {
+                held = [msg, time, addr, recvPort]
+            } { dispatcher.value(msg, time, addr, recvPort) }
+        };
+        thisProcess.replaceOSCRecvFunc(dispatcher, filter);
+        protect { body.value } {
+            thisProcess.replaceOSCRecvFunc(filter, dispatcher);
+            held !? { dispatcher.value(*held) };
+            keeper.free;
+        };
+    };
     (engine.freezeLeaveSeconds + 0.1).wait;
     lines.clear; attempts.clear;
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
-    holdQueue.(1.5);
-    command.(\setGrainParam, 3, \freeze, 1.0);
-    h.waitFor({ freeze[\copied][3] }, 5);
+    holdHead.({
+        command.(\setGrainParam, 3, \freeze, 1.0);
+        h.waitFor({ freeze[\copied][3] }, 5);
+    });
     engine.beforeCopyHook = nil;
     server.sync;
     check.(freeze[\copied][3] and: { attempts.notEmpty } and: { attempts.first >= 2 } and: { lines.isEmpty },
@@ -654,15 +666,17 @@ lateCopyChecks = {
     command.(\setGrainParam, 3, \freeze, 0.0);
     // the bound spent on a missing head (a bound of 1): the hold is
     // abandoned with a line that says the server gave no head, not that a
-    // copy was late
+    // copy was late. The held reply goes when the hold ends, so the timed
+    // out read's responder hears it and is freed (no check counts it)
     (engine.freezeLeaveSeconds + 0.1).wait;
     lines.clear; attempts.clear;
     endedBefore = endedCount.(3);
     engine.tryPerform(\copyAttempts_, 1);
     engine.beforeCopyHook = { arg voice, attempt; attempts.add(attempt) };
-    holdQueue.(1.5);
-    command.(\setGrainParam, 3, \freeze, 1.0);
-    h.waitFor({ freeze[\frozen][3].not }, 3);
+    holdHead.({
+        command.(\setGrainParam, 3, \freeze, 1.0);
+        h.waitFor({ freeze[\frozen][3].not }, 3);
+    });
     engine.beforeCopyHook = nil;
     engine.tryPerform(\copyAttempts_, nil);
     server.sync;
@@ -671,7 +685,6 @@ lateCopyChecks = {
         and: { lines.first.contains("late").not } and: { endedReport.(3, endedBefore + 1) },
         "outrings: a hold whose one attempt got no head from the server is abandoned with a line that says so, and reported (attempts with a head %, [frozen, copied, freeze] %, lines %, ended % then %)".format(
             attempts, frozenState.(3), lines, endedBefore, endedCount.(3)));
-    holdBuffer.free;
     // a switch during a late copy's third attempt cancels it: no copy, no
     // abandon (the one line is the late one), no freezeEnded report
     lines.clear; attempts.clear;
