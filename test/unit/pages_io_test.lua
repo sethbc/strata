@@ -1056,4 +1056,67 @@ test("the io view invariant names an unseen cursor without its mark", function()
   assert_true(marked_at(context, S, row_y(context, "amount")), "shown, marked, on return")
 end)
 
+
+-- 5c review, finding 1: ALT+E2 is the player's act. The rows of a voice
+-- section name the selected voice's params, so a voice change takes the
+-- cursor's param away; the cursor stays at its place on the new voice's
+-- row there, and no mark says it moved by itself
+local function per_voice_section(S)
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local voice = S.selected_voice
+    return {
+      { label = "jf", kind = "param", param_id = "v" .. voice .. "_out_jf" },
+      { label = "w/ syn", kind = "param", param_id = "v" .. voice .. "_out_wsyn" },
+      { label = "er-301", kind = "param", param_id = "v" .. voice .. "_out_er301" },
+    }
+  end })
+end
+
+test("ALT+E2 on a voice's row moves the cursor to the new voice's row with no mark", function()
+  local context, S = loaded()
+  per_voice_section(S)
+  show_page("IO")
+  enc(2, 1); redraw()
+  assert_equal(current_row(S).param_id, "v" .. S.selected_voice .. "_out_wsyn")
+  local before = S.selected_voice
+  key(1, 1); enc(2, 1); key(1, 0)
+  assert_equal(S.selected_voice, before + 1, "ALT+E2 selected the next voice")
+  redraw()
+  assert_equal(current_row(S).param_id, "v" .. S.selected_voice .. "_out_wsyn", "the same place, the new voice's row")
+  assert_true(not marked_at(context, S, row_y(context, "w/ syn")), "no mark: the player moved it")
+  assert_equal(text_entry(context, "w/ syn").x, S.lib.pages_io.IO_PAGE.row_indent, "the label where it always is")
+  enc(3, 1)
+  assert_equal(params:get("v" .. S.selected_voice .. "_out_wsyn"), 1, "E3 acts at once: nothing waits for a draw")
+end)
+
+-- 5c review, finding 2: an E3 refused on a fallen row no draw has shown,
+-- then ALT+E2 before the draw: the row is still unseen, so it keeps its
+-- mark for that draw (the io view invariant holds)
+test("ALT+E2 after a refused E3 keeps the unseen row's mark for the draw", function()
+  local context, S = loaded()
+  local gone = nil
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local rows = {}
+    for _, row in ipairs({
+      { label = "rate", kind = "param", param_id = "mutation_rate" },
+      { label = "prob", kind = "param", param_id = "mutation_probability" },
+      { label = "amount", kind = "param", param_id = "mutation_amount" },
+    }) do
+      if row.label ~= gone then rows[#rows + 1] = row end
+    end
+    return rows
+  end })
+  show_page("IO")
+  enc(2, 1); redraw()
+  gone = "prob"
+  local amount = params:get("mutation_amount")
+  enc(3, 1)
+  assert_equal(params:get("mutation_amount"), amount, "E3 refused: the row is unseen")
+  key(1, 1); enc(2, 1); key(1, 0)
+  assert_equal(invariant(S, "io view"), nil, "unseen and still marked")
+  redraw()
+  assert_equal(current_row(S).label, "amount")
+  assert_true(marked_at(context, S, row_y(context, "amount")), "the draw shows the row marked")
+end)
+
 end

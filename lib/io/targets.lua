@@ -320,20 +320,28 @@ return function(S)
     return #marks > 0 and table.concat(marks, " ") or nil
   end
 
-  -- The layout target both probe states register (once a script), after
+  -- The layout target the probe states register (once a script), after
   -- the real targets' rows: "a target's status" leaves the section at its
   -- top (the title with the probe's mark); "a target's rows" reaches the
   -- probe's row as a player does (S.lib.pages_io.go_to_row, by its id),
-  -- which raises when it is not there
+  -- which raises when it is not there. While layout_probe.device holds,
+  -- the probe has a second row, its device's, which goes when the device
+  -- does (no real target's selectable row comes and goes with a device)
   local LAYOUT_TARGET = "layout probe"
+  local layout_probe = {device = false}
   local function register_layout_target()
     if target_named(LAYOUT_TARGET) then return end
     S.register_note_target({name = LAYOUT_TARGET, routed = function() return false end,
       note_on = function() end, note_off = function() end,
       rows = function(voice)
-        return {{label = "layout probe", kind = "action", hint = "probe", run = function() end, id = "probe",
-          text = function() return "v" .. voice end},
-          {kind = "status", text = "a target's rows"}}
+        local rows = {{label = "layout probe", kind = "action", hint = "probe", run = function() end, id = "probe",
+          text = function() return "v" .. voice end}}
+        if layout_probe.device then
+          rows[#rows + 1] = {label = "probe device", kind = "action", hint = "probe", run = function() end,
+            id = "probe device", text = "there"}
+        end
+        rows[#rows + 1] = {kind = "status", text = "a target's rows"}
+        return rows
       end,
       status = function() return "[!]" end})
   end
@@ -348,12 +356,14 @@ return function(S)
     S.lib.pages_io.go_to_row("targets", "voice", {id = "probe"})
   end
 
-  -- IO's mark for a cursor that moved by itself (#973): the cursor on voice
-  -- 1's jf route, then ALT+E2 to voice 2, whose rows name voice 2's params,
-  -- so the cursor falls to the row in its place and is marked
+  -- IO's mark for a cursor that moved by itself (#973): the cursor on the
+  -- probe's device row, then the device leaves and its row goes, so the
+  -- cursor falls to the probe's row before it and the draw marks it
   local function layout_cursor_moved()
-    S.lib.pages_io.go_to_row("targets", "voice", {param_id = "v1_out_jf"})
-    key(1, 1); enc(2, 1); key(1, 0)
+    register_layout_target()
+    layout_probe.device = true
+    S.lib.pages_io.go_to_row("targets", "voice", {id = "probe device"})
+    layout_probe.device = false
   end
 
   S.register_io_section({name = "voice",

@@ -40,7 +40,7 @@ The `voice` section comes first. Its title names the selected voice (`voice 3`);
 
 A route that is set but plays nothing says so at the right of its row, beside its value:
 - `[held]`: the voice's MIDI port is held by a remote grid, a remote arc or `midi grid` (see [MIDI out](../io/midi-out.md))
-- `[idle]`: an ii route (`jf`, `w/ syn`, `er-301`) while Strata does not lead the ii bus (see [the ii bus](../io/ii.md))
+- `[idle]`: an ii route (`jf`, `w/ syn`, `er-301`, `txo`) while Strata does not lead the ii bus (see [the ii bus](../io/ii.md))
 - `[error]`: the instrument's part of Strata failed (the console names it) and is skipped for new notes until you stop the patterns or change a route
 
 What a routed voice plays on its targets:
@@ -57,9 +57,9 @@ Pitch to volts: a target that takes volts plays MIDI note 60 (middle C) at 0 V, 
 - **E3** - Change the row's value (with K1 held, ALT+E3, finely); on a scrolled view, scroll back to the row instead
 - **K2** - Jump to the next section's first row (from the last section, back to the first)
 - **K3** - Run the row's action, or open its detail list; when the row is out of view, bring it back instead
-- **ALT+E2** - Select the voice, as on MAIN: the `voice` section shows the selected voice's routes
+- **ALT+E2** - Select the voice, as on MAIN: the `voice` section shows the selected voice's routes, and the cursor stays at its place, on the new voice's row there
 
-When the row under the cursor goes away (a device unplugged, a route changed, another voice selected), the cursor moves to the row in its place, and a `>` before its name marks that row until you next turn E2 or E3 (with K1 or without), press K2 or K3, or leave the page. A turn of E3 or a press of K3 made before the screen shows the move only shows it, and changes nothing.
+When the row under the cursor goes away (a device unplugged, a route changed), the cursor moves to the row in its place, and a `>` before its name marks that row until you next turn E2 or E3 (with K1 or without), press K2 or K3, or leave the page. A turn of E3 or a press of K3 made before the screen shows the move only shows it, and changes nothing.
 
 The arc's four rings on IO are the tape loop's level, speed, feedback and wear (see [the tape loop](../io/tape.md)).
 

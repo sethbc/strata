@@ -26,6 +26,8 @@ return function(S)
     partial = "partial",                      -- active[output]: env_act reached the module, a time did not
     labels = {off = "off", out = "out %d  %s", row = "txo", attack = "txo attack", decay = "txo decay",
       output = "output", mode = "mode", ms = "%d ms"},
+    -- IO's mark on a route set while Strata does not lead the bus (#937)
+    idle_mark = "[idle]",
   }
   M.TXO = TXO
 
@@ -269,6 +271,7 @@ return function(S)
             if output == 0 then return TXO.labels.off end
             return string.format(TXO.labels.out, output, params:string(mode_id(voice)))
           end,
+          mark = function() return output_of(voice) > 0 and not leading() and TXO.idle_mark or nil end,
           fields = {{label = TXO.labels.output, kind = "param", param_id = out_id(voice)},
             {label = TXO.labels.mode, kind = "param", param_id = mode_id(voice)}}},
         {label = TXO.labels.attack, kind = "param", param_id = "txo_attack", format = TXO.labels.ms},

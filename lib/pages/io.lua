@@ -25,7 +25,7 @@ return function(S)
     value_gap = 4,        -- the least space between a label and its value (a longer value is cut)
     title_level = 10,     -- a title and its status
     note_level = 4,       -- a status row
-    mark_level = 15,      -- a row's mark (its optional `mark`: a held port, a failed target, an idle route)
+    mark_level = 15,      -- a row's mark (its optional `mark`: a held port, a failed target, an idle route) and the moved cursor's
     texts = {empty = "no sections", error = "error", not_saved = "setting not saved"},
     -- a cursor that fell to another row by itself (its own row went:
     -- view.moved) is marked from the draw that first shows it until the
@@ -305,7 +305,7 @@ return function(S)
       screen.move(x, y)
     end
     if marked then
-      screen.level(15)
+      screen.level(IO_PAGE.mark_level)
       screen.move(x, y)
       screen.text(IO_PAGE.unseen_mark)
       x = x + IO_PAGE.mark_width
@@ -445,8 +445,14 @@ return function(S)
   -- io_enc (where enc_param_delta turns a param finely itself)
   local function io_alt_enc(n, d)
     if n == 2 then
-      acted()
+      -- the player's act, as a page change is: it ends the mark unless no
+      -- draw has shown the fallen row yet (that draw still marks it)
+      if not view.unseen then acted() end
       S.lib.ui_keys.select_voice_by(d)
+      -- the voice section's rows name the new voice's params: the cursor
+      -- stays at its place, on the new voice's row there, and that is no fall
+      local rows = M.rows()
+      if #rows > 0 then place(rows, S.io_cursor) end
       return true
     end
     if n == 3 then
