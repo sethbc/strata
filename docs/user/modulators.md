@@ -56,6 +56,7 @@ Each voice has one envelope, **EN1** to **EN7**, fired by that voice's own hits:
 - **Curve** (-8 to 8, -4 by default) bends all three slopes: below 0 a slope moves fast first and then slowly, above 0 the other way, at 0 it is straight.
 - **Loop** (off by default): on, the envelope starts again each time it ends, an LFO of its own shape that runs whether or not its voice plays; a hit still restarts it. Turned off, it finishes the cycle it is in.
 - A new hit starts the attack from the level the envelope is at, so quick hits never jump down to 0.
+- With the loop off, an envelope that has ended stays at 0 until its next hit: lengthening its times after it ended, by hand, from a scene or from a PSET, does not bring it back.
 
 The envelope goes from 0 to 1: a routing's depth sets how far and in which direction it moves its destination.
 

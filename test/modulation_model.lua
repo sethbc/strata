@@ -516,9 +516,9 @@ end
 -- hit (as the feed stamped it) passed its run at the settings of that moment
 -- (attack, decay and, with a sustain, the release: a voice that is not
 -- gated holds 0), then Lua's model (S.lib.envelopes.value) must read 0 until
--- the next hit; a loop turned on starts it again, so its end is not judged
--- until the next hit. allow.ended_runs_again is #969
-function Model:compare_envelopes(S, problems, allow)
+-- the next hit, a time raised since included (#969); a loop turned on starts
+-- it again, so its end is not judged until the next hit
+function Model:compare_envelopes(S, problems)
   local now = util.time()
   for voice = 1, self.voice_count do
     local function env(key) return params:get("v" .. voice .. "_env_" .. key) end
@@ -533,14 +533,10 @@ function Model:compare_envelopes(S, problems, allow)
       if self.ended[voice] and S.lib.envelopes.value(voice) > 0 then
         -- Lua's own record of the hit, for the line only (upvalue of value)
         local lua_hit = (upvalue(S.lib.envelopes.value, "hits") or {})[voice]
-        -- #969's case only: a time raised since the end was seen, so the run
-        -- now outlasts the time since the hit; any other level above 0 is
-        -- a problem whatever allow says
-        local raised = run > self.ended_runs[voice] and run > now - self.hits[voice]
-        self:differ(problems, raised and allow, "ended_runs_again", string.format("voice %d's envelope ended and runs again (%g)"
-          .. " with no hit since (%s): hit at %.3f s (Lua's at %s), now %.3f s, a run of %.3f s now (%.3f s when it ended)",
-          voice, S.lib.envelopes.value(voice), raised and "#969" or "no time raised: not #969", self.hits[voice],
-          lua_hit and string.format("%.3f s", lua_hit.time) or "none", now, run, self.ended_runs[voice]))
+        problems[#problems + 1] = string.format("voice %d's envelope ended and runs again (%g) with no hit since:"
+          .. " hit at %.3f s (Lua's at %s), now %.3f s, a run of %.3f s now (%.3f s when it ended)",
+          voice, S.lib.envelopes.value(voice), self.hits[voice],
+          lua_hit and string.format("%.3f s", lua_hit.time) or "none", now, run, self.ended_runs[voice])
       end
     end
   end
@@ -548,8 +544,7 @@ end
 
 -- Every difference between the engine (as fed) and what the params imply,
 -- and every error the feed met; allow (optional) names the differences
--- allowed: waiting (a send due in the round robin or the budget),
--- ended_runs_again (#969)
+-- allowed: waiting (a send due in the round robin or the budget)
 function Model:compare(S, allow)
   local problems = {}
   for _, text in ipairs(self.errors) do problems[#problems + 1] = "the engine ignored or changed: " .. text end
@@ -558,7 +553,7 @@ function Model:compare(S, allow)
   self:compare_offsets(S, problems, allow)
   self:compare_routes(S, problems, allow)
   self:compare_scatter(S, problems)
-  self:compare_envelopes(S, problems, allow)
+  self:compare_envelopes(S, problems)
   return problems
 end
 

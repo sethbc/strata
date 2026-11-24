@@ -106,13 +106,16 @@ return function(S)
   -- The model: each voice's last hit
   ---------------------------------------------------------------------------
 
-  -- Per voice: nil before its first hit, else {time, from, hold}
+  -- Per voice: nil before its first hit, else {time, from, hold, ended}:
+  -- ended is set once its run (the loop off) is over at the settings then
+  -- (retire, #969), and the hit reads 0 until the next, as the engine's
+  -- done EnvGen holds its end
   local hits = {}
 
   function M.value(voice_idx)
     if not valid(voice_idx) then return 0 end
     local hit = hits[voice_idx]
-    if not hit then return 0 end
+    if not hit or hit.ended then return 0 end
     return util.clamp(M.shape(settings(voice_idx), util.time() - hit.time, hit.hold, hit.from), 0, 1)
   end
 
@@ -140,6 +143,18 @@ return function(S)
     return set.attack + set.decay + (held and (math.max(hit.hold, 0) + set.release) or 0)
   end
 
+  -- Voice v's hit marked ended when its run (the loop off) is over at the
+  -- settings stored now (#969). Every envelope param's action calls it
+  -- before the new value is stored, and the stored settings change only
+  -- there (a silent set stores nothing: the model reads the stored values),
+  -- so a run that ended under the settings it ran with stays ended
+  local function retire(voice_idx)
+    local hit = hits[voice_idx]
+    if not hit or hit.ended then return end
+    local set = settings(voice_idx)
+    if not set.loop and util.time() - hit.time >= run_time(set, hit) then hit.ended = true end
+  end
+
   -- Whether each voice's loop is on, as its param's action last set it
   local looping = {}
 
@@ -157,7 +172,7 @@ return function(S)
     local hit, now = hits[voice_idx], util.time()
     local total = hit and run_time(settings(voice_idx), hit)
     if on then
-      if hit and now - hit.time < total then return end
+      if hit and not hit.ended and now - hit.time < total then return end
       hits[voice_idx] = {time = now, from = 0, hold = 0}
     elseif hit and total > 0 and now - hit.time >= total then
       local cycles = math.floor((now - hit.time) / total)
@@ -323,6 +338,14 @@ return function(S)
           changed()
         end
         add(voice_idx, record, key, param)
+        -- the action add_voice_param made stores the value first: an ended
+        -- run is marked at the settings it ran with, before the store (#969)
+        local added = params:lookup_param("v" .. voice_idx .. "_" .. key)
+        local store = added.action
+        added.action = function(value)
+          retire(voice_idx)
+          store(value)
+        end
       end
     end,
     scene_defaults = ENV.defaults,

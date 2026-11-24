@@ -180,13 +180,11 @@ local Model = require("modulation_model")
 -- budget (more than the step's 12 due, a deferrable edit past the budget),
 -- sent at a later step (the fact file's other transient, an engine copy
 -- kept while the params no longer play, ends inside the step the compare
--- follows); ended_runs_again, #969, a fault whose fix removes it: an
--- envelope (loop off) whose run ended runs again in Lua's model when one
--- of its times is raised past the time since its hit, which the engine's
--- ended EnvGen does not, and only when a time was raised since the end
--- was seen. Two more are the walk's own, counted in state.allowed:
+-- follows). An envelope (loop off) whose run ended and then runs again
+-- with no hit, a time raised since included, is no allowance: it fails
+-- (#969, fixed). Two more are the walk's own, counted in state.allowed:
 -- bar_sync and moving_send, the idle step's (idle_step, below)
-local WALK_ALLOWED = { waiting = true, ended_runs_again = true }
+local WALK_ALLOWED = { waiting = true }
 
 -- The commands that start, move or stop a modulation node, which an idle
 -- step never sends but a clocked LFO's bar sync
@@ -568,7 +566,7 @@ h.walk({
   reached = { "lfo_started", "lfo_stopped", "lfo_replaced", "lfo_moved", "lfo_at_zero",
     "home_engine_lua", "recalls", "fades",
     "fades_crossed", "unchanged_recalls", "silent_sets", "macro_depths", "routes_set", "routes_moved", "routes_stopped",
-    "offsets_sent", "envelopes_ended", "idle_quiet", "allowed_waiting", "allowed_ended_runs_again",
+    "offsets_sent", "envelopes_ended", "idle_quiet", "allowed_waiting",
     "allowed_bar_sync", "allowed_moving_send" },
   counts = function(state)
     local counts = {}
