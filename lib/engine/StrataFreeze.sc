@@ -68,8 +68,9 @@
     // \spectralBuffers: on the high tier, each voice's [left, right] FFT
     // buffers for its spectral writer (see addFreezeDefs), else empty.
     // \writerStarts: per voice, while the /n_go of the ring writer
-    // replaceRingWriter made last has not come, (watch: its responder, run:
-    // whether it was made running), else nil (watchWriterStart, #1000).
+    // replaceRingWriter made last, or the rings area's start made (#1018),
+    // has not come, (watch: its responder, run: whether it was made
+    // running), else nil (watchWriterStart, #1000).
     // \headTimers: the timeouts of the head reads waiting for the server
     // (ringHeadFrame, one Routine each, out once its read ends, #1014).
     // \ended: per voice, the freezes the engine ended on its own
@@ -413,7 +414,8 @@
         this.areaCall(\watchWriterStart, voice, synths[key], run);
     }
 
-    // The voice's new ring writer has had its first block once its /n_go
+    // The voice's new ring writer (a replace's, or the first, made by the
+    // rings area's start, #1018) has had its first block once its /n_go
     // has come: the server performs what it receives at the start of a
     // callback and calculates after, so whatever sclang sends once that
     // reply to the callback that made the node is in is performed in a

@@ -28,7 +28,7 @@ var periodSlack = 0.06;
 var probeGroup, quietBus, nowBus, clockBus, readOut, rectEnv, timecode, started;
 var timeReads, startTimecodeVoice, now, phaseMoves, grainOf, fadingRingReader, voiceRing, inputRing, copyRing;
 var readings, frozenAt, live, fading, ok, savedFadeWait = engine.bufferFadeWait;
-var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles;
+var rampPath, rampFile, other, otherCommand, writerNodes, root, write, high, toggles, readyContext;
 var old, readsCopy, restartGrain, startInput, attempt, precondition;
 var tone, meters, peaksOver, sentDuring, inOneBundle, ringPeak, writerBefore, kept, fails, failWatcher, standard;
 var gapLimitSeconds = 0.05, block = server.options.blockSize, headStepFrames = server.options.blockSize;
@@ -1213,14 +1213,61 @@ check.((kept.size == (2 * other.numVoices)) and: { kept.every({ arg buffer; buff
     "freeze: free frees the high tier's FFT buffers (% of % freed)".format(
         kept.count({ arg buffer; buffer.bufnum.isNil }), kept.size));
 
+// ---- a freeze at the engine's start (#1018) ----
+// The rings area makes the first ring writers at the engine's start, and
+// the engine reports itself ready with no sync after them, so a freeze
+// Lua sends at once can reach a first writer before its first block, where
+// scsynth's Node_SetRun breaks (#1000: a pause, then a run, loses the run;
+// a second pause skips the constructors, and the run after crashes the
+// server). A second standard engine (built here, not by h.startEngine, so
+// its commands run inside its ready callback, as early as any can; #503's
+// check below then uses it): voice 1's (engine voice 0's) hold, unfreeze
+// and hold again at that instant, with no yield; then, its ring held, the
+// unfreeze. The ring is held, then moves, and the server answers. Judged
+// by the check's own record of what it sent (the hold last, then the
+// release) against the writer's phase bus. Before #1018 the server crashed
+// at the release; a single hold at the ready instant, released later,
+// passed on that engine too (its run reached a node past its first block)
+{
+    var root = h.tempDir +/+ "freeze-ready/", done = Condition(false), saved, phase, held, moved, answered, start = Main.elapsedTime;
+    File.mkdir(root);
+    readyContext = CroneAudioContext.new(server);
+    readyContext.out_b = Bus.audio(server, 2);  // keep it silent
+    server.sync;
+    saved = [Engine_Strata.settingsDir, Engine_Strata.modelPath];
+    Engine_Strata.settingsDir = root;
+    Engine_Strata.modelPath = root +/+ "no-board-model";
+    // (a command as matron's OSC would call it, on this engine, whose
+    // commands the runner never took)
+    otherCommand = { arg name ... args;
+        other.commands.detect({ arg each; each.name == name }).oscdef.func.value([("/command/" ++ name).asSymbol] ++ args)
+    };
+    Engine_Strata.new(readyContext, { arg built;
+        other = built;
+        [1.0, 0.0, 1.0].do({ arg value; otherCommand.(\setGrainParam, 0, \freeze, value) });
+        done.test = true; done.signal;
+    });
+    h.awaitReply(done, 30);
+    Engine_Strata.settingsDir = saved[0];
+    Engine_Strata.modelPath = saved[1];
+    server.sync; 0.1.wait;
+    phase = other.areaState[\rings][\phaseBuses][0];
+    held = phaseMoves.(phase).not;
+    otherCommand.(\setGrainParam, 0, \freeze, 0.0);
+    server.sync; 0.1.wait;
+    moved = phaseMoves.(phase);
+    answered = h.readBusValue(phase).notNil;
+    check.(held and: { moved } and: { answered },
+        "freeze: a hold, unfreeze and hold sent as the engine reports itself ready hold the first writer's ring, and the unfreeze after moves it, the server answering (#1018: held %, moved %, answered %; % s with the engine's build)".format(
+            held, moved, answered, (Main.elapsedTime - start).round(0.01)));
+}.value;
+
 // ---- free with an input copy waiting for its fade (#503) ----
-// A second standard engine with bufferFadeWait 1 s: an input voice frozen,
+// The second standard engine with bufferFadeWait 1 s: an input voice frozen,
 // unfrozen and frozen again at once (its live grain synth still reads the
 // old copy, so the second copy waits), then the engine freed inside the
 // wait: the copy never runs against the freed rings and buses (no server
 // failure, no error, \copied false)
-other = h.startEngine;
-otherCommand = { arg name ... args; h.commandTo(other, name, *args) };
 other.bufferFadeWait = 1.0;
 otherCommand.(\setGrainSource, 2, other.inputSource);
 otherCommand.(\voiceOn, 2, 100.0, 0.2, 0.0, 0.1, 10.0, 1.0);
@@ -1238,7 +1285,14 @@ failWatcher.free;
 check.(readings.every({ arg value; value == true }) and: { other.areaState[\freeze][\copied][2].not } and: { fails.isEmpty },
     "freeze: free with an input copy waiting for its fade runs none of it (copied, waiting, not copied: %; copied after the free %; server failures %)".format(
         readings, other.areaState[\freeze][\copied][2], fails));
+// The context's analysis synths (CroneAudioContext makes them after its
+// groups, not in them) are freed with the groups, before the buses they
+// write: a bus freed under a running writer is handed to a later area
+// (the record area's guard bus, run after this area, was overwritten so)
+(readyContext.amp_in_s ++ readyContext.amp_out_s ++ readyContext.pitch_in_s).do(_.free);
+[readyContext.ig, readyContext.xg, readyContext.og].do(_.free);
 server.sync;
+(readyContext.in_b ++ readyContext.amp_in_b ++ readyContext.amp_out_b ++ readyContext.pitch_in_b ++ [readyContext.out_b]).do(_.free);
 
 probeGroup.free;
 [quietBus, nowBus, clockBus, readOut].do(_.free);
