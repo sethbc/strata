@@ -87,6 +87,14 @@ return function(S)
     return remote ~= nil and remote.holds ~= nil and remote.holds(port) == true
   end
 
+  -- The remote's started flag down (S.lib.io_remote.started()): its
+  -- cleanup step is letting its ports go, or has (#1010). It is down before
+  -- its start step too, inside init, where no port settles
+  local function remote_stopped()
+    local remote = S.lib.io_remote
+    return remote ~= nil and remote.started ~= nil and remote.started() == false
+  end
+
   -- One message on port, through its vport: nothing after cleanup, on port
   -- 0 or on a port a remote holds
   local function send(port, method, ...)
@@ -614,8 +622,9 @@ return function(S)
   -- note_off for each owed on (send_offs), even for a note that sounds there
   -- again now (the device had two ons, #709). No CC 123 is sent (#750). A
   -- port a remote holds gets nothing, so the debt stays owed until the port
-  -- is let go (the settled hook, below) or the device is found elsewhere
-  -- (#996). True when anything was paid
+  -- is let go (the settled hook, below, at cleanup too: the remote's step
+  -- comes first, #1010) or the device is found elsewhere (#996). True when
+  -- anything was paid
   local function pay_owed(port, name)
     if remote_holds(port) or state.left_with[name] == nil then return false end
     send_offs(port, arrived_notes(name))
@@ -644,7 +653,11 @@ return function(S)
   -- told to every hook, a claim made meanwhile included): a takedown due,
   -- then a setup due, goes once to a device there that nothing holds; while
   -- held each stays due; with no device each is dropped (the next arrival
-  -- marks the setup again) (#772, #788)
+  -- marks the setup again) (#772, #788). Once the remote has stopped
+  -- (S.lib.io_remote.started() false: its cleanup step, which comes before
+  -- this module's, is letting its ports go) the debts and a takedown due are
+  -- paid, but no setup goes: this module's own step takes the zone down
+  -- next (#1010)
   S.lib.io_ports.on_settled("io_midi_out", function(port)
     if state.stopped or remote_holds(port) then return end
     -- a debt kept while a remote held the port (#996), before any zone message
@@ -654,7 +667,7 @@ return function(S)
       state.takedown_due[port] = nil
       if present(port) then takedown(port) end
     end
-    if not state.setup_due[port] then return end
+    if not state.setup_due[port] or remote_stopped() then return end
     state.setup_due[port] = nil
     local voice = zone_voice_on(port)
     if voice and present(port) then setup(port, state.config[voice].members) end
@@ -1042,12 +1055,13 @@ return function(S)
   -- Cleanup and the invariant
   ---------------------------------------------------------------------------
 
-  -- Cleanup's step (after the targets ended every note, before the ports
-  -- let the vports go): each port with a settled zone, or a takedown owed,
-  -- gets one takedown when its device is there and nothing holds it, so a
-  -- synth keeps no zone a script that ended asked for (#789; one owed to a
-  -- held port is dropped with the script, as one a device leaves with is,
-  -- #788); then the express queue dropped, and nothing more is sent
+  -- Cleanup's step (after the targets ended every note and the remote let
+  -- its ports go, which paid the debts and the takedowns owed there, #1010;
+  -- before the ports let the vports go): each port with a settled zone, or
+  -- a takedown owed, gets one takedown when its device is there and nothing
+  -- holds it, so a synth keeps no zone a script that ended asked for (#789;
+  -- one owed to a device that left is forgotten, #788); then the express
+  -- queue dropped, and nothing more is sent
   function M.stop()
     if not state.stopped then
       local zones = zones_of(state.config)

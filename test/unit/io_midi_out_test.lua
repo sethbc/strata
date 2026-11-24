@@ -1423,19 +1423,52 @@ test("a debt owed to a device on a port a remote holds is kept, and paid once th
   balanced(c, "synth c")
 end)
 
-test("a debt kept on a port a remote still holds at cleanup is dropped with the script, sent nowhere (#996)", function()
+-- #1010: cleanup lets the remote's ports go (147) before MIDI out stops
+-- (151), so a debt kept on a port a remote holds is paid at that release;
+-- the release's settled hook sends no zone setup then, since the remote
+-- has stopped, and MIDI out's own step then takes the zone down
+test("cleanup pays the offs MIDI out owes a synth on a port a remote holds (#1010)", function()
   local context, S = started()
   context.midi.plug(1, "synth a")
   local c = context.midi.plug(3, "synth c")
   remote_grid_at(S, 3)
-  params:set("v1_out_port", 1); settled(context)
+  params:set("v1_out_port", 1)
+  mpe_voice(2, 3)  -- voice 2's zone on the held port: its setup waits for the port (#772)
+  settled(context)
   _menu.set_mode(true)
   context.midi.reassign(3, 1)
   midi_target(S).note_on(1, "s1", 59, 1, step_info())
   context.midi.reassign(1, 3)
   _menu.set_mode(false)
+  assert_true(S.lib.io_remote.holds(3), "the remote still holds port 3 as cleanup begins")
+  assert_equal(note_lines(c), "note_on 59 127 1", "the off is owed")
+  local before_cleanup = #c.sent
+  -- the test's own record: what c got in each cleanup step after the targets' (142)
+  local after_targets = {}
+  for _, record in ipairs(S.registry.cleanup) do
+    if record.order > S.constants.CLEANUP_ORDER.io_targets then
+      local step_fn = record.fn
+      record.fn = function(...)
+        local before = #c.sent
+        step_fn(...)
+        for index = before + 1, #c.sent do after_targets[#after_targets + 1] = line(midi.to_msg(c.sent[index])) end
+      end
+    end
+  end
   cleanup()
-  assert_equal(note_lines(c), "note_on 59 127 1", "MIDI out stops before the remote lets port 3 go: no off")
+  local in_cleanup = {}
+  for index = before_cleanup + 1, #c.sent do in_cleanup[#in_cleanup + 1] = line(midi.to_msg(c.sent[index])) end
+  assert_equal(table.concat(in_cleanup, "|"), table.concat(after_targets, "|"),
+    "everything c got at cleanup came after the targets' step")
+  assert_equal(note_lines(c), "note_on 59 127 1|note_off 59 1", "c gets the off it was owed")
+  for _, text in ipairs(after_targets) do
+    -- a setup's zone size (cc 6 of 1 or more) and its bend ranges (RPN 0, cc 100 0)
+    assert_true(text:match("^cc 6 0 ") ~= nil or not text:match("^cc 6 "), "no zone size set after 142: " .. text)
+    assert_true(not text:match("^cc 100 0 "), "no bend range set after 142: " .. text)
+  end
+  assert_equal(table.concat(in_cleanup, "|"), "note_off 59 1|" .. TAKEDOWN,
+    "the owed off as the port is let go, then the zone's takedown")
+  balanced(c, "synth c")
 end)
 
 test("two debts for one channel and note pay two offs (#997)", function()
@@ -1729,12 +1762,12 @@ test("cleanup sends no takedown to a zone's port with no device (#789)", functio
   assert_equal(calls, 0, "no vport is reached for a port with no device")
 end)
 
--- A held port at cleanup: the remote's step (147), which lets the port go,
--- comes after MIDI out's (143), so the port is held at the moment of the
--- takedown; a takedown owed there, or a zone there, is dropped with the
--- script (as #788 forgets a takedown its device leaves with), never an error.
--- A free port's zone beside it is taken down
-test("cleanup drops a takedown owed to a held port, and takes down a free port's zone (#788, #789)", function()
+-- A held port at cleanup: the remote's step (147) lets the port go before
+-- MIDI out's (151, #1010), so a takedown owed there goes at the release (the
+-- settled hook), and a zone there is taken down by MIDI out's own step; no
+-- setup goes at the release, since the remote has stopped. A free port's
+-- zone beside it is taken down
+test("cleanup sends a takedown owed to a held port once the remote lets it go, and takes down a free port's zone (#788, #789, #1010)", function()
   local context, S = started()
   local synth = zone_then_held(context, S)
   params:set("v1_out_mode", 1); settled(context)
@@ -1742,15 +1775,15 @@ test("cleanup drops a takedown owed to a held port, and takes down a free port's
   mpe_voice(2, 5); settled(context)
   clear(free)
   cleanup()
-  assert_equal(sent(synth), "", "the held port's owed takedown is not sent")
+  assert_equal(sent(synth), TAKEDOWN, "the held port's owed takedown goes once, as the remote lets it go")
   assert_equal(sent(free), TAKEDOWN, "the free port's zone is taken down once")
 end)
 
-test("cleanup sends nothing to a zone on a held port (#789)", function()
+test("cleanup takes down a zone on a held port once the remote lets it go, with no setup first (#789, #1010)", function()
   local context, S = started()
   local synth = zone_then_held(context, S)
   cleanup()
-  assert_equal(sent(synth), "", "the port the remote holds gets no takedown")
+  assert_equal(sent(synth), TAKEDOWN, "the zone the synth was set up with is taken down, and nothing else is sent")
 end)
 
 test("a zone taken down while midigrid holds its port is taken down when midigrid lets it go (#788)", function()

@@ -789,6 +789,20 @@ test("cleanup ends the clock, clears each device and releases everything", funct
   assert_equal(object.key, nil, "the midigrid detached")
 end)
 
+-- #1010: MIDI out's settled hook reads started() to know a release is
+-- cleanup's, so the flag is down before the cleanup step lets any port go
+test("started() is true from the start step, and false through the cleanup step's releases (#1010)", function()
+  local context, S = started()
+  remote_grid(context, S, 3)
+  assert_equal(S.lib.io_remote.started(), true, "started once the start step has run")
+  local seen = {}
+  S.lib.io_ports.on_claim("io_remote_test", function(port, owner)
+    if owner == nil then seen[#seen + 1] = port .. " " .. tostring(S.lib.io_remote.started()) end
+  end)
+  cleanup()
+  assert_equal(table.concat(seen, ","), "3 false", "port 3 released at cleanup, with started() already false")
+end)
+
 test("the scripts and the module agree end to end", function()
   local context, S = started()
   local iii = require("stub_iii")

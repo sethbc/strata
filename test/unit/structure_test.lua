@@ -966,7 +966,7 @@ local CLEANUP_STEPS = { "tempo handler", "menu watch", "scenes saved", "macros s
   "morph clock", "macro clock", "factory clock", "zones learn", "matrix learn", "notes flush", "lfos", "playheads clock", "scan holds", "waveform loop",
   "engine budget",
   "buffer start reload", "buffer polls and timers", "slices poll", "record poll", "freeze poll", "input meter", "voice picker", "scale editor", "flashes", "targets ended",
-  "midi out", "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler",
+  "ii stopped", "crow lines", "controllers", "remote", "osc event", "tape off", "midi handler", "midi out",
   "midi ports", "voices off", "grids dark", "arc dark", "clocks" }
 
 test("cleanup runs every registered step in today's order", function()
@@ -1079,7 +1079,7 @@ test("cleanup runs every registered step in today's order", function()
   watch_method(S.lib.positions, "hold_scan", "scan holds")
   watch_method(S.lib.notes, "stop_flush", "notes flush")
   watch_method(S.lib.io_targets, "stop_all", "targets ended")
-  watch_method(S.lib.io_midi_out, "stop", "midi out")  -- lib/io/midi_out.lua: the zones taken down, the express queue dropped
+  watch_method(S.lib.io_midi_out, "stop", "midi out")  -- lib/io/midi_out.lua: after the remote's release (#1010), the zones taken down, the express queue dropped
   watch_method(S.lib.io_ii, "stop", "ii stopped")  -- lib/io/ii.lua: the leaving sequence while it leads, then nothing more
   local real_set = params.set
   params.set = function(self, id, ...)
