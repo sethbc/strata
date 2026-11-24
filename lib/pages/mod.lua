@@ -816,19 +816,19 @@ return function(S)
   end
 
   -- While the morph has fewer than MORPH.min_corners corners holding a
-  -- scene (#896: S.lib.morph.plan_ready(), its own answer), a corner whose
-  -- slot is empty shows its label as text and [empty] as its value, and the
-  -- morph row says what it needs; with enough corners nothing changes.
-  -- Returns the row's text and value then, else nil
-  local MORPH_CORNERS = {morph_a = true, morph_b = true, morph_c = true, morph_d = true}
+  -- scene it can use (#896: S.lib.morph.corners_ready(), the morph's pure
+  -- reader, which changes nothing it keeps), a corner the morph cannot use
+  -- (S.lib.morph.corner_valid) shows its slot's label as text and [empty]
+  -- as its value, and the morph row says what it needs; with enough
+  -- corners nothing changes. Returns the row's text and value then, else nil
   local function morph_unready_parts(row)
-    if not (MORPH_CORNERS[row.id] or row.id == "morph") or S.lib.morph.plan_ready() then return nil end
+    local corner = row.id:match("^morph_(%l)$")
+    if not ((corner and corner ~= "y") or row.id == "morph") or S.lib.morph.corners_ready() then return nil end
     if row.id == "morph" then
       return string.format(MOD_PAGE.morph_needs, S.lib.morph.MORPH.min_corners), row.value()
     end
-    local slot = params:get(row.param_id)
-    if S.scenes[slot] and S.scenes[slot].populated then return nil end
-    return S.lib.scenes.label(slot), MOD_PAGE.empty_corner
+    if S.lib.morph.corner_valid(corner) then return nil end
+    return S.lib.scenes.label(params:get(row.param_id)), MOD_PAGE.empty_corner
   end
 
   -- A list row's label, text (left), value (right) and whether it is dim:
@@ -1369,6 +1369,9 @@ return function(S)
       S.lib.scenes.set_name(16, "WWWWWWWWWWWW"); params:set("morph_a", 16); params:set("morph_b", 15)
     end),
     state("morph at 100%", "morph", function() params:set("morph", 1) end),
+    state("L2 on a 32-character home this build lacks", "source:lfo2", function()
+      S.lib.matrix.set_home(2, string.rep("W", S.lib.matrix.MATRIX.max_text))
+    end),
     state("morph with one corner, three empty twelve-letter names", "morph", function()
       widest_corners(); capture_scene(S.constants.NUM_SCENES); params:set("morph", 1)
     end),

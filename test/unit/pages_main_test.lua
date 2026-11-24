@@ -1002,4 +1002,35 @@ test("a stopped, muted voice's row shows its mute", function()
   assert_true(context ~= nil)
 end)
 
+
+-- #881, fix round 1: MAIN's ~ resolves each LFO home in the matrix's
+-- affects, which contains each one: a destination that raises prints once
+-- and the rest of MAIN still draws
+test("a raising home destination leaves MAIN's other columns drawn", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("MAIN")
+  select_voice(1)
+  local entry
+  for _, destination in ipairs(S.LFO_DESTINATIONS) do
+    if destination.key == "v1_grain_density" then entry = destination end
+  end
+  S.lib.matrix.set_home(3, "v1_grain_density")
+  params:set("strata_lfo3_depth", 40)
+  params:set("strata_lfo3", 1)
+  local real = entry.resolve
+  entry.resolve = function() error("home boom") end
+  local ok, problem = pcall(function()
+    context.printed = {}
+    redraw()
+    assert_true(screen_shows(context, "RESONAT"), "the voice's name is drawn")
+    local label, value = field_texts(context, 1)
+    assert_true(label ~= nil and value ~= nil, "the first field is drawn")
+    assert_equal(#list_rows(context), 4, "the voice list is drawn")
+  end)
+  entry.resolve = real
+  if not ok then error(problem, 0) end
+  h.claim_script_errors(context, 1, "strata: matrix home 3 (affects) failed: ", "home boom")
+end)
+
 end

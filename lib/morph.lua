@@ -321,6 +321,27 @@ return function(S)
     return current_plan().ready
   end
 
+  -- The pure readers of the corners (#896, for MOD's rows): whether a
+  -- corner ("a" to "d") holds a scene the morph can use (its slot's scene
+  -- populated and valid, as a plan counts it; false for any other corner),
+  -- and whether MORPH.min_corners or more do. They read only the corners'
+  -- params and S.scenes, never the plan or any other state, so a draw
+  -- changes nothing the morph keeps (plan_ready() rebuilds a stale plan)
+  local is_corner = {}
+  for _, corner in ipairs(MORPH.corners) do is_corner[corner] = true end
+  function M.corner_valid(corner)
+    if not is_corner[corner] then return false end
+    return valid_slot(params:get("morph_" .. corner)) == true
+  end
+
+  function M.corners_ready()
+    local count = 0
+    for _, corner in ipairs(MORPH.corners) do
+      if M.corner_valid(corner) then count = count + 1 end
+    end
+    return count >= MORPH.min_corners
+  end
+
   -- The corners' weights at the position (x = morph, y = morph_y): A
   -- (1 - x)(1 - y), B x(1 - y), C (1 - x)y, D xy, an empty or invalid
   -- corner's shared among the valid ones in proportion, so they sum to 1.
