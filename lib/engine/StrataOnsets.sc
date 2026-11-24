@@ -110,8 +110,8 @@
     // Once the file's rename is under way (writeOnsetsFile), the rename
     // reports.
     runOnsetPass { arg index, count, change, frames, tempPaths;
-        var state = areaState[\onsets], rate = bufferSampleRates[index], strengths, picks, handedOff = false;
-        var current = { (slotChanges[index] == change) and: { state[\analyses][index] == count } and: { this.pastStop.not } };
+        var rate = bufferSampleRates[index], strengths, picks, handedOff = false;
+        var current = { this.onsetPassCurrent(index, count, change) };
         var deleteTemporary = { tempPaths.do({ arg path; try { if (File.exists(path)) { File.delete(path) } } }) };
         try {
             context.server.sync;
@@ -126,6 +126,13 @@
         };
         deleteTemporary.value;
         if (handedOff.not) { this.reportOnsets(index, count, true) };
+    }
+
+    // Whether a pass may take its next step: nothing changed the slot since
+    // its command (slotChanges is still change), no newer analyzeBuffer of
+    // the slot came (analyses is still its count) and the engine runs
+    onsetPassCurrent { arg index, count, change;
+        ^(slotChanges[index] == change) and: { areaState[\onsets][\analyses][index] == count } and: { this.pastStop.not }
     }
 
     // Inside a routine: each hop's strength over the two temporary files of
@@ -261,7 +268,7 @@
     writeOnsetsFile { arg index, count, frames, rate, picks, change;
         var path = this.onsetsPath(index).standardizePath, partPath = path ++ "." ++ instanceTag ++ "-" ++ count ++ ".part";
         var text = this.onsetsText(index, frames, rate, picks), file, written, waitStart, renameEnded = false;
-        var current = { (slotChanges[index] == change) and: { areaState[\onsets][\analyses][index] == count } and: { this.pastStop.not } };
+        var current = { this.onsetPassCurrent(index, count, change) };
         try { File.mkdir(path.dirname) };
         written = try {
             file = File.new(partPath, "w");
