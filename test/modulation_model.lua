@@ -59,7 +59,7 @@ function Model.new(constants, engine)
     model.offsets[voice] = {}
     for destination = 0, engine.num_fast_destinations - 1 do model.offsets[voice][destination] = 0 end
   end
-  -- a running node set to depth 0, kept (#925: its offset alone)
+  -- a running node set to depth 0, kept (#925: offset 0 with it, it plays nothing)
   model.counts.lfo_at_zero = 0
   return model
 end
@@ -276,13 +276,18 @@ local function lfo_want(S, n)
   local depth = params:get(lfo_id(n, "depth"))
     * (1 + params:get(lfo_id(n, "depth_mod_amt")) / 100 * input_value(S, n, "depth_mod"))
   depth = math.min(100, math.max(0, depth))
-  return { shape = params:get(lfo_id(n, "shape")) - 1, rate = rate, depth = depth / 100,
-    offset = math.min(ENGINE.offset[2], math.max(ENGINE.offset[1], 2 * params:get(lfo_id(n, "offset")) / 100)) }
+  -- at a depth param of 0 the node plays nothing: offset 0 too (#925, fix
+  -- round 1: as a Lua home's home_m and 3.8.0's stopped node)
+  local offset = 0
+  if params:get(lfo_id(n, "depth")) > 0 then
+    offset = math.min(ENGINE.offset[2], math.max(ENGINE.offset[1], 2 * params:get(lfo_id(n, "offset")) / 100))
+  end
+  return { shape = params:get(lfo_id(n, "shape")) - 1, rate = rate, depth = depth / 100, offset = offset }
 end
 
 -- The (voice, destination) of LFO n's node as its params imply it: on, its
 -- home a fast destination's fixed param, at any depth (#925: an on LFO
--- with a fast home has a node, which plays its offset alone at depth 0);
+-- with a fast home has a node, which plays nothing at depth 0: offset 0 too);
 -- else nil
 local function lfo_place(S, n)
   if params:get(lfo_id(n)) ~= 1 then return nil end
