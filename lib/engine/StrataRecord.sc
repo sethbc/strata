@@ -534,8 +534,12 @@
     // and started by a timestamped /n_run: the server starts it on the
     // block the timestamp names, and a cancel can still free it first (a
     // timestamped /s_new could not be canceled before the node exists).
-    // Past its timestamp (a preparation that outlasted the delay) it starts
-    // at once and says so. length: the bins' length (peakFrames)
+    // The run is sent again at the node's /n_go (watchTakeStart, #981): one
+    // the server takes late, in the callback that makes the node, would be
+    // performed before the node's first calculation, which scsynth's
+    // Node_SetRun ignores. Past its timestamp (a preparation that outlasted
+    // the delay) it starts at once and says so. length: the bins' length
+    // (peakFrames)
     sendTake { arg index, take, length;
         var server = context.server, synth = take[\synth], wait = take[\startAt] - thisThread.seconds;
         var message;
@@ -557,12 +561,38 @@
         if (wait > 0) {
             server.sendBundle(nil, message, synth.runMsg(false));
             server.sendBundle(wait, ['/error', -1], synth.runMsg(true));
+            this.watchTakeStart(index, take, synth);
         } {
             if ((take[\delay] > 0) and: { wait < 0 }) {
                 this.postRecordLate(index, (wait.neg * 1000).round.asInteger);
             };
             server.listSendMsg(message);
         };
+    }
+
+    // A paused take's timestamped /n_run 1, sent again when the node's
+    // /n_go arrives (#981). scsynth's Node_SetRun starts a paused node only
+    // once its calc function is Node_NullCalc, which a node paused at its
+    // /s_new reaches at its first calculation: a run the server takes late
+    // in the callback that makes the node (a wait shorter than the
+    // server's lead, about one period) is performed before that, ignored,
+    // and the take stayed paused. The /n_go comes after the callback, so
+    // the second run reaches a calculated node: on time it runs at its
+    // block, late it runs at once, and after an honored first run it does
+    // nothing. Sent through sendToSynth, with the time left to the take's
+    // start, only while the slot (slotChanges: a stop, load, clear or
+    // recording changes it) and the take are what sendTake left. A node
+    // whose /s_new failed sends no /n_go: the responder goes after
+    // startConfirmWait
+    watchTakeStart { arg index, take, synth;
+        var change = slotChanges[index], state = areaState[\record], server = context.server, started;
+        started = OSCFunc({
+            var wait = take[\startAt] - thisThread.seconds;
+            if ((slotChanges[index] == change) and: { state[\takes][index] === take } and: { recordSynths[index] === synth }) {
+                server.makeBundle(if (wait > 0) { wait }, { this.sendToSynth(synth.runMsg(true)) });
+            };
+        }, '/n_go', server.addr, argTemplate: [synth.nodeID]).oneShot;
+        SystemClock.sched(this.startConfirmWait, { started.free; nil });
     }
 
     postRecordLate { arg index, milliseconds;
