@@ -4739,7 +4739,8 @@ do
       {"forward", 6, 5, 1, 0.25, 2, "1 2 3 4 5 6 4 1 2", "1 1 1 1 1 1 2 2 2"},
     }
     for _, case in ipairs(cases) do
-      local direction, length, before, after, draw, more, steps, passes = table.unpack(case)
+      local direction, length, before, after = case[1], case[2], case[3], case[4]
+      local draw, more, steps, passes = case[5], case[6], case[7], case[8]
       local context = load_strata(); finish_startup(context)
       local S = local_value("S")
       voice_1_only(S, length)
