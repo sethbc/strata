@@ -147,6 +147,42 @@ test("note_values gives a note, its frequency and its rate", function()
   end
 end)
 
+-- 3.9 (#1002): a note carries its pitch, clamped only where the clamp cannot
+-- change a rate: past every root by 24 (the rate range, two octaves each
+-- way), so the engine's rate from the note (absoluteNoteRate) is Lua's
+test("note_values' note is the pitch inside the roots' range widened by the rate range (#1002)", function()
+  load_strata()
+  local S = local_value("S")
+  local notes = S.lib.notes
+  local values = notes.note_values(1, 132)
+  assert_equal(values.note, 132, "pitch 132 keeps its note")
+  assert_equal(values.rate, 4, "at the fastest rate")
+  assert_equal(notes.note_values(1, -5).note, -5, "pitch -5 keeps its note")
+  assert_equal(notes.note_values(1, 200).note, 151, "past the highest root's two octaves: 151")
+  assert_equal(notes.note_values(1, -40).note, -24, "below the lowest root's two octaves: -24")
+  assert_equal(notes.note_values(1, 64.5).note, 64.5, "a fractional pitch inside 0-127 as before")
+  -- the range: the roots (a file's key, 0..key_max, or 60) widened by the
+  -- rate range's octaves each way, and the engine's own clip of noteOn's note
+  local range, rates = notes.NOTES.note_range, notes.NOTES.rate_range
+  local key_max = S.lib.samples.SAMPLES.key_max
+  assert_near(range[1], 0 - 12 * math.log(1 / rates[1]) / math.log(2), 1e-9, "the lowest root less 24")
+  assert_near(range[2], key_max + 12 * math.log(rates[2]) / math.log(2), 1e-9, "the highest root plus 24")
+  local limit = h.engine_spec.argument_limits.noteOn[3]
+  assert_equal(limit.name, "note", "noteOn's third argument is its note")
+  assert_equal(limit.low, range[1], "noteOn's guard clips the note to the range's low")
+  assert_equal(limit.high, range[2], "and to its high")
+  -- the clamp changes no rate: at every whole root, a pitch past the range
+  -- plays the clamped note's rate
+  for root = 0, key_max do
+    for _, pitch in ipairs({ range[1] - 10, range[2] + 10 }) do
+      local rate = util.clamp(2 ^ ((pitch - root) / 12), rates[1], rates[2])
+      local clamped = util.clamp(pitch, range[1], range[2])
+      assert_equal(util.clamp(2 ^ ((clamped - root) / 12), rates[1], rates[2]), rate,
+        "pitch " .. pitch .. " at root " .. root)
+    end
+  end
+end)
+
 -------------------------------------------------------------------------------
 -- The allocator (package 1b)
 -------------------------------------------------------------------------------
@@ -218,6 +254,25 @@ test("an extra note on a buffer voice plays its rate from the file's key", funct
   local on = context.calls_named("noteOn")
   assert_equal(#on, 1, "an extra note")
   assert_near(on[1].args[5], 2 ^ (7 / 12), 1e-9, "64 over key 57")
+end)
+
+-- 3.9 (#1002): an input voice's extra note above 127 (a 6-tone tuning's
+-- key 96 is pitch 132) and below 0 is sent with its own pitch as its note,
+-- so the engine's rate from the note at a moved root is Lua's
+test("an extra note outside 0-127 is sent with its pitch as its note (#1002)", function()
+  local context = load_strata()
+  local S = started(context)
+  params:set("v1_source", S.constants.SOURCE_INPUT)
+  play(context, 1, 1, 60)  -- the own note
+  context.clear_engine_calls()
+  play(context, 1, 2, 132)
+  play(context, 1, 3, -5)
+  local on = context.calls_named("noteOn")
+  assert_equal(#on, 2, "two extra notes")
+  assert_equal(on[1].args[3], 132, "pitch 132's note")
+  assert_equal(on[1].args[5], 4, "at the fastest rate")
+  assert_equal(on[2].args[3], -5, "pitch -5's note")
+  assert_equal(on[2].args[5], 0.25, "at the slowest rate")
 end)
 
 test("the first note on a voice is its own note, with today's messages", function()

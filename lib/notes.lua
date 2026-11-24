@@ -30,7 +30,12 @@ return function(S)
   -- noteExpression's order, the neutral values, the engine's ranges) and
   -- the note cap's param and VOICE section
   local NOTES = {file = "notes.data", version = 1, backup_suffix = ".bak", cut_seconds = 0.05, sends_per_step = 16,
-    rate_root_note = 60, rate_range = {0.25, 4}, note_range = {0, 127}, a4 = {note = 69, freq = 440},
+    rate_root_note = 60, rate_range = {0.25, 4},
+    -- 3.9 (#1002): noteOn's note range, the roots' (a file's key 0-127, or
+    -- 60) widened by the rate range's 24 semitones each way, so the clamp
+    -- never changes a rate the engine derives from the note
+    note_range = {-24, 151},
+    a4 = {note = 69, freq = 440},
     owners = {midi = true, seq = true, grid = true},  -- 3.7: a grid's slice keys (key port * 100 + slice)
     step_owner = "seq",  -- the sequencer's owner (SEQ.note_owner): its chord's extra notes are no hit of their own
     -- 3.8 (package 2b): what play returns for a note the arpeggiator takes
@@ -348,7 +353,8 @@ return function(S)
   end
 
   -- What the engine plays for pitch (a MIDI note number, fractional
-  -- allowed) on voice: {note = pitch clamped to 0-127, freq = its frequency
+  -- allowed) on voice: {note = pitch clamped to NOTES.note_range (-24 to
+  -- 151: a clamp that changes no rate, #1002), freq = its frequency
   -- clamped to the voice's freq range, rate = 2 ^ ((pitch - root) / 12), the
   -- root S.lib.samples.rate_root (60, or a buffer voice's file's key), or
   -- from the freeze reference on a frozen synth voice, clamped to the

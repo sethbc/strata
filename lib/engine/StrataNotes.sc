@@ -33,7 +33,10 @@
     // areaState[\notes][\rootNotes], noteRateRootNote until Lua sends one. A
     // ring-stream note's kept rate is against the freeze reference instead,
     // which only Lua holds, so a note that leaves the stream takes this from
-    // its kept note (ruling 46's note put to use)
+    // its kept note (ruling 46's note put to use). 3.9 (#1002): the note is
+    // the pitch Lua played, clipped by noteOn only past every root's 24
+    // semitones (-24 to 151), where the rate clips too, so this is Lua's
+    // rate exactly
     absoluteNoteRate { arg note, voice;
         ^(2 ** ((note - areaState[\notes][\rootNotes][voice]) / 12)).clip(0.25, 4)
     }
@@ -52,8 +55,8 @@
     // scaleNote, an input note's pitchShift) in one plain send: no node is
     // created, cut or struck. A synth voice's note (its freq) and a stream
     // note (against the freeze reference only Lua holds) are left alone, and
-    // a releasing note keeps its tail. A pitch Lua clamped to 0-127 for
-    // noteOn is derived from the clamped note (#1002)
+    // a releasing note keeps its tail. A pitch outside 0-127 gets Lua's
+    // rate too (#1002: absoluteNoteRate)
     notesFollowRoot { arg voice;
         var held = areaState[\notes][\slots][voice].copyToEnd(1).select({ arg record;
             (record[\state] == \live) and: { record[\synth].notNil } and: { #[\buffer, \input].includes(record[\kind]) }
@@ -688,8 +691,10 @@
     addNoteCommands {
         var lastVoice = numVoices - 1, lastSlot = this.noteSlots - 1;
 
-        // Start voice's slot: note 0-127 (the scale reference), freq 8-20000
-        // Hz, rate 0.25-4, velocity 0-1. The engine keeps note in the slot's
+        // Start voice's slot: note -24 to 151 (3.9, #1002: Lua's
+        // NOTES.note_range, every root 0-127 widened by the rate's 24
+        // semitones each way, so absoluteNoteRate gives Lua's rate), freq
+        // 8-20000 Hz, rate 0.25-4, velocity 0-1. The engine keeps note in the slot's
         // record (ruling 46): a ring-stream note leaving the stream takes its
         // rate from it (leaveStream, ruling 53); a buffer note's scaleNote
         // comes from the voice's reference note and its rate (noteScaleNote).
@@ -698,7 +703,7 @@
             var voice = msg[1], slot = msg[2], note, freq, rate, velocity;
             if (this.fastModIndicesValid(\noteOn, [[\voice, voice, lastVoice], [\slot, slot, lastSlot]])
                 and: { this.fastModValuesFinite(\noteOn, [[\note, msg[3]], [\freq, msg[4]], [\rate, msg[5]], [\velocity, msg[6]]]) }) {
-                note = msg[3].clip(0, 127); freq = msg[4].clip(8, 20000); rate = msg[5].clip(0.25, 4); velocity = msg[6].clip(0, 1);
+                note = msg[3].clip(-24, 151); freq = msg[4].clip(8, 20000); rate = msg[5].clip(0.25, 4); velocity = msg[6].clip(0, 1);
                 this.receiveNote(\noteOn, [voice, slot, note, freq, rate, velocity]);
                 if (slot > 0) { this.areaCall(\extraNoteOn, voice, slot, note, freq, rate, velocity) } { this.ownNoteOn(voice, rate, velocity) };
             };
