@@ -326,7 +326,7 @@
     // one carries on from the old one's head (resume 1: ringWritePhase). A
     // synth voice's spectral freeze and its unfreeze only
     replaceRingWriter { arg voice, defName, in;
-        var key = this.ringWriterKeys[voice], old = synths[key], ring = this.ringBuffersFor(voice, 0), writer;
+        var key = this.ringWriterKeys[voice], old = synths[key], ring = this.ringBuffersFor(voice, 0);
         var args = [\in, in, \bufL, ring[0], \bufR, ring[1], \phaseOut, ring[2], \resume, 1], fft;
         if (old.isNil or: { this.pastStop }) { ^this };
         if (defName == \strataRingWriteSpectral) {
@@ -334,9 +334,7 @@
             if (fft.isNil) { ^this };
             args = args ++ [\fftL, fft[0], \fftR, fft[1]];
         };
-        writer = Synth.replace(old, defName, args);
-        synths[key] = writer;
-        areaState[\rings][\writers][voice] = writer;
+        synths[key] = Synth.replace(old, defName, args);
     }
 
     freeSpectralBuffers {

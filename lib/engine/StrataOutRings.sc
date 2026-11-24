@@ -39,7 +39,8 @@
 
     // areaState[\outRings]: \left and \right (per voice a mono buffer of
     // outRingSeconds at the server rate), \phaseBuses (per voice its
-    // writer's frame, zeroed: a writer starts from its bus) and \writers
+    // writer's frame, zeroed: a writer starts from its bus). The writers
+    // are kept in synths alone, under outRingWriterKeys (#943)
     allocOutRings {
         var server = context.server, state = areaState[\outRings];
         var frames = server.sampleRate * this.outRingSeconds;
@@ -47,7 +48,6 @@
         state[\right] = Array.fill(numVoices, { Buffer.alloc(server, frames, 1) });
         state[\phaseBuses] = Array.fill(numVoices, { Bus.control(server, 1) });
         state[\phaseBuses].do({ arg bus; bus.set(0) });
-        state[\writers] = [];
     }
 
     addOutRingDefs {
@@ -69,13 +69,11 @@
     // One writer per voice, reading its tap, at the tail of the tap group
     // (after the master and strataTapPreMaster)
     startOutRingWriters {
-        var state = areaState[\outRings], record = areaState[\record];
-        state[\writers] = this.outRingWriterKeys.collect({ arg key, voice;
+        var record = areaState[\record];
+        this.outRingWriterKeys.do({ arg key, voice;
             var ring = this.outRingFor(voice);
-            var writer = Synth(\strataOutRingWrite, [\in, record[\voiceTaps][voice], \bufL, ring[0], \bufR, ring[1],
+            synths[key] = Synth(\strataOutRingWrite, [\in, record[\voiceTaps][voice], \bufL, ring[0], \bufR, ring[1],
                 \phaseOut, ring[2]], record[\tapGroup], \addToTail);
-            synths[key] = writer;
-            writer
         });
     }
 
@@ -85,7 +83,6 @@
             var synth = synths.removeAt(key);
             if (synth.notNil) { this.sendToSynth(synth.freeMsg); synth.free(false) };
         });
-        areaState[\outRings][\writers] = [];
     }
 
     // The rings and their phase buses (every area's nodes are gone by now;

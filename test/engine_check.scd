@@ -799,7 +799,141 @@ var pollsMoved = {
     }).collect({ arg entry; entry[0].name })
 };
 
-// After each area: nothing of a voice is left running, h.engine's polls are
+// The bookkeeping sweep (#943, design section 6): six conditions on an
+// engine's records, read after every area (finishArea) from sclang's own
+// state alone: no wait, no server round trip, no message. Each is [its
+// line, a function of the engine giving what breaks it (slots, effects,
+// places, paths), or nil while it holds]
+// Each slot of an engine that broken (a function of the slot) picks, as
+// "slots [...]", or nil when none does
+var slotsWhere = { arg target, broken;
+    var slots = (0 .. target.numBuffers - 1).select(broken);
+    if (slots.isEmpty) { nil } { "slots %".format(slots) }
+};
+var sweepConditions = [
+    // #261: slotRecording reads stopReplies, so one left set alone keeps
+    // the slot recording with nothing recording
+    ["a stop reply without a stopping replace take", { arg target;
+        var takes = target.areaState[\record][\takes];
+        slotsWhere.(target, { arg slot; var take = takes[slot];
+            target.stopReplies[slot].notNil and: { take.isNil or: { take[\stopping] != true } or: { take[\kind] != \replace } } })
+    }],
+    // a record synth is its take's (a take with none is ending: takeEnding)
+    ["a record synth that is not its take's", { arg target;
+        var takes = target.areaState[\record][\takes];
+        slotsWhere.(target, { arg slot; var synth = target.recordSynths[slot];
+            synth.notNil and: { takes[slot].isNil or: { takes[slot][\synth] !== synth } } })
+    }],
+    // running (not bypassed, no free pending, its synth), fading (bypassed,
+    // its free pending, its synth) or freed (bypassed, neither)
+    ["an effect's bypass, pending free and synth that are no legal triple", { arg target;
+        var state = target.areaState[\effects], legal = [[false, false, true], [true, true, true], [true, false, false]];
+        var triples = [\delay, \reverb].collect({ arg key;
+            [key, [state[\bypassed][key], state[\pendingFrees][key].notNil, target.synths[key].notNil]] });
+        triples = triples.reject({ arg pair; legal.any({ arg each; each == pair[1] }) });
+        if (triples.isEmpty) { nil } { "effects and their [bypassed, pending free, synth] %".format(triples) }
+    }],
+    // 12872c74: a place whose synth is not watched (one that never started,
+    // or whose end was handled) never ends, so its LFO or route is stuck
+    ["an LFO or route place whose synth is not in nodeChannels", { arg target;
+        var unwatched = { arg places, channels;
+            (0 .. places.size - 1).select({ arg index;
+                places[index].notNil and: { channels.includesKey(places[index][\synth]).not } }) };
+        var modulation = target.areaState[\modulation], envelopes = target.areaState[\envelopes];
+        var lfos = unwatched.(modulation[\lfos], modulation[\nodeChannels]);
+        var routes = unwatched.(envelopes[\routes], envelopes[\nodeChannels]);
+        if (lfos.isEmpty and: { routes.isEmpty }) { nil } { "LFOs %, routes %".format(lfos, routes) }
+    }],
+    // every write ends: its generation goes, its rename ends, and the mover
+    // has acknowledged every rename it was given
+    ["a write generation, a rename or a mover's rename left", { arg target;
+        var mover = target.areaState[\waveform][\mover], pending = if (mover.isNil) { 0 } { mover[\pending] };
+        if (target.writeGenerations.isEmpty and: { target.pathRenames.isEmpty } and: { pending == 0 }) { nil } {
+            "generations %, renames %, the mover's pending %".format(target.writeGenerations.keys.asArray,
+                target.pathRenames.keys.asArray, pending)
+        }
+    }],
+    // what the periodic poll repeats is the slot's length once no take is
+    // live (a playable take's arming announces only after its peaks)
+    ["an announced length that is not the slot's, with no take live", { arg target;
+        var takes = target.areaState[\record][\takes], announced = target.areaState[\buffers][\announced];
+        slotsWhere.(target, { arg slot; takes[slot].isNil and: { target.slotRecording(slot).not }
+            and: { announced[slot] != target.bufferStateSeconds(slot) } })
+    }]
+];
+// The sweep's lines for an engine, one a broken condition, in the order
+// above: "Strata invariant broken: <which> (<what breaks it>; after area
+// <name>)", the line run_engine_check.sh fails on, as warnInvariant's
+var sweepLines = { arg target, area;
+    sweepConditions.collect({ arg condition;
+        condition[1].(target) !? { arg broken; "Strata invariant broken: % (%; after area %)".format(condition[0], broken, area) }
+    }).reject(_.isNil)
+};
+// The sweep after an area: each broken condition's line, and a failure
+var sweepBookkeeping = { arg area;
+    sweepLines.(engine, area).do({ arg line; failures = failures + 1; line.postln });
+};
+// The sweep's own check, once before the areas, on h.engine as built: it
+// holds there; each condition broken on purpose (the records set by hand,
+// then put back, with no yield between, so no reply or timer meets them)
+// shows its line and no other; a legal neighbor of each shows none
+var checkSweep = {
+    var state = { arg name; engine.areaState[name] }, takes = state.(\record)[\takes], effects = state.(\effects);
+    var stand = Object.new, mover = state.(\waveform)[\mover], announced = state.(\buffers)[\announced];
+    var reverb = engine.synths[\reverb], length = announced[3];
+    var lines = { sweepLines.(engine, "the sweep's own check") };
+    // (a check's own line never quotes the prefix: run_engine_check.sh
+    // would fail on it, so the lines got are shown without it)
+    var prefix = "Strata invariant broken: ", built = lines.value;
+    var shown = { arg got; got.collect({ arg line; if (line.beginsWith(prefix)) { line.drop(prefix.size) } { line } }) };
+    var shows = { arg which, label, set, unset;
+        var got;
+        set.value; got = lines.value; unset.value;
+        check.(if (which.isNil) { got.isEmpty } {
+            (got.size == 1) and: { got[0].beginsWith(prefix ++ sweepConditions[which][0] ++ " (") } },
+            "sweep: %: % (got %)".format(label, if (which.isNil) { "no line" } { "its line, and no other" }, shown.(got)));
+    };
+    check.(built.isEmpty, "sweep: every condition holds on an engine as built (got %)".format(shown.(built)));
+    shows.(0, "a stop reply with no take", { engine.stopReplies[0] = 1 }, { engine.stopReplies[0] = nil });
+    shows.(0, "a stop reply with a stopping playable take", {
+        engine.stopReplies[0] = 1; takes[0] = (stopping: true, kind: \playable) }, {
+        engine.stopReplies[0] = nil; takes[0] = nil });
+    shows.(nil, "a stop reply with a stopping replace take", {
+        engine.stopReplies[0] = 1; takes[0] = (stopping: true, kind: \replace) }, {
+        engine.stopReplies[0] = nil; takes[0] = nil });
+    shows.(1, "a record synth with no take", { engine.recordSynths[1] = stand }, { engine.recordSynths[1] = nil });
+    shows.(1, "a record synth another take's", {
+        engine.recordSynths[1] = stand; takes[1] = (synth: Object.new) }, { engine.recordSynths[1] = nil; takes[1] = nil });
+    shows.(nil, "a record synth its take's", {
+        engine.recordSynths[1] = stand; takes[1] = (synth: stand) }, { engine.recordSynths[1] = nil; takes[1] = nil });
+    shows.(2, "a bypassed delay with its synth and no pending free", {
+        effects[\bypassed][\delay] = true }, { effects[\bypassed][\delay] = false });
+    shows.(2, "a running reverb with no synth", {
+        engine.synths[\reverb] = nil }, { engine.synths[\reverb] = reverb });
+    shows.(nil, "a bypassed delay whose free is pending", {
+        effects[\bypassed][\delay] = true; effects[\pendingFrees][\delay] = stand }, {
+        effects[\bypassed][\delay] = false; effects[\pendingFrees].removeAt(\delay) });
+    shows.(3, "an LFO place whose synth is not in nodeChannels", {
+        state.(\modulation)[\lfos][2] = (synth: stand) }, { state.(\modulation)[\lfos][2] = nil });
+    shows.(3, "a route place whose synth is not in nodeChannels", {
+        state.(\envelopes)[\routes][5] = (synth: stand) }, { state.(\envelopes)[\routes][5] = nil });
+    shows.(nil, "an LFO and a route place whose synths are in nodeChannels", {
+        state.(\modulation)[\lfos][2] = (synth: stand); state.(\modulation)[\nodeChannels][stand] = 0;
+        state.(\envelopes)[\routes][5] = (synth: stand); state.(\envelopes)[\nodeChannels][stand] = 0 }, {
+        state.(\modulation)[\lfos][2] = nil; state.(\modulation)[\nodeChannels].removeAt(stand);
+        state.(\envelopes)[\routes][5] = nil; state.(\envelopes)[\nodeChannels].removeAt(stand) });
+    shows.(4, "a write generation left", { engine.writeGenerations["/sweep"] = 1 }, { engine.writeGenerations.removeAt("/sweep") });
+    shows.(4, "a rename left", { engine.pathRenames["/sweep"] = 1 }, { engine.pathRenames.removeAt("/sweep") });
+    shows.(4, "a mover's rename left", {
+        state.(\waveform)[\mover] = (mover ?? { () }).copy.put(\pending, 1) }, { state.(\waveform)[\mover] = mover });
+    shows.(5, "an announced length that is not the slot's", {
+        announced[3] = length + 1 }, { announced[3] = length });
+    shows.(nil, "an announced length apart from the slot's while its take is live", {
+        announced[3] = length + 1; takes[3] = (stopping: false) }, { announced[3] = length; takes[3] = nil });
+};
+
+// After each area: the engine's records sweep clean (sweepBookkeeping, on
+// the state the area left), nothing of a voice is left running, h.engine's polls are
 // in norns' poll registry as the runner left them (an area that moved them
 // is named, and they are put back, so the next area starts as every area
 // does), every voice is on its own type, every slot is empty
@@ -807,6 +941,8 @@ var finishArea = { arg name, seconds;
     var left = voiceNodesLeft.(engine), keys = engine.synths.keys.reject({ arg key; engine.effectKeys.includes(key) });
     var notes = noteRecordsLeft.(engine);
     var message = "%: leaves no voice, grain or mod synth running".format(name), moved = pollsMoved.value;
+    // the engine's records as the area left them (#943)
+    sweepBookkeeping.(name);
     if (left.notEmpty or: { keys.notEmpty }) { message = message ++ " (left: %, tracked: %)".format(left, keys) };
     check.(left.isEmpty and: { keys.isEmpty }, message);
     // (3.5) every extra note slot empty: no note record left behind
@@ -1048,6 +1184,7 @@ runChecks = {
             startAllVoices: { arg self; startAllVoices.value }
         );
 
+        checkSweep.value;
         areas.do({ arg name;
             var area = areaPath.(name).load, start = Main.elapsedTime;
             running = name;

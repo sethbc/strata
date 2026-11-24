@@ -756,7 +756,7 @@ toggles = 20.collect({ arg index;
     spectral = nodes.select({ arg node; node.def == \strataRingWriteSpectral });
     (nodes.size == (other.numVoices + 1)) and: { spectral.size == if (frozen) { 1 } { 0 } }
         and: { nodes.any({ arg node; node.id == other.synths[key].nodeID }) }
-        and: { (other.areaState[\rings][\writers][0] === other.synths[key]) }
+        and: { frozen.not or: { spectral[0].id == other.synths[key].nodeID } }
         and: { frozen.not or: { spectral[0].controls[\in] == other.granBuses[0].index } }
         and: { phaseMoves.(other.areaState[\rings][\phaseBuses][0]) }
 });
