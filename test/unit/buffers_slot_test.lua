@@ -202,11 +202,12 @@ local STATES = {
   -- engine counts long1's load when it arrives and its periodic poll
   -- repeats a.wav's 4 s under long1's number, which differs from the 0 s
   -- the check waits past: the slot settles loaded as long1.wav while the
-  -- engine still checks it (both loads tracked, long1's still to fail)
+  -- engine still checks it (both loads tracked, long1's still to fail):
+  -- the fault #983, the table's way in until its fix puts the common one back
   ["loaded"] = function(context)
     prelude(context); high_tier(context)
     load_buffer(SLOT, "/tmp/a.wav"); load_buffer(SLOT, "/tmp/long1.wav"); report(context, OLD_AUDIO)
-    assert_equal(buffer().name, "long1.wav", "today: settled as the checked load")
+    assert_equal(buffer().name, "long1.wav", "today (#983): settled as the checked load")
   end,
   ["unsettled"] = function(context)
     prelude(context)
@@ -640,11 +641,10 @@ local ROWS = {
   {"loaded", "bufferState 0 s", "loaded"},
   {"loaded", "another load's number", "loaded"},
   -- the check's own failure: what it replaced comes back, a.wav's load
-  -- (the engine holds a.wav: its next report settles it). A fault, its
-  -- issue yet to be filed: the slot showed long1.wav loaded from a.wav's
-  -- repeated length while the engine still checked long1 (the helper takes
-  -- no known = 0)
-  {"loaded", "bufferLoadFailed newest", "loading", check = function()
+  -- (the engine holds a.wav: its next report settles it). #983: the slot
+  -- showed long1.wav loaded from a.wav's repeated length while the engine
+  -- still checked long1
+  {"loaded", "bufferLoadFailed newest", "loading", known = 983, check = function()
     named("a.wav")(); assert_equal(buffer().pending_loads[#buffer().pending_loads].number, buffer().loads_sent - 1,
       "a.wav's load, still tracked")
   end},
