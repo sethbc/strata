@@ -27,10 +27,12 @@ return function(S)
     note_level = 4,       -- a status row
     mark_level = 15,      -- a row's mark (its optional `mark`: a held port, a failed target, an idle route)
     texts = {empty = "no sections", error = "error", not_saved = "setting not saved"},
-    -- the draw that first shows the cursor on a row it fell to (its own
-    -- row went: view.unseen) marks that row at x 0, before its label at
-    -- row_indent (#902)
+    -- a cursor that fell to another row by itself (its own row went:
+    -- view.moved) is marked from the draw that first shows it until the
+    -- player acts on the page (#902, #973): the mark at row_indent, the
+    -- row's label moved right by mark_width (">" and a space, as SCENES')
     unseen_mark = ">",
+    mark_width = 5,
     -- what each row kind needs: its fields and their types ("function" or
     -- "string"; "text" a string or a function)
     kinds = {
@@ -50,8 +52,10 @@ return function(S)
   -- section, label and their count so far, row_ids) and index the place it
   -- was put at, so the cursor follows its row when rows come or go above it
   -- unseen: the cursor fell to another row (its own went) that no draw has
-  -- shown lit yet
-  local view = {tail = 0, pinned = nil, anchor = nil, index = 1, unseen = false}
+  -- shown lit yet; moved: it fell by itself and the player has not acted
+  -- on the page since (E2, E3, K2, K3, ALT+E2, ALT+E3, a page change, or a
+  -- show_section): the row is marked while it holds (#973)
+  local view = {tail = 0, pinned = nil, anchor = nil, index = 1, unseen = false, moved = false}
   local section_errors = {}  -- contained_call's last message per section part
   local detail = {rows = nil, cursor = 1, owner = nil}  -- the open detail list
 
@@ -205,7 +209,7 @@ return function(S)
   -- The row under the cursor once it has followed its row, or nil (no
   -- selectable row); and whether its own row had gone (follow)
   local function cursor_row(rows)
-    if follow(rows) then view.unseen = true end
+    if follow(rows) then view.unseen, view.moved = true, true end
     local row = rows[S.io_cursor]
     if row and row.selectable then return row end
     return nil
@@ -268,8 +272,10 @@ return function(S)
   -- status row's text; any other row's label at row_indent, its value
   -- right-aligned at value_right and cut to the room the label leaves. A
   -- row's mark is right-aligned at value_right, its value then ending a
-  -- gap before it and the label cut to leave the mark its room
-  local function draw_row(row, y, selected, value_right)
+  -- gap before it and the label cut to leave the mark its room. The
+  -- cursor's row, marked as moved (marked), has unseen_mark at row_indent
+  -- and its label mark_width further right
+  local function draw_row(row, y, selected, value_right, marked)
     local cut = S.lib.ui_text.fit_text
     if row.kind == "title" then
       screen.level(IO_PAGE.title_level)
@@ -298,6 +304,13 @@ return function(S)
       right = value_right - screen.text_extents(row.mark_shown) - IO_PAGE.value_gap
       screen.move(x, y)
     end
+    if marked then
+      screen.level(15)
+      screen.move(x, y)
+      screen.text(IO_PAGE.unseen_mark)
+      x = x + IO_PAGE.mark_width
+      screen.move(x, y)
+    end
     screen.level(selected and 15 or 4)
     local label = cut(row.label, right - x)
     screen.text(label)
@@ -308,21 +321,12 @@ return function(S)
     end
   end
 
-  -- The unseen mark beside the row at y (the cursor's, in the draw that
-  -- first shows it)
-  local function draw_unseen_mark(y)
-    screen.level(15)
-    screen.move(0, y)
-    screen.text(IO_PAGE.unseen_mark)
-  end
-
   -- The list from cursor (scrolled tail rows past it), marked_row (or nil)
-  -- with the unseen mark
+  -- with the moved cursor's mark
   local function draw_list(rows, cursor, tail, marked_row)
     field_list.draw(rows, cursor, {visible = IO_PAGE.visible, first_y = IO_PAGE.first_y, spacing = IO_PAGE.spacing,
       value_right = IO_PAGE.value_right, tail = tail}, function(row, y, selected, value_right)
-      draw_row(row, y, selected, value_right)
-      if row == marked_row then draw_unseen_mark(y) end
+      draw_row(row, y, selected, value_right, row == marked_row)
     end)
   end
 
@@ -335,8 +339,8 @@ return function(S)
       return
     end
     local cursor_entry = cursor_row(rows)
-    -- this draw shows the cursor's row, marked when it was unseen
-    local marked_row = view.unseen and cursor_entry or nil
+    -- this draw shows the cursor's row, marked while it moved by itself
+    local marked_row = view.moved and cursor_entry or nil
     view.unseen = false
     local title = pinned_title(rows)
     if title then
@@ -345,8 +349,7 @@ return function(S)
       -- at the top), and the real cursor's row is the one lit
       field_list.draw(rows, title + 1, {visible = IO_PAGE.visible, first_y = IO_PAGE.first_y,
         spacing = IO_PAGE.spacing, value_right = IO_PAGE.value_right, tail = 0}, function(row, y, _, value_right)
-        draw_row(row, y, row == cursor_entry, value_right)
-        if row == marked_row then draw_unseen_mark(y) end
+        draw_row(row, y, row == cursor_entry, value_right, row == marked_row)
       end)
       return
     end
@@ -412,6 +415,9 @@ return function(S)
     return nil
   end
 
+  -- The player acted on the page: the moved cursor's mark ends (#973)
+  local function acted() view.moved = false end
+
   local function io_enc(n, d)
     local rows = M.rows()
     local row = cursor_row(rows)
@@ -421,11 +427,15 @@ return function(S)
       cursor, view.tail = field_list.move_scroll(rows, S.io_cursor, view.tail, d, IO_PAGE.visible)
       place(rows, cursor)
       view.unseen = false
-    elseif n == 3 and unseen() then
+      acted()
       return
-    elseif n == 3 and hidden(rows) then
+    end
+    -- E3 on a row no draw has shown only asks for that draw (the mark stays)
+    if n ~= 3 or unseen() then return end
+    acted()
+    if hidden(rows) then
       unhide()  -- E3 brings the cursor's row back before it edits (as SETUP)
-    elseif n == 3 and row then
+    elseif row then
       edit(row, d, false)
     end
   end
@@ -435,6 +445,7 @@ return function(S)
   -- io_enc (where enc_param_delta turns a param finely itself)
   local function io_alt_enc(n, d)
     if n == 2 then
+      acted()
       S.lib.ui_keys.select_voice_by(d)
       return true
     end
@@ -442,6 +453,7 @@ return function(S)
       local rows = M.rows()
       local row = cursor_row(rows)
       if unseen() then return true end
+      acted()
       if row and row.kind == "rig" and not hidden(rows) then
         edit(row, d, true)
         return true
@@ -458,13 +470,17 @@ return function(S)
       unhide()
       if index then place(rows, index) end
       view.unseen = false
-    elseif n == 3 and unseen() then
+      acted()
       return
-    elseif n == 3 and hidden(rows) then
+    end
+    -- K3 on a row no draw has shown only asks for that draw (the mark stays)
+    if n ~= 3 or unseen() then return end
+    acted()
+    if hidden(rows) then
       unhide()  -- K3 acts only on a row in view
-    elseif n == 3 and row and row.kind == "action" then
+    elseif row and row.kind == "action" then
       contained(row.section .. " action", "io section " .. row.section .. " action", row.run)
-    elseif n == 3 and row and row.kind == "detail" then
+    elseif row and row.kind == "detail" then
       open_detail(row)
     end
   end
@@ -521,7 +537,7 @@ return function(S)
       if rows[index].selectable then target = index end
     end
     if target then place(rows, target) end
-    view.tail, view.pinned, view.unseen = 0, name, false
+    view.tail, view.pinned, view.unseen, view.moved = 0, name, false, false
     return true
   end
 
@@ -593,10 +609,13 @@ return function(S)
   S.registry.pages[UI_PAGES.index.IO] = {name = "IO", draw = redraw_io, hints = io_hints, enc = io_enc,
     alt_enc = io_alt_enc, key = io_key, layout_states = layout_states,
     -- leaving ends a pinned view, so the next visit opens on the cursor's
-    -- row. It closes no detail list: no page change happens under a modal
-    -- owner (#899)
+    -- row, and is the player's act that ends the moved cursor's mark
+    -- (#973), unless no draw has shown the row yet (unseen: the draw on
+    -- return shows it marked). It closes no detail list: no page change
+    -- happens under a modal owner (#899)
     leave = function()
       view.pinned = nil
+      if not view.unseen then view.moved = false end
     end}
 
   -- 3.9 (#902): the detail list is open (detail.owner set) exactly while
@@ -609,6 +628,12 @@ return function(S)
       and not (top == S.lib.pages_seq.step_editor_owner and S.lib.pages_seq.step_editor()) then
       return "the detail is open but the modal owner is " .. tostring(top) .. ", not its own"
     end
+  end)
+
+  -- 3.9 (#973): a cursor not yet shown on the row it fell to (unseen) is
+  -- one that moved by itself (moved), so the draw that shows it marks it
+  S.register_invariant("io view", function()
+    if view.unseen and not view.moved then return "the cursor's row is unseen but not marked as moved" end
   end)
 
   -- init's start step: after the page's own, per registered section, in the page's order, a

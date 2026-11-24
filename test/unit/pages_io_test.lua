@@ -852,13 +852,19 @@ test("IO's leave closes no detail: a page change cannot happen under an owner", 
     "set_ui_page's callers: E1, MOD's K3 (show_lfo) and W/ tape's layout state")
 end)
 
--- The texts drawn at x 0 on a row (the unseen mark's place; titles too)
-local function texts_at_left(context, y)
+-- The texts drawn at x on a row, left-aligned, joined by a space
+local function texts_at(context, x, y)
   local found = {}
   for _, entry in ipairs(context.screen.texts) do
-    if entry.x == 0 and entry.y == y and entry.align == "left" then found[#found + 1] = entry.text end
+    if entry.x == x and entry.y == y and entry.align == "left" then found[#found + 1] = entry.text end
   end
   return table.concat(found, " ")
+end
+
+-- Whether the cursor's mark is drawn on the row at y: at the row indent,
+-- where the row's label is when it has no mark (#973, as SCENES' >)
+local function marked_at(context, S, y)
+  return texts_at(context, S.lib.pages_io.IO_PAGE.row_indent, y) == S.lib.pages_io.IO_PAGE.unseen_mark
 end
 
 local function row_y(context, label)
@@ -868,7 +874,8 @@ end
 
 -- #902: the draw that first shows the cursor on a row it fell to (its own
 -- row went) marks that row, so the player sees the cursor moved before E3
--- or K3 acts there; the next draw has no mark
+-- or K3 acts there; since #973 the next draw keeps the mark (re-based: it
+-- had none), and the mark sits where the label was
 test("IO marks the row its cursor is on when that row is unseen", function()
   local context, S = loaded()
   local gone = nil
@@ -888,15 +895,15 @@ test("IO marks the row its cursor is on when that row is unseen", function()
   show_page("IO")
   enc(2, 1); redraw()
   assert_equal(current_row(S).label, "prob")
-  assert_equal(texts_at_left(context, row_y(context, "prob")), "", "a row in view has no mark")
+  assert_true(not marked_at(context, S, row_y(context, "prob")), "a row in view has no mark")
   -- the row goes; the next draw shows the cursor on the row in its place
   gone = "prob"
   redraw()
   assert_equal(current_row(S).label, "amount", "the cursor on the row in its place")
-  assert_equal(texts_at_left(context, row_y(context, "amount")), mark, "that row is marked")
+  assert_true(marked_at(context, S, row_y(context, "amount")), "that row is marked")
   assert_screen_layout(context, "IO marking the cursor's unseen row")
   redraw()
-  assert_equal(texts_at_left(context, row_y(context, "amount")), "", "the next draw has no mark")
+  assert_true(marked_at(context, S, row_y(context, "amount")), "the next draw keeps the mark (#973)")
   -- E3 before the draw: it only moves the cursor, and the draw marks the row
   gone = nil; redraw(); enc(2, -1); redraw()
   assert_equal(current_row(S).label, "prob")
@@ -905,7 +912,7 @@ test("IO marks the row its cursor is on when that row is unseen", function()
   enc(3, 1)
   assert_equal(params:get("mutation_amount"), amount, "E3 edited nothing")
   redraw()
-  assert_equal(texts_at_left(context, row_y(context, "amount")), mark, "the draw after E3 marks the row")
+  assert_true(marked_at(context, S, row_y(context, "amount")), "the draw after E3 marks the row")
   -- under a pinned view too (show_section pins it; a cursor set from
   -- outside is taken where it is)
   gone = nil
@@ -916,8 +923,137 @@ test("IO marks the row its cursor is on when that row is unseen", function()
   gone = "prob"
   redraw()
   assert_equal(current_row(S).label, "amount")
-  assert_equal(texts_at_left(context, row_y(context, "amount")), mark, "marked in the pinned view")
+  assert_true(marked_at(context, S, row_y(context, "amount")), "marked in the pinned view")
   assert_screen_layout(context, "IO marking the cursor's unseen row in a pinned view")
+end)
+
+
+-- #973: three rows, the middle one under the cursor, then taken away: the
+-- cursor falls to "amount" and the first draw shows it. Returns the
+-- context, S and a function that brings the row back
+local function cursor_fell()
+  local context, S = loaded()
+  local gone = nil
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local rows = {}
+    for _, row in ipairs({
+      { label = "rate", kind = "param", param_id = "mutation_rate" },
+      { label = "prob", kind = "param", param_id = "mutation_probability" },
+      { label = "amount", kind = "param", param_id = "mutation_amount" },
+      { label = "act", kind = "action", hint = "run", run = function() end },
+    }) do
+      if row.label ~= gone then rows[#rows + 1] = row end
+    end
+    return rows
+  end })
+  show_page("IO")
+  enc(2, 1); redraw()
+  gone = "prob"
+  redraw()
+  assert_equal(current_row(S).label, "amount", "the cursor fell to the row in its place")
+  return context, S
+end
+
+-- #973: the mark says the cursor moved by itself, so it stays through
+-- every draw until the player acts on the page: E2, E3, K2, K3, ALT+E2,
+-- ALT+E3 or a page change each end it
+test("IO's mark for a cursor that moved by itself stays until the player's next key or encoder on the page", function()
+  local acts = {
+    { name = "E2", act = function() enc(2, -1) end },
+    { name = "E3", act = function() enc(3, 1) end },
+    { name = "K2", act = function() tap(2) end },
+    { name = "K3", act = function() tap(3) end },
+    { name = "ALT+E2", act = function() key(1, 1); enc(2, 1); key(1, 0) end },
+    { name = "ALT+E3", act = function() key(1, 1); enc(3, 1); key(1, 0) end },
+    { name = "a page change", act = function() show_page("MAIN"); show_page("IO") end },
+  }
+  for _, case in ipairs(acts) do
+    local context, S = cursor_fell()
+    local y = row_y(context, "amount")
+    assert_true(marked_at(context, S, y), case.name .. ": the first draw marks the row")
+    redraw(); redraw()
+    next_frame(context)
+    redraw()
+    assert_true(marked_at(context, S, row_y(context, "amount")), case.name .. ": every other draw keeps it")
+    local amount = params:get("mutation_amount")
+    case.act()
+    redraw()
+    local still = false
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.align == "left" and entry.text == S.lib.pages_io.IO_PAGE.unseen_mark then still = true end
+    end
+    assert_true(not still, case.name .. " ends the mark")
+    if case.name == "E3" then
+      assert_true(params:get("mutation_amount") > amount, "E3 on the marked row edits it, as on any row shown")
+    end
+  end
+  -- E3 or K3 while the row is not yet shown (no draw since the fall) only
+  -- asks for that draw, so the mark stays for the draw to show
+  local context, S = loaded()
+  local gone = nil
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local rows = {}
+    for _, label in ipairs({ "rate", "prob", "amount" }) do
+      if label ~= gone then rows[#rows + 1] = { label = label, kind = "param", param_id = "mutation_" ..
+        ({ rate = "rate", prob = "probability", amount = "amount" })[label] } end
+    end
+    return rows
+  end })
+  show_page("IO")
+  enc(2, 1); redraw()
+  gone = "prob"
+  enc(3, 1); tap(3)
+  redraw()
+  assert_true(marked_at(context, S, row_y(context, "amount")), "E3 and K3 before the draw keep the mark")
+end)
+
+-- #973: the marked row's label moves right by the mark's width, as SCENES'
+-- > moves the scene's name (SCENES_PAGE.mark_width), so > and the label
+-- never touch; the other rows keep theirs at the row indent
+test("the marked row's label moves by the mark's width", function()
+  local context, S = cursor_fell()
+  local page = S.lib.pages_io.IO_PAGE
+  assert_equal(page.mark_width, 5, "> and a space")
+  local y = row_y(context, "amount")
+  assert_true(marked_at(context, S, y), "the mark at the row indent")
+  assert_equal(text_entry(context, "amount").x, page.row_indent + page.mark_width, "the label after it")
+  assert_equal(text_entry(context, "rate").x, page.row_indent, "another row's label where it was")
+  assert_true(screen.text_extents(page.unseen_mark) < page.mark_width, "the mark leaves a gap before the label")
+  assert_screen_layout(context, "IO, a cursor that moved by itself")
+  enc(2, 1); redraw()
+  assert_equal(text_entry(context, "amount").x, page.row_indent, "unmarked: the label back at the row indent")
+end)
+
+-- #973: the io view invariant: a cursor that fell and is not yet shown
+-- (unseen) is always one that moved by itself (moved), so the draw that
+-- shows it marks it
+test("the io view invariant names an unseen cursor without its mark", function()
+  local context, S = cursor_fell()
+  assert_equal(invariant(S, "io view"), nil, "marked after the fall")
+  local view
+  local leave = S.registry.pages[S.constants.UI_PAGES.index.IO].leave
+  for index = 1, math.huge do
+    local name, value = debug.getupvalue(leave, index)
+    if not name then break end
+    if name == "view" then view = value end
+  end
+  assert_true(type(view) == "table", "the view table")
+  assert_equal(view.moved, true, "moved by itself")
+  assert_equal(view.unseen, false, "and shown")
+  h.allow_broken_invariants("the test breaks the io view invariant on purpose")
+  view.unseen, view.moved = true, false
+  local problem = invariant(S, "io view") or ""
+  assert_true(problem:find("unseen", 1, true) ~= nil, "an unseen cursor without its mark is reported: " .. problem)
+  view.moved = true
+  assert_equal(invariant(S, "io view"), nil, "unseen and marked holds")
+  redraw()
+  -- leaving the page before the draw keeps the mark for the draw on return
+  view.unseen = true
+  show_page("MAIN")
+  assert_equal(view.moved, true, "a page change before the row was shown keeps the mark")
+  assert_equal(invariant(S, "io view"), nil)
+  show_page("IO"); redraw()
+  assert_true(marked_at(context, S, row_y(context, "amount")), "shown, marked, on return")
 end)
 
 end

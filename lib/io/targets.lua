@@ -348,11 +348,20 @@ return function(S)
     S.lib.pages_io.go_to_row("targets", "voice", {id = "probe"})
   end
 
+  -- IO's mark for a cursor that moved by itself (#973): the cursor on voice
+  -- 1's jf route, then ALT+E2 to voice 2, whose rows name voice 2's params,
+  -- so the cursor falls to the row in its place and is marked
+  local function layout_cursor_moved()
+    S.lib.pages_io.go_to_row("targets", "voice", {param_id = "v1_out_jf"})
+    key(1, 1); enc(2, 1); key(1, 0)
+  end
+
   S.register_io_section({name = "voice",
     title = function() return "voice " .. tostring(S.selected_voice) end,
     rows = section_rows, status = section_status,
     layout_states = {{name = "a target's status", setup = layout_target_status},
-      {name = "a target's rows", setup = layout_target_rows}}})
+      {name = "a target's rows", setup = layout_target_rows},
+      {name = "a cursor that moved by itself", setup = layout_cursor_moved}}})
 
   -- The start step: the step output, after voices (registered as the
   -- sequencer loads); the cleanup step ends every note at once (the LFO
