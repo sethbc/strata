@@ -915,10 +915,13 @@ return function(S)
   -- slot's loads (missing, unreadable, unsupported, empty or damaged). value =
   -- (load number * 2 + emptied) * NUM_BUFFERS + slot index; the engine and
   -- load_buffer count a slot's loads alike, from 1. emptied is 0 when the load
-  -- left the slot as it was (canceling a recording in it), 1 when it left it
-  -- empty (the server's read failed after the slot was zeroed). The failed
-  -- load is undone only while the slot still tracks it (pending_loads), or
-  -- when it is a restore's own that the bound pushed out (#980): the
+  -- left the slot as it was (canceling a recording in it) or a later load,
+  -- clear or recording changed the slot since, 1 when it left it empty (the
+  -- server's read failed after the slot was zeroed) and nothing has changed
+  -- it since (#1035). The failed load is undone only while the slot still
+  -- tracks it (pending_loads), or when it is a restore's own that the bound
+  -- pushed out (#980), or, emptied, when the slot tracks no load and awaits
+  -- a plain load's read (#1035: the engine's slot is then empty): the
   -- newest load gives the slot the state the failed load left (the state it
   -- replaced: name, path, the file param, settled or not, from
   -- buffer_state_before_load; or an empty slot), so the bad path is never
@@ -957,7 +960,15 @@ return function(S)
       -- outcome is still to come, so this is its failure (a repeated report
       -- of a later one's names another number), and it leaves what a
       -- tracked restore's leaves (a restore loads into the empty slot of a
-      -- fresh script). #1035: a plain load forgotten so is not undone
+      -- fresh script)
+      failed, left = {path = buffer.path}, empty_buffer_state(false)
+    elseif emptied and #pending == 0 and buffer.confirm_since ~= nil and not buffer.restoring
+        and buffer.checking_from == nil and not buffer.recording and not buffer.finishing then
+      -- (#1035) a plain load given back by the failures of every later
+      -- one, its own pushed out of the list, awaiting its read: an emptied
+      -- report says the engine's slot is empty with no load applied since
+      -- (every later load was rejected), whichever load it names, so the
+      -- slot is empty as a tracked load's emptied failure leaves it
       failed, left = {path = buffer.path}, empty_buffer_state(false)
     else
       return
