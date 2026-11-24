@@ -874,13 +874,65 @@ checkPoolFull = {
 // A random run of 2000 commands over the seven voices (three synth voices,
 // two buffer voices, two input voices, all running): noteOn, noteOff (a
 // release or a cut) on random extra slots, now and then a voiceOff and
-// voiceOn or a new pool size. After every command live and releasing extra
-// notes are within the pool, and cutting note synths within it too; at the
-// end the note synths the server runs (one /g_queryTree) are exactly those
-// the slots hold, none held twice (h.noteNodesAgree)
+// voiceOn, a new pool size, a source switch (the synth, two slots, the input
+// or a voice source), a freeze or an unfreeze, or a type switch. After every
+// command live and releasing extra notes are within the pool, and cutting
+// note synths within it too, and every extra slot of every voice is as
+// docs/notes/engine/notes.md has it (The cuts and restarts): a state exactly
+// while it has a synth (a live or releasing slot has one, an empty slot
+// none), and a synth new since the command before of the kind the voice was
+// at its start, by the voice's source and freeze (a slot's \buffer; the
+// input's or a voice source's \input; a frozen synth voice's \stream; any
+// other synth voice's \voice), of that kind's def (\strataGrainBuf,
+// \strataGrainRing, the voice's type's def). The run must start notes of
+// all four kinds and restart some (a new synth in a slot whose last one the
+// same command cut). At the end the note synths the server runs (one
+// /g_queryTree) are exactly those the slots hold, none held twice
+// (h.noteNodesAgree)
 checkPoolRandom = {
     var random = Pseed(7, Pwhite(0.0, 1.0)).asStream, held = 0, cutting = 0, over = List.new, pool = 8, agree;
     var sources = [0, 1, 2, engine.inputSource, 0, engine.inputSource, 0];
+    var switchSources = [0, 1, 2, engine.inputSource] ++ (0 .. (engine.numVoices - 1)).collect({ arg each; engine.voiceSourceFirst + each });
+    var pick = { arg items; items[(random.next * items.size).floor.asInteger.min(items.size - 1)] };
+    var lastSynths = Array.fill(engine.numVoices, { Array.newClear(engine.noteSlots) }), slotFailure, slotFailures = 0;
+    var kinds = IdentityDictionary.new, restarts = 0, kindNow, defOf, checkSlots;
+    var types = (0 .. (engine.numVoices - 1)).collect({ arg voice; engine.voiceType(voice) });
+    // the kind a voice's note starts as, by its source and freeze
+    kindNow = { arg voice;
+        var source = engine.grainSource[voice];
+        case
+        { (source == engine.inputSource) or: { source >= engine.voiceSourceFirst } } { \input }
+        { source.inclusivelyBetween(1, engine.numBuffers) } { \buffer }
+        { engine.areaState[\freeze][\frozen][voice] } { \stream }
+        { \voice }
+    };
+    defOf = { arg kind, voice; switch (kind, \voice, { engine.voiceDefFor(voice) }, \buffer, { \strataGrainBuf }, { \strataGrainRing }) };
+    // every extra slot after a command: the first problem kept
+    checkSlots = { arg index, message;
+        engine.numVoices.do({ arg voice;
+            var records = state[\slots][voice], kind;
+            (1 .. (engine.noteSlots - 1)).do({ arg slot;
+                var record = records[slot], synth = record[\synth], problem;
+                if ([\empty, \live, \releasing].includes(record[\state]).not or: { (record[\state] == \empty) != synth.isNil }) {
+                    problem = "state % with synth %".format(record[\state], synth !? _.nodeID);
+                };
+                if (problem.isNil and: { synth.notNil } and: { synth !== lastSynths[voice][slot] }) {
+                    kind = kind ?? { kindNow.(voice) };
+                    if ((record[\kind] != kind) or: { synth.defName.asSymbol != defOf.(kind, voice) }) {
+                        problem = "a new % note of % (the voice's %, its def %)".format(record[\kind], synth.defName, kind, defOf.(kind, voice));
+                    } {
+                        kinds[kind] = (kinds[kind] ? 0) + 1;
+                        if (lastSynths[voice][slot].notNil and: { record[\cutting] === lastSynths[voice][slot] }) { restarts = restarts + 1 };
+                    };
+                };
+                if (problem.notNil) {
+                    slotFailures = slotFailures + 1;
+                    slotFailure = slotFailure ?? { [index, message, voice, slot, problem] };
+                };
+                lastSynths[voice][slot] = synth;
+            });
+        });
+    };
     [0, 1].do({ arg slot;
         if (engine.bufferFrames[slot] == 0) { command.(\loadBuffer, slot, h.stereoPath, 0); h.waitFor({ engine.bufferFrames[slot] > 0 }, 3) };
     });
@@ -893,12 +945,16 @@ checkPoolRandom = {
     withIgnoredLines.(List.new, {
         2000.do({ arg index;
             var draw = random.next, voice = (random.next * 7).floor.asInteger.min(6), slot = (random.next * 7).floor.asInteger.min(6) + 1;
+            var send = { arg ... message; command.(*message); checkSlots.(index, message) };
             case
-            { draw < 0.5 } { playNote.(voice, slot, 0.5 + random.next, 1.0, 110.0 + (random.next * 400)) }
-            { draw < 0.75 } { command.(\noteOff, voice, slot, 0) }
-            { draw < 0.9 } { command.(\noteOff, voice, slot, 1) }
-            { draw < 0.95 } { command.(\voiceOff, voice); command.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0) }
-            { pool = (random.next * 17).floor.asInteger.min(16); command.(\setNotePool, pool) };
+            { draw < 0.45 } { playNote.(voice, slot, 0.5 + random.next, 1.0, 110.0 + (random.next * 400)); checkSlots.(index, [\noteOn, voice, slot]) }
+            { draw < 0.65 } { send.(\noteOff, voice, slot, 0) }
+            { draw < 0.78 } { send.(\noteOff, voice, slot, 1) }
+            { draw < 0.83 } { send.(\voiceOff, voice); send.(\voiceOn, voice, 110.0, 0.2, 0.0, 0.1, 10.0, 1.0) }
+            { draw < 0.88 } { send.(\setGrainSource, voice, pick.(switchSources)) }
+            { draw < 0.93 } { send.(\setGrainParam, voice, \freeze, pick.([0.0, 1.0])) }
+            { draw < 0.97 } { send.(\setVoiceType, voice, pick.((0 .. (engine.numVoiceTypes - 1)))) }
+            { pool = (random.next * 17).floor.asInteger.min(16); send.(\setNotePool, pool) };
             held = max(held, heldCount.value);
             cutting = max(cutting, cuttingCount.value);
             if ((heldCount.value > pool) or: { cuttingCount.value > pool }) { over.add([index, heldCount.value, cuttingCount.value, pool]) };
@@ -910,7 +966,15 @@ checkPoolRandom = {
     check.(over.isEmpty and: { held > 0 } and: { agree[0] },
         "notes: live and releasing extra notes never exceed the pool (2000 commands over seven voices: at most % held and % cutting; over the pool at %; at the end the server's note synths the slots' %, % on the server, % in the slots, held twice %)".format(
             held, cutting, over.keep(5), agree[0], agree[1].size, agree[2].size, agree[3]));
+    check.(slotFailure.isNil and: { [\voice, \buffer, \input, \stream].every({ arg kind; (kinds[kind] ? 0) > 0 }) } and: { restarts > 0 },
+        "notes: in that run every extra slot has a state exactly while it has a synth, and each new synth the kind its voice was at its start (the first of % problems: %; new notes by kind %, % restarted)".format(
+            slotFailures, slotFailure, kinds.asSortedArray, restarts));
     h.stopAllVoices;
+    engine.numVoices.do({ arg voice;
+        command.(\setGrainParam, voice, \freeze, 0.0);
+        command.(\setVoiceType, voice, types[voice]);
+    });
+    server.sync;
 };
 
 // setNotePool below what is held cuts the notes past it: the oldest
