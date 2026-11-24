@@ -300,6 +300,33 @@ test("an encoder edit runs the touch hooks once; a detent the hold swallows runs
   assert_equal(#log, 1, "a plain set is no touch")
 end)
 
+-- #927, review round 2: the detent mark names the param only while the
+-- detent path sets it (a turn's apply, its stop at 0), never the PARAMS
+-- menu's own delta or another turn, and it is put back after an error
+test("the detent mark is the detent path's alone and never outlives an error (#927)", function()
+  local context = load_strata(); finish_startup(context)
+  local detent = local_value("S").lib.ui_detent
+  local seen = {}
+  local real = note_param_edit
+  note_param_edit = function(id) seen[#seen + 1] = id .. "=" .. tostring(detent.detent_param()); real(id) end
+  enc_param_delta(3, "v1_grain_pitch", 1)
+  params:set("v1_grain_skew", 0.02)
+  enc_param_delta(3, "v1_grain_skew", -5)          -- reaches 0: the stop at 0
+  params:lookup_param("v1_freq"):delta(1)          -- PARAMS' E3, a turn through the param's own delta
+  detent.as_turn("v1_grain_size", function() params:set("v1_grain_size", 0.2) end)
+  note_param_edit = real
+  assert_equal(table.concat(seen, " "),
+    "v1_grain_pitch=v1_grain_pitch v1_grain_skew=nil v1_grain_skew=v1_grain_skew v1_freq=nil v1_grain_size=nil",
+    "marked on the detent path only (the plain set of skew before it is not)")
+  assert_equal(params:get("v1_grain_skew"), 0, "the turn stopped at 0")
+  -- an action that raises inside the detent path leaves no mark
+  params:set_action("reverb_mix", function() error("probe") end)
+  local raised = not pcall(enc_param_delta, 3, "reverb_mix", 1)
+  assert_true(raised, "the action's error comes through")
+  assert_equal(detent.detent_param(), nil, "no detent mark is left")
+  assert_equal(local_value("S").turning_param, nil, "nor a turn")
+end)
+
 -- #927: each touch passes the param's value from before the edit, third
 test("the touch hooks get the value from before the edit (#927)", function()
   local context = load_strata(); finish_startup(context)
