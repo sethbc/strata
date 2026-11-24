@@ -2148,14 +2148,22 @@ end
 -- lines; but the mirror reorder (#999), the one write the workflow makes
 -- there, exactly as pinned: a line, not a step, is let through, so a write
 -- added beside the reorder is still refused
+-- #1024: and what changes apt's trust outside its configuration, named as
+-- such (names_apt_trust): a write, in the same forms, under
+-- /usr/share/keyrings/ or /var/lib/apt/lists/ (gpg's --keyring among them,
+-- there or under /etc/apt/, in a command that does not only read), a cd or
+-- pushd into either (past its options, as into /etc/apt/), an assignment
+-- of such a path, and APT::Key:: and Acquire::gpgv (how gpgv checks a
+-- list's signature)
 CI_WORKFLOW.UBUNTU_ONLY = CI_WORKFLOW.LIST_UPDATE:match("\n(ubuntu_only=[^\n]*)\n")
 CI_WORKFLOW.MIRRORS = CI_WORKFLOW.LIST_UPDATE:match("\n(mirrors=[^\n]*)\n")
 CI_WORKFLOW.REORDER = CI_WORKFLOW.LIST_UPDATE:match("\n%s*(sudo sed %-i [^\n]*)\n")
--- sudo's options that take a value (sudo(8)), skipped with it
+-- sudo's options that take a value (sudo(8)), skipped with it (#1024: -h
+-- and --host take a host)
 CI_WORKFLOW.SUDO_VALUES = { ["-u"] = true, ["-g"] = true, ["-p"] = true, ["-C"] = true, ["-D"] = true, ["-r"] = true,
-  ["-t"] = true, ["-T"] = true, ["-U"] = true, ["-R"] = true, ["--user"] = true, ["--group"] = true, ["--prompt"] = true,
-  ["--close-from"] = true, ["--chdir"] = true, ["--role"] = true, ["--type"] = true, ["--command-timeout"] = true,
-  ["--other-user"] = true, ["--chroot"] = true }
+  ["-t"] = true, ["-T"] = true, ["-U"] = true, ["-R"] = true, ["-h"] = true, ["--user"] = true, ["--group"] = true,
+  ["--prompt"] = true, ["--close-from"] = true, ["--chdir"] = true, ["--role"] = true, ["--type"] = true,
+  ["--command-timeout"] = true, ["--other-user"] = true, ["--chroot"] = true, ["--host"] = true }
 -- #1011: whether a word names a file of apt's configuration: a path under
 -- /etc/apt/ (with doubled slashes or ./ folded), a file named apt.conf*, or
 -- a variable assigned one (`assigned`)
@@ -2167,6 +2175,23 @@ function CI_WORKFLOW.names_apt_config(word, assigned)
   end
   return false
 end
+-- #1024: whether a word names a file apt trusts outside its configuration:
+-- a path under /usr/share/keyrings/ (the keyrings its sources' Signed-By
+-- name) or /var/lib/apt/lists/ (the lists it takes as checked), folded as
+-- names_apt_config folds, or a variable assigned one (`assigned`)
+function CI_WORKFLOW.names_apt_trust(word, assigned)
+  local path = word:gsub("['\"]", ""):gsub("/%./", "/"):gsub("//+", "/")
+  if path:find("/usr/share/keyrings", 1, true) or path:find("/var/lib/apt/lists", 1, true) then return true end
+  for name in path:gmatch("%${?([%a_][%w_]*)") do
+    if assigned[name] then return true end
+  end
+  return false
+end
+-- #1024: gpg's commands that only read a keyring (gpg(1)); any other
+-- command naming a keyring may write it
+CI_WORKFLOW.GPG_READS = { ["--verify"] = true, ["--list-keys"] = true, ["-k"] = true, ["--list-public-keys"] = true,
+  ["--list-sigs"] = true, ["--check-sigs"] = true, ["--fingerprint"] = true, ["--list-packets"] = true, ["--export"] = true,
+  ["--show-keys"] = true }
 -- #1011: the words a command writes to: its redirections' files, and a
 -- writing command's targets (its name found past env assignments and the
 -- wrappers that run another command)
@@ -2229,6 +2254,16 @@ function CI_WORKFLOW.written_words(command)
       elseif word:match("^%-%-output") or word:match("^%-[oO].") then targets[#targets + 1] = word end
     end
   end
+  -- #1024: gpg's keyring (--keyring, --primary-keyring) is written by any
+  -- command of gpg's but those that only read (gpg takes one command)
+  local reads = name ~= "gpg"
+  for _, word in ipairs(rest) do
+    if CI_WORKFLOW.GPG_READS[word] then reads = true end
+  end
+  for index, word in ipairs(reads and {} or rest) do
+    if word == "--keyring" or word == "--primary-keyring" then targets[#targets + 1] = rest[index + 1] or ""
+    elseif word:match("^%-%-keyring=") or word:match("^%-%-primary%-keyring=") then targets[#targets + 1] = word end
+  end
   return targets
 end
 function CI_WORKFLOW.apt_weakenings(workflow)
@@ -2236,13 +2271,15 @@ function CI_WORKFLOW.apt_weakenings(workflow)
   -- #1011: the names assigned a file of apt's configuration anywhere in the
   -- workflow (a script's assignment, an export or an env: key)
   local assigned = {}
+  -- #1024: and those assigned a path of apt's keyrings or lists
+  local assigned_trust = {}
   for line in (workflow .. "\n"):gmatch("([^\n]*)\n") do
     local plain = line:lower():gsub("[-_]", "")
     local trimmed = line:match("^%s*(.-)%s*$")
     local reads_ubuntu = trimmed == CI_WORKFLOW.UBUNTU_ONLY
     for _, word in ipairs({ "allowunauthenticated", "allowinsecurerepositories", "allowdowngradetoinsecurerepositories",
         "allowweakrepositories", "checkvaliduntil", "checkdate", "forceyes", "verifypeer", "verifyhost", "trusted=yes",
-        "sources.list", "dir::etc::source", "trusted", "aptkey" }) do
+        "sources.list", "dir::etc::source", "trusted", "aptkey", "apt::key::", "acquire::gpgv" }) do
       if plain:find(word, 1, true) and not (reads_ubuntu and (word == "sources.list" or word == "dir::etc::source")) then
         found[#found + 1] = word .. ": " .. trimmed
       end
@@ -2272,6 +2309,10 @@ function CI_WORKFLOW.apt_weakenings(workflow)
       if not reads_ubuntu and trimmed ~= CI_WORKFLOW.MIRRORS then
         found[#found + 1] = "an assignment of a path of apt's configuration: " .. trimmed
       end
+    end
+    if name and CI_WORKFLOW.names_apt_trust(value, {}) then
+      assigned_trust[name] = true
+      found[#found + 1] = "an assignment of a path of apt's keyrings or lists: " .. trimmed
     end
   end
   for _, job in ipairs(CI_WORKFLOW.jobs(workflow)) do
@@ -2307,12 +2348,33 @@ function CI_WORKFLOW.apt_weakenings(workflow)
               break
             end
           end
-          if (words[1] == "cd" or words[1] == "pushd") and words[2] and CI_WORKFLOW.names_apt_config(words[2], assigned) then
+          -- #1024: the folder past cd's and pushd's options (-P, -L, -e,
+          -- -@, -n, a +N or -N stack entry; -- ends them)
+          local folder
+          if words[1] == "cd" or words[1] == "pushd" then
+            folder = 2
+            while words[folder] and (words[folder]:match("^%-.") or words[folder]:match("^%+%d")) do
+              folder = folder + 1
+              if words[folder - 1] == "--" then break end
+            end
+            folder = words[folder]
+          end
+          if folder and CI_WORKFLOW.names_apt_config(folder, assigned) then
             found[#found + 1] = "a change into apt's configuration folder: " .. trimmed
           end
-          for _, target in ipairs(reorder and {} or CI_WORKFLOW.written_words(command)) do
+          if folder and CI_WORKFLOW.names_apt_trust(folder, assigned_trust) then
+            found[#found + 1] = "a change into apt's keyrings or lists: " .. trimmed
+          end
+          local written = reorder and {} or CI_WORKFLOW.written_words(command)
+          for _, target in ipairs(written) do
             if CI_WORKFLOW.names_apt_config(target, assigned) then
               found[#found + 1] = "a write into apt's configuration: " .. trimmed
+              break
+            end
+          end
+          for _, target in ipairs(written) do
+            if CI_WORKFLOW.names_apt_trust(target, assigned_trust) then
+              found[#found + 1] = "a write into apt's keyrings or lists: " .. trimmed
               break
             end
           end
@@ -2363,6 +2425,7 @@ function CI_WORKFLOW.relocation_cases()
   local parts = "-o Dir::Etc::sourceparts=-)"
   local list_retry = "priority:9/' \"$mirrors\"\n            cat \"$mirrors\"\n            status=0\n            sudo timeout --kill-after=5 60 "
   local write = "a write into apt's configuration: "
+  local trust = "a write into apt's keyrings or lists: "
   local dir = "a Dir:: setting (but Dir::State::status): "
   local kept_line = "          echo \"$kept package files from the cache, each matching apt's lists\"\n"
   return {
@@ -2427,6 +2490,32 @@ function CI_WORKFLOW.relocation_cases()
       edits = before_install("cat > \"$RUNNER_TEMP/x\" <<'EOF'", 'Dir { Etc { SourceList "/tmp/x"; }; };', "EOF") },
     { name = "a heredoc of nested settings over lines", expect = { "apt's nested configuration (Dir {): Dir {", "apt's nested configuration (Etc {): Etc {" },
       edits = before_install("cat > \"$RUNNER_TEMP/x\" <<'EOF'", "Dir {", "Etc {", 'Main "/tmp/x.conf";', "};", "};", "EOF") },
+    -- #1024: a write into the keyrings apt reads or the lists it trusts as
+    -- checked, gpg's keyring there, and how gpgv checks a list's signature
+    { name = "a download into /usr/share/keyrings/", expect = trust .. "curl",
+      edits = instead("curl -fsSL -o /usr/share/keyrings/x.gpg https://example.com/k.gpg") },
+    { name = "a tee into /usr/share/keyrings/", expect = trust .. "echo x | sudo tee", edits = instead("echo x | sudo tee /usr/share/keyrings/x.asc") },
+    { name = "a tee into /usr/share/keyrings/, slashes doubled", expect = trust .. "echo x | sudo tee",
+      edits = instead("echo x | sudo tee //usr/share/./keyrings//x.asc") },
+    { name = "gpg --import into a keyring under /usr/share/keyrings/", expect = trust .. "gpg --no-default-keyring",
+      edits = instead("gpg --no-default-keyring --keyring /usr/share/keyrings/x.gpg --import k.asc") },
+    { name = "gpg --keyring= under /etc/apt/ receiving keys", expect = write .. "sudo gpg --keyring=",
+      edits = instead("sudo gpg --keyring=/etc/apt/keyrings/x.gpg --recv-keys 0123456789ABCDEF") },
+    { name = "a cp into /var/lib/apt/lists/", expect = trust .. "sudo cp",
+      edits = instead('sudo cp "$RUNNER_TEMP/x_Packages" /var/lib/apt/lists/') },
+    { name = "a cd into /var/lib/apt/lists/", expect = "a change into apt's keyrings or lists: cd /var/lib/apt/lists",
+      edits = before_install("cd /var/lib/apt/lists", "echo x > x_Packages", "cd -") },
+    { name = "a keyring path assigned, then written through", expect = { "an assignment of a path of apt's keyrings or lists: keys=/usr/share/keyrings/x.gpg",
+        trust .. 'echo x | sudo tee "$keys"' }, edits = before_install("keys=/usr/share/keyrings/x.gpg", 'echo x | sudo tee "$keys"') },
+    { name = "APT::Key::gpgvcommand", expect = "apt::key::: sudo apt-get", edits = on_install("-o APT::Key::gpgvcommand=/tmp/gpgv") },
+    { name = "Acquire::gpgv::Options", expect = "acquire::gpgv: sudo apt-get", edits = on_install("-o Acquire::gpgv::Options::=--ignore-time-conflict") },
+    -- #1024's comment: sudo's -h takes a host, and cd and pushd options
+    { name = "a tee under sudo -h", expect = write .. "echo x | sudo -h localhost tee", edits = instead("echo x | sudo -h localhost tee /etc/apt/apt.conf.d/x") },
+    { name = "a tee under sudo --host", expect = write .. "echo x | sudo --host localhost tee", edits = instead("echo x | sudo --host localhost tee /etc/apt/apt.conf.d/x") },
+    { name = "a cd -P into /etc/apt/", expect = "a change into apt's configuration folder: cd -P /etc/apt", edits = before_install("cd -P /etc/apt", "echo x > preferences.d/x", "cd -") },
+    { name = "a pushd -n into /etc/apt/", expect = "a change into apt's configuration folder: pushd -n /etc/apt", edits = before_install("pushd -n /etc/apt", "popd") },
+    { name = "a cd -P -e -- into /usr/share/keyrings/", expect = "a change into apt's keyrings or lists: cd -P -e -- /usr/share/keyrings",
+      edits = before_install("cd -P -e -- /usr/share/keyrings", "echo x > x.gpg", "cd -") },
   }
 end
 
@@ -2667,13 +2756,17 @@ test("the workflow refuses every weakening of apt's checks and every install of 
   for _, case in ipairs(CI_WORKFLOW.relocation_cases()) do cases[#cases + 1] = case end
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, cases, "engine-shard")
   -- #1011: a -c or -C of a command that is not apt's, a read of a file
-  -- under /etc/apt/ and the Dir::State of the SHA512 list's making pass
+  -- under /etc/apt/ and the Dir::State of the SHA512 list's making pass;
+  -- #1024: so do Acquire::Retries, a read from /usr/share/keyrings/ and a
+  -- gpg --verify against a keyring there
   local install = '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n'
   local passes = "          python3 -c 'import sys'\n          git -C \"$RUNNER_TEMP\" status\n"
     .. "          cp /etc/apt/apt-mirrors.txt \"$RUNNER_TEMP/\"\n          sudo apt-get -o Dir::State::status=/tmp/s check\n"
+    .. "          sudo apt-get -o Acquire::Retries=1 check\n          cp /usr/share/keyrings/ubuntu-archive-keyring.gpg \"$RUNNER_TEMP/\"\n"
+    .. "          gpg --no-default-keyring --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg --verify x.sig x\n"
   for _, cache in ipairs(CI_WORKFLOW.CACHES) do
     assert_equal(table.concat(CI_WORKFLOW.apt_weakenings(CI_WORKFLOW.mutated(workflow, install, passes .. install, cache.job)), " | "), "",
-      "the weakenings of " .. cache.where .. " with python3 -c, git -C, a read under /etc/apt/ and Dir::State")
+      "the weakenings of " .. cache.where .. " with python3 -c, git -C, a read under /etc/apt/, Dir::State, Acquire::Retries and reads under /usr/share/keyrings/")
   end
   -- the pinned ubuntu_only line itself, as the workflow indents it, passes
   assert_equal(table.concat(CI_WORKFLOW.apt_weakenings("          " .. CI_WORKFLOW.UBUNTU_ONLY .. "\n"), " | "), "",
