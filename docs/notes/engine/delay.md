@@ -22,6 +22,21 @@
 - Frozen and cleared, the loop empties and stays frozen on silence (the input is closed), until a release opens the input again. That is the engine's answer to the pair; Lua no longer sends it: a clear on a frozen delay releases the freeze first, `setDelayFreeze(0)` then `clearDelay()` (#912; Freeze by bypass, below, row 7).
 - The node took 16.9 KB of the pool on 3.14.1 and on 3.13 with the freeze and the clear (the memory area's twenty-node probe; 7.5 KB before them, 14.3 KB before the clear's fade back in), and 24.4 KB with 3.8's shimmer (its feedback blend: `docs/notes/engine/shimmer.md`), under its 30 KB limit (`delayDefLimitKB`, 20 before shimmer).
 
+**The node's states.** They live in the graph (`hold`, the `Slew` of `frozen`; the clear's `Trig1` window; the `Gate` on the time), and sclang keeps only the `frozen` it last sent (`keepEffectControls`), so the engine reports none of them. A running node is unfrozen, frozen (with `hold` ramping either way over 20 ms) or in a clear's window, a frozen one too:
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| unfrozen | `setDelayFreeze(1)` | frozen | over 20 ms: the loop's gain to 1, the input closed, the time held (rounded to whole samples) and ping-pong snapped |
+| frozen | `setDelayFreeze(0)` | unfrozen | over 20 ms: the input open again, the time gliding to what `setDelay` last sent (0.1 s), the loop decaying at the kept feedback |
+| unfrozen | `setDelay` | unfrozen | the time glides over 0.1 s, the rest lagged as before |
+| frozen | `setDelay` | frozen | kept and set; the gate holds the time until the release |
+| unfrozen | `clearDelay` | clearing | the feedback closed in one block and the return over 3 ms, for the delay time and 5 ms |
+| clearing | the window's end | unfrozen | both open again over 20 ms; the line holds only what came in since |
+| clearing | `setDelay` with a longer time | clearing | once the window ends, the longer time reads audio from before the clear |
+| frozen | `clearDelay` | frozen, on silence | the loop empties and the closed input keeps it empty until a release (Lua releases first, #912: row 7 below) |
+| bypassed (fading or freed) | `clearDelay` | as it was | nothing sent (`effectLive`) |
+| any | a bypass, a lift | Freeze by bypass, below | |
+
 ## Freeze by bypass
 
 The freeze and the bypass meet in four states of the delay: running (unfrozen or frozen), bypassed and fading (`setBypass`'s level at 0, the node still there for `bypassFadeTime`), and freed (no node, the line emptied: `docs/notes/engine/effects.md`); row 7 is the freeze's other coupling, with a clear. Each guard is Lua's (`lib/fx_hold.lua` and the bypass params' action, `docs/notes/lua/fx-hold.md`), the engine's (this file and `setEffectBypass`), or both; the engine's hold for any client, the check's commands among them.

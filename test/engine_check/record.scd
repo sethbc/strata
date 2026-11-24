@@ -42,42 +42,8 @@ var reportsFor = { arg slot, start = 0;
     }).select({ arg report; report[0] == slot })
 };
 var nowReports = { h.pollValues(\recordState).size };
-// The slot's recordState, bufferState and bufferLoadFailed reports since
-// `start` (an index into every poll message), in the order they arrived, as
-// Symbols: 'armed', 'recording', 'ended', 'canceled', 'length <seconds>',
-// 'loadFailed <load> <emptied>'
+// every poll message so far (an index into them for the walk's reports)
 var nowMessages = { h.pollMessages.size };
-var slotEvents = { arg slot, start;
-    var stride = engine.numBuffers, lengthStride = engine.bufferStateStride, events = List.new(64);
-    var stateIndex = CronePollRegistry.getPollFromName(\recordState).index;
-    var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index;
-    var failedIndex = CronePollRegistry.getPollFromName(\bufferLoadFailed).index;
-    h.pollMessages.array.copyRange(start, h.pollMessages.size - 1).do({ arg msg;
-        var value = msg[2], whole = value.round.asInteger;
-        case
-        { (msg[1] == stateIndex) and: { (whole % stride) == slot } } {
-            events.add(#[armed, recording, ended, canceled][(whole div: stride) % 4]) }
-        { (msg[1] == lengthIndex) and: { stateSlot.(value) == slot } } {
-            events.add(("length " ++ (value - ((value / lengthStride).floor * lengthStride)).round(0.01)).asSymbol) }
-        { (msg[1] == failedIndex) and: { (whole % stride) == slot } } {
-            events.add(("loadFailed " ++ ((whole div: stride) div: 2) ++ " " ++ ((whole div: stride) % 2)).asSymbol) };
-    });
-    events.asArray
-};
-// The events from the slot's first 'canceled' on (empty if none)
-var fromCanceled = { arg events; events.indexOf('canceled') !? { arg at; events.drop(at) } ? [] };
-// true when a slot's events (slotEvents) end a take kept through a bad load
-// (#890): a 'loadFailed', then 'ended', the last length between them the
-// slot's seconds now (its frames, the take's: the later bufferState that
-// settles Lua on the take), and nothing canceled
-var endsAfterFailure = { arg events, slot;
-    var failed = events.detectIndex({ arg event; event.asString.beginsWith("loadFailed") });
-    var after = if (failed.notNil) { events.drop(failed + 1) } { [] };
-    var ended = after.indexOf('ended');
-    var lengths = if (ended.notNil) { after.keep(ended).select({ arg event; event.asString.beginsWith("length") }) } { [] };
-    ended.notNil and: { lengths.notEmpty } and: { lengths.last == ("length " ++ engine.bufferStateSeconds(slot)).asSymbol }
-        and: { events.includes('canceled').not }
-};
 // A peaks file's frames line, or nil when there is no file
 var peaksFileFrames = { arg path;
     var frames;
@@ -716,180 +682,285 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
     check.((before > 0) and: { duringPlay == before } and: { after == 0 },
         "record: a synced replace take keeps its slot playing until bufferFadeWait + recordPrepMargin before the take (before %, voice %, after %)".format(before, duringPlay, after));
 });
-// #311's state table: a canceled take leaves its slot as the take left it
-// (untouched before its preparation, empty after), and its "canceled"
-// report is followed by the slot's length
-test.("record: a bad load in a synced take's wait cancels it and leaves the slot's audio", {
-    var frames = (0.5 * sampleRate).round.asInteger, path = writeLevelFile.("half.wav", 0.5, 0.5), start, events, sample;
-    h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ engine.bufferFrames[4] == frames });
-    start = nowMessages.value;
-    record.(4, 0.3, 1.0, 0, 0, 0, 0, 2.0);
-    0.3.wait;
-    h.command(\loadBuffer, 4, h.tempDir +/+ "no-such-file-311.wav", 0);
-    settle.(0.1);
-    sample = h.bufferSample(engine.buffersL[4], 100);
-    events = fromCanceled.(slotEvents.(4, start)).keep(3);
-    check.((engine.bufferFrames[4] == frames) and: { (sample - 0.5).abs < 1e-4 } and: { state[\takes][4].isNil }
-        and: { engine.recordSynths[4].isNil }
-        and: { events == ['canceled', 'length 0.5', ("loadFailed " ++ engine.bufferLoads[4] ++ " 0").asSymbol] },
-        "record: a bad load in a synced take's wait cancels it and leaves the slot's audio (% frames, sample %, reports %)".format(
-            engine.bufferFrames[4], sample, events));
-});
-test.("record: a synced take stopped before its preparation leaves its slot as it was", {
-    var frames = (0.5 * sampleRate).round.asInteger, path = writeLevelFile.("half.wav", 0.5, 0.5), start, events, sample, later;
-    h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ engine.bufferFrames[4] == frames });
-    start = nowMessages.value;
-    record.(4, 0.3, 1.0, 0, 0, 0, 0, 2.0);
-    0.3.wait;
-    h.command(\stopRecord, 4);
-    settle.(0.1);
-    sample = h.bufferSample(engine.buffersL[4], 100);
-    events = slotEvents.(4, start);
-    // and its preparation (at 1.79 s) never runs
-    1.8.wait; server.sync;
-    later = engine.bufferFrames[4];
-    check.((engine.bufferFrames[4] == frames) and: { later == frames } and: { (sample - 0.5).abs < 1e-4 }
-        and: { state[\takes][4].isNil } and: { engine.recordSynths[4].isNil }
-        and: { events.includes('armed') } and: { fromCanceled.(events).keep(2) == ['canceled', 'length 0.5'] },
-        "record: a synced take stopped before its preparation leaves its slot as it was (% frames, at 2.2 s %, sample %, reports %)".format(
-            engine.bufferFrames[4], later, sample, events));
-});
-test.("record: a take canceled after its preparation leaves the slot empty and says so", {
-    var start, events;
-    reset.(1);
-    start = nowMessages.value;
-    record.(1, 0.3, 1.0, 0, 0, 0.9);
-    settle.(0.1);
-    h.command(\stopRecord, 1);
-    settle.(0.1);
-    events = slotEvents.(1, start);
-    check.((engine.bufferFrames[1] == 0) and: { engine.recordSynths[1].isNil }
-        and: { fromCanceled.(events).keep(2) == ['canceled', 'length 0.0'] },
-        "record: a take canceled after its preparation leaves the slot empty and says so (% frames, reports %)".format(
-            engine.bufferFrames[1], events));
-});
-test.("record: a recording sent while a load is in flight is judged on the empty slot", {
-    var path = h.tempDir +/+ "cd-rate-374.wav", other = writeLevelFile.("server-rate.wav", 0.5, 0.3), take, kind, loop, rate;
-    h.writeTestFile(path, 44100, 22050, [0.25, 0.25]);
-    h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ engine.bufferFrames[4] > 0 });
-    // in one go: the second load empties the slot (at the server's rate:
-    // it holds no audio), its reads still to come
-    h.command(\loadBuffer, 4, other, 0);
-    rate = engine.bufferSampleRates[4];
-    record.(4, 0.2, 1.0, 0.5, 0, 0, 1);
-    take = state[\takes][4];
-    kind = take !? { take[\kind] };
-    loop = take !? { take[\loop] };
-    h.command(\stopRecord, 4);
-    waitDone.(4, 2);
-    check.((kind == \playable) and: { loop == 1 } and: { rate == sampleRate },
-        "record: a recording sent while a load is in flight is judged on the empty slot (kind %, loop %, rate %)".format(kind, loop, rate));
-});
-// ... also in the last step of a load taking effect: the reads are done,
-// its length (and, since #946, the file's rate with it) still to come once
-// its peaks file is in place, the slot empty at the server's rate. The
-// peaks mover, stopped, holds that step open (for up to
-// peaksMoverTimeout), so the recording lands in it
-test.("record: a recording sent while a load's peaks file is written is judged on the empty slot", {
-    var path = h.tempDir +/+ "cd-rate-peaks.wav", mover = engine.areaState[\waveform][\mover], take, kind, loop, rate, frames;
-    h.writeTestFile(path, 44100, 22050, [0.25, 0.25]);
-    ("kill -STOP " ++ mover[\pid]).systemCmd;
-    h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ mover[\pending] > 0 }, 0.8);
-    rate = engine.bufferSampleRates[4];
-    frames = engine.bufferFrames[4];
-    record.(4, 0.2, 1.0, 0.5, 0, 0, 1);
-    take = state[\takes][4];
-    kind = take !? { take[\kind] };
-    loop = take !? { take[\loop] };
-    ("kill -CONT " ++ mover[\pid]).systemCmd;
-    h.command(\stopRecord, 4);
-    waitDone.(4, 2);
-    h.waitFor({ mover[\pending] == 0 }, 3);
-    check.((rate == sampleRate) and: { frames == 0 } and: { kind == \playable } and: { loop == 1 },
-        "record: a recording sent while a load's peaks file is written is judged on the empty slot (rate %, % frames, kind %, loop %)".format(
-            rate, frames, kind, loop));
-});
-// #890: a take that is ending (its record synth freed, its peaks file or
-// its frame count still awaited) completes, whatever arrives then: a bad
-// load, a clear or a new recording reports it ended, never canceled. The
-// peaks mover, stopped, holds a one-shot's ending open (for up to
-// peaksMoverTimeout) while the command lands in it: three takes at once,
-// one a slot (5, 6, 7: the bad load, the clear, the new recording)
-test.("record: a bad load, a clear and a new recording while a one-shot take is ending: the take completes and reports ended", {
-    var mover = engine.areaState[\waveform][\mover], frames = (0.05 * sampleRate).round.asInteger;
-    var slots = [5, 6, 7], events = [\badLoad, \clear, \record], start, numbers, ending, results;
-    slots.do({ arg slot; h.command(\clearBuffer, slot) });
-    server.sync;
-    start = nowMessages.value;
-    ("kill -STOP " ++ mover[\pid]).systemCmd;
-    slots.do({ arg slot; record.(slot, 0.05) });
-    numbers = slots.collect({ arg slot; state[\recordCounts][slot] });
-    ending = h.waitFor({ slots.every({ arg slot; engine.recordSynths[slot].isNil and: { state[\takes][slot].notNil } }) }, 2);
-    h.command(\loadBuffer, 5, h.tempDir +/+ "missing.wav", 0);
-    h.command(\clearBuffer, 6);
-    record.(7, 0.05);
-    ("kill -CONT " ++ mover[\pid]).systemCmd;
-    slots.do({ arg slot; waitDone.(slot, 3) });
-    h.waitFor({ mover[\pending] == 0 }, 3);
-    results = slots.collect({ arg slot, index;
-        (event: events[index], frames: engine.bufferFrames[slot], events: slotEvents.(slot, start),
-            reports: reportsFor.(slot).select({ arg report; report[1] == numbers[index] }).collect({ arg report; report[2] }))
-    });
-    check.(ending and: { results.every({ arg each; each[\reports] == [1, 2] }) }
-        and: { results[0][\frames] == frames } and: { results[1][\frames] == 0 } and: { results[2][\frames] == frames }
-        and: { results[0][\events].includes('canceled').not },
-        "record: a bad load, a clear and a new recording while a one-shot take is ending: the take completes and reports ended (all ending %: %)".format(
-            ending, results.collect({ arg each; [each[\event], each[\reports], each[\frames], each[\events]] })));
-    check.(ending and: { results[0][\frames] == frames } and: { endsAfterFailure.(results[0][\events], 5) },
-        "record: a bad load while a one-shot take is ending leaves the take whole: after the failure its length, then ended, and the slot holds its % frames (% frames, reports %)".format(
-            frames, results[0][\frames], results[0][\events]));
-    slots.do({ arg slot; h.command(\clearBuffer, slot) });
-    server.sync;
-});
-// ... and a stopped replace take whose frame count is still awaited (the
-// engine's /n_end handler has asked for it, its reply not read yet): the
-// bad load comes from a responder that runs after that handler
-test.("record: a bad load while a stopped take awaits its frame count: the take completes and reports ended", {
-    var start, number, node, phase, events, responder;
-    reset.(5);
-    record.(5, 1.0);
-    h.waitFor({ state[\takes][5] !? { arg take; take[\started] } ? false }, 2);
-    number = state[\recordCounts][5];
-    node = engine.recordSynths[5].nodeID;
-    start = nowMessages.value;
-    responder = OSCFunc({ arg msg;
-        if ((msg[1] == node) and: { phase.isNil }) {
-            phase = [engine.recordSynths[5].isNil, engine.stopReplies[5].notNil, state[\takes][5].notNil];
-            h.command(\loadBuffer, 5, h.tempDir +/+ "missing.wav", 0);
+// ---- the state table, row by row (#944) ------------------------------------
+// docs/notes/engine/record.md's state table, walked. Each entry of walkRows
+// is one of its rows (the row's number, the state the command arrives in,
+// the command), with the slot's reports in order from the command on and
+// its frames once everything has ended, both written from the table. One
+// function, walkRow, runs every entry on one slot: it clears the slot,
+// reaches the entry's state from there (walkStates: the commands that get
+// there, and the phase the engine must then be in, read from its own
+// records by walkPhase, never kept by the check), sends the command, waits
+// until no take, record synth, rename or load is left, and compares. A
+// report is written as the poll gives it, with its numbers counted from the
+// command: a recordState's state and its record number less the slot's
+// count before the command (0 the take the state holds, 1 the command's),
+// 'length <seconds>' for a bufferState, and a bufferLoadFailed's load less
+// the slot's loads before the command (1 the command's) and its emptied
+// bit. 'length F' is any length above 0 that the slot holds when the row
+// ends (a stopped take's frame count). Rows 5 and 16 need a long file's
+// check, which only a high engine runs (buffers.scd's checkLongSlots), and
+// row 4's failed server read a file that vanishes between the check and the
+// read: they are not walked here. An entry whose behavior is an open
+// issue's carries known: <issue>, asserting what the engine does today
+{
+    var slot = 4, levelFrames = (0.5 * sampleRate).round.asInteger, takeFrames = (0.05 * sampleRate).round.asInteger;
+    var monoFrames = 4410, tableRows = (1 .. 18), notWalked = [5, 16];
+    var audioPath = writeLevelFile.("walk-audio.wav", 0.5, 0.5), otherPath = h.tempDir +/+ "walk-other-rate.wav";
+    var missingPath = h.tempDir +/+ "walk-missing.wav", mover = engine.areaState[\waveform][\mover];
+    // the mark a row sends where its command begins: a /poll/value of a
+    // poll that does not exist, to the address the polls send to (the
+    // check's own), so every report sent before the command arrives before
+    // it and every report the command causes after it
+    var markIndex = -1, marks = 0, poll = engine.bufferStatePoll, period = poll.period, periodic;
+    var holdMover = { ("kill -STOP " ++ mover[\pid]).systemCmd };
+    var freeMover = { ("kill -CONT " ++ mover[\pid]).systemCmd };
+    // The slot's recording phase, from the engine's records: no take; a
+    // take waiting for its preparation or preparing (not sent); sent and
+    // not started (paused until its timestamp, or unarmed below its
+    // level); recording; in its stop fade; ending (its synth freed, its
+    // frame count or peaks file awaited); orphan, a record synth with no
+    // take (never legal)
+    var walkPhase = { arg index;
+        var take = state[\takes][index], synth = engine.recordSynths[index];
+        case
+        { take.isNil } { if (synth.isNil) { \none } { \orphan } }
+        { synth.isNil } { \ending }
+        { take[\started] } { if (take[\stopping]) { \stopping } { \recording } }
+        { take[\sent] == true } { \sent }
+        { \waiting }
+    };
+    // a wait for a condition in 5 ms steps (h.waitFor's 50 ms would add
+    // tens of ms to each step of each row)
+    var soon = { arg condition, limit = 3;
+        var waited = 0;
+        while { condition.value.not and: { waited < limit } } { 0.005.wait; waited = waited + 0.005 };
+        condition.value
+    };
+    // a load in place: its frames and its number taken effect (h.awaitLoad's test)
+    var loaded = { (engine.loadsSuperseded(slot) >= engine.bufferLoads[slot]) and: { engine.bufferFrames[slot] > 0 } };
+    var load = { arg path; h.command(\loadBuffer, slot, path, 0); soon.(loaded) };
+    var reachPhase = { arg phase; soon.({ walkPhase.(slot) == phase }, 2) };
+    // the commands of the rows
+    var badLoad = { h.command(\loadBuffer, slot, missingPath, 0) };
+    var goodLoad = { h.command(\loadBuffer, slot, h.monoPath, 0) };
+    var clearSlot = { h.command(\clearBuffer, slot) };
+    var stopTake = { h.command(\stopRecord, slot) };
+    var replaceTake = { record.(slot, 0.05) };
+    var syncedTake = { record.(slot, 0.05, 1.0, 0, 0, 0, 0, 0.3) };
+    var playableTake = { record.(slot, 0.05, 1.0, 0.5) };
+    // Each state: the phase it is in, what the table calls it, and reach,
+    // which gets there from an empty slot and calls fire (the command) once
+    // it is there; release runs after the command (a held mover let go). The
+    // audio is walk-audio.wav, 0.5 s of 0.5 at the server's rate; the other
+    // rate's, 0.5 s of 0.25 at 44.1 kHz
+    var walkStates = (
+        noTake: (phase: \none, about: "no take, the slot's audio at the server's rate", reach: { arg fire;
+            load.(audioPath); fire.value }),
+        noTakeEmpty: (phase: \none, about: "no take, the slot empty", reach: { arg fire; fire.value }),
+        noTakeOtherRate: (phase: \none, about: "no take, the slot's audio at another rate", reach: { arg fire;
+            load.(otherPath); fire.value }),
+        loadReading: (phase: \none, about: "a load taking effect over audio at another rate, its reads pending", reach: { arg fire;
+            load.(otherPath); h.command(\loadBuffer, slot, audioPath, 0); fire.value }),
+        loadPeaks: (phase: \none, about: "a load of a 44.1 kHz file taking effect, its peaks file held", reach: { arg fire;
+            holdMover.value;
+            h.command(\loadBuffer, slot, otherPath, 0);
+            soon.({ mover[\pending] > 0 }, 0.8);
+            fire.value }, release: freeMover),
+        waitingReplace: (phase: \waiting, about: "a replace take waiting, unprepared", reach: { arg fire;
+            load.(audioPath); record.(slot, 0.2, 1.0, 0, 0, 0, 0, 0.3); fire.value }),
+        waitingPlayable: (phase: \waiting, about: "a playable recording waiting, unprepared", reach: { arg fire;
+            load.(audioPath); record.(slot, 0.2, 1.0, 0.5, 0, 0, 0, 0.3); fire.value }),
+        sentReplace: (phase: \sent, about: "a replace take prepared, not started (below its level)", reach: { arg fire;
+            load.(audioPath); record.(slot, 0.3, 1.0, 0, 0, 0.9); reachPhase.(\sent); fire.value }),
+        sentPlayable: (phase: \sent, about: "a playable recording prepared, not started (below its level)", reach: { arg fire;
+            load.(audioPath); record.(slot, 0.3, 1.0, 0.5, 0, 0.9); reachPhase.(\sent); fire.value }),
+        recordingReplace: (phase: \recording, about: "a replace take recording", reach: { arg fire;
+            record.(slot, 1.0); reachPhase.(\recording); fire.value }),
+        recordingPlayable: (phase: \recording, about: "a playable recording recording, shorter than the slot's audio", reach: { arg fire;
+            load.(audioPath); record.(slot, 0.3, 1.0, 0.5); reachPhase.(\recording); fire.value }),
+        stoppingReplace: (phase: \stopping, about: "a replace take in its stop fade", reach: { arg fire;
+            record.(slot, 1.0); reachPhase.(\recording); stopTake.value; fire.value }),
+        // (the peaks mover, stopped, holds the take's end open)
+        endingReplace: (phase: \ending, about: "a replace take ending, its peaks file held", reach: { arg fire;
+            holdMover.value; replaceTake.value; reachPhase.(\ending); fire.value }, release: freeMover),
+        endingPlayable: (phase: \ending, about: "a playable recording ending, its peaks file held", reach: { arg fire;
+            load.(audioPath); holdMover.value; playableTake.value; reachPhase.(\ending); fire.value }, release: freeMover),
+        // (the command sent from a /n_end responder that runs after the
+        // engine's own, which has asked for the frame count)
+        endingStopped: (phase: \ending, about: "a stopped replace take, its frame count awaited", reach: { arg fire;
+            var node, fired = false, responder;
+            record.(slot, 1.0);
+            reachPhase.(\recording);
+            node = engine.recordSynths[slot] !? { arg synth; synth.nodeID };
+            responder = OSCFunc({ arg msg; if ((msg[1] == node) and: { fired.not }) { fired = true; fire.value } }, '/n_end', server.addr);
+            stopTake.value;
+            soon.({ fired }, 2);
+            responder.free })
+    );
+    var walkRows = [
+        (row: 1, state: \noTake, does: "recordBuffer, feedback 0 and loop 0", command: replaceTake,
+            events: ['length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        (row: 1, state: \noTake, does: "recordBuffer, feedback 0 and loop 0, delayed", command: syncedTake,
+            events: ['armed 1', 'length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        (row: 2, state: \noTake, does: "recordBuffer, feedback > 0, shorter than the audio", command: playableTake,
+            events: ['recording 1', 'ended 1'], frames: levelFrames),
+        (row: 2, state: \noTakeEmpty, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        (row: 3, state: \noTakeOtherRate, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        (row: 4, state: \loadReading, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        (row: 4, state: \loadPeaks, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        // (held past the dropped preparation, 0.09 s after the take's command)
+        (row: 6, state: \waitingReplace, does: "stopRecord", command: stopTake,
+            events: ['canceled 0', 'length 0.5'], frames: levelFrames, kept: 0.5, hold: 0.15),
+        (row: 6, state: \waitingPlayable, does: "stopRecord", command: stopTake,
+            events: ['canceled 0', 'length 0.5'], frames: levelFrames, kept: 0.5, hold: 0.15),
+        (row: 7, state: \sentReplace, does: "stopRecord", command: stopTake,
+            events: ['canceled 0', 'length 0.0'], frames: 0),
+        (row: 7, state: \sentPlayable, does: "stopRecord", command: stopTake,
+            events: ['canceled 0', 'length 0.5'], frames: levelFrames, kept: 0.5),
+        (row: 8, state: \recordingReplace, does: "stopRecord", command: stopTake,
+            events: ['length F', 'ended 0'], frames: \held),
+        (row: 8, state: \recordingPlayable, does: "stopRecord", command: stopTake,
+            events: ['ended 0'], frames: levelFrames),
+        (row: 9, state: \waitingReplace, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['canceled 0', 'length 0.5', 'loadFailed 1 0'], frames: levelFrames, kept: 0.5, hold: 0.15),
+        (row: 10, state: \sentReplace, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['canceled 0', 'length 0.0', 'loadFailed 1 0'], frames: 0),
+        (row: 10, state: \recordingReplace, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['canceled 0', 'length 0.0', 'loadFailed 1 0'], frames: 0),
+        (row: 10, state: \stoppingReplace, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['canceled 0', 'length 0.0', 'loadFailed 1 0'], frames: 0),
+        (row: 11, state: \waitingPlayable, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['canceled 0', 'length 0.5', 'loadFailed 1 0'], frames: levelFrames, kept: 0.5, hold: 0.15),
+        (row: 11, state: \sentPlayable, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['canceled 0', 'length 0.5', 'loadFailed 1 0'], frames: levelFrames, kept: 0.5),
+        (row: 11, state: \recordingPlayable, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['canceled 0', 'length 0.5', 'loadFailed 1 0'], frames: levelFrames),
+        (row: 12, state: \waitingReplace, does: "loadBuffer of a good file", command: goodLoad,
+            events: ['canceled 0', 'length 0.0', 'length 0.1'], frames: monoFrames, load: true, hold: 0.15),
+        (row: 12, state: \recordingReplace, does: "loadBuffer of a good file", command: goodLoad,
+            events: ['canceled 0', 'length 0.0', 'length 0.1'], frames: monoFrames, load: true),
+        (row: 12, state: \stoppingReplace, does: "loadBuffer of a good file", command: goodLoad,
+            events: ['canceled 0', 'length 0.0', 'length 0.1'], frames: monoFrames, load: true),
+        (row: 12, state: \recordingPlayable, does: "loadBuffer of a good file", command: goodLoad,
+            events: ['canceled 0', 'length 0.0', 'length 0.1'], frames: monoFrames, load: true),
+        (row: 13, state: \sentReplace, does: "clearBuffer", command: clearSlot,
+            events: ['canceled 0', 'length 0.0'], frames: 0),
+        (row: 13, state: \stoppingReplace, does: "clearBuffer", command: clearSlot,
+            events: ['canceled 0', 'length 0.0'], frames: 0),
+        (row: 13, state: \recordingPlayable, does: "clearBuffer", command: clearSlot,
+            events: ['canceled 0', 'length 0.0'], frames: 0),
+        (row: 14, state: \endingReplace, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['loadFailed 1 0', 'length 0.05', 'ended 0'], frames: takeFrames),
+        (row: 14, state: \endingPlayable, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['loadFailed 1 0', 'ended 0'], frames: levelFrames),
+        (row: 14, state: \endingStopped, does: "loadBuffer of a bad file", command: badLoad,
+            events: ['loadFailed 1 0', 'length F', 'ended 0'], frames: \held),
+        (row: 15, state: \endingReplace, does: "loadBuffer of a short good file", command: goodLoad,
+            events: ['ended 0', 'length 0.0', 'length 0.1'], frames: monoFrames, load: true),
+        (row: 15, state: \endingReplace, does: "clearBuffer", command: clearSlot,
+            events: ['ended 0', 'length 0.0'], frames: 0),
+        (row: 15, state: \endingReplace, does: "recordBuffer, feedback 0 and loop 0", command: replaceTake,
+            events: ['ended 0', 'length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        // #966: judged on the empty slot, the playable recording zeroes the
+        // take it reports ended (Lua cannot send this today)
+        (row: 15, state: \endingReplace, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['ended 0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames, known: 966),
+        (row: 15, state: \endingPlayable, does: "clearBuffer", command: clearSlot,
+            events: ['ended 0', 'length 0.0'], frames: 0),
+        (row: 15, state: \endingStopped, does: "clearBuffer", command: clearSlot,
+            events: ['ended 0', 'length 0.0'], frames: 0),
+        (row: 17, state: \endingReplace, does: "stopRecord", command: stopTake,
+            events: ['length 0.05', 'ended 0'], frames: takeFrames),
+        (row: 17, state: \endingStopped, does: "stopRecord", command: stopTake,
+            events: ['length F', 'ended 0'], frames: \held),
+        (row: 18, state: \stoppingReplace, does: "recordBuffer, feedback 0 and loop 0", command: replaceTake,
+            events: ['canceled 0', 'length 0.0', 'recording 1', 'length 0.05', 'ended 1'], frames: takeFrames),
+        (row: 18, state: \recordingPlayable, does: "recordBuffer, feedback > 0", command: playableTake,
+            events: ['canceled 0', 'recording 1', 'ended 1'], frames: levelFrames)
+    ];
+    // The slot's reports after the row's mark, as the rows write them (nil
+    // when the mark has not arrived)
+    var walkEvents = { arg mark, records, loads;
+        var start = h.pollMessages.array.detectIndex({ arg msg; (msg[1] == markIndex) and: { msg[2] == mark } }), stride = engine.numBuffers, lengthStride = engine.bufferStateStride, events = List.new(64);
+        var stateIndex = CronePollRegistry.getPollFromName(\recordState).index;
+        var lengthIndex = CronePollRegistry.getPollFromName(\bufferState).index;
+        var failedIndex = CronePollRegistry.getPollFromName(\bufferLoadFailed).index;
+        if (start.isNil) { start = h.pollMessages.size; events = nil };
+        h.pollMessages.array.copyRange(start + 1, h.pollMessages.size - 1).do({ arg msg;
+            var value = msg[2], whole = value.round.asInteger, code = whole div: stride;
+            case
+            { (msg[1] == stateIndex) and: { (whole % stride) == slot } } {
+                events.add((#[armed, recording, ended, canceled][code % 4].asString ++ " " ++ ((code div: 4) - records)).asSymbol) }
+            { (msg[1] == lengthIndex) and: { stateSlot.(value) == slot } } {
+                events.add(("length " ++ (value - ((value / lengthStride).floor * lengthStride)).round(0.01)).asSymbol) }
+            { (msg[1] == failedIndex) and: { (whole % stride) == slot } } {
+                events.add(("loadFailed " ++ ((code div: 2) - loads) ++ " " ++ (code % 2)).asSymbol) };
+        });
+        events !? { events.asArray }
+    };
+    // 'length F' matches a length above 0 that the slot holds now
+    var walkMatches = { arg events, expected;
+        var held = { arg event; event.asString.beginsWith("length ")
+            and: { (event.asString.drop(7).asFloat - engine.bufferStateSeconds(slot)).abs < 0.005 } and: { engine.bufferFrames[slot] > 0 } };
+        events.notNil and: { events.size == expected.size } and: { expected.every({ arg each, index;
+            (events[index] == each) or: { (each == 'length F') and: { held.(events[index]) } } }) }
+    };
+    var walkRow = { arg row;
+        var entry = walkStates[row[\state]], phase, mark, records, loads, quiet, events, frames, sample, left, passed;
+        var fire = {
+            phase = walkPhase.(slot);
+            marks = marks + 1;
+            mark = marks;
+            NetAddr.localAddr.sendMsg('/poll/value', markIndex, mark);
+            records = state[\recordCounts][slot];
+            loads = engine.bufferLoads[slot];
+            row[\command].value;
         };
-    }, '/n_end', server.addr);
-    h.command(\stopRecord, 5);
-    waitDone.(5, 3);
-    responder.free;
-    events = slotEvents.(5, start);
-    check.((phase == [true, true, true]) and: { reportsFor.(5).select({ arg report; report[1] == number }).last == [5, number, 2] }
-        and: { events.includes('canceled').not } and: { engine.bufferFrames[5] > 0 } and: { endsAfterFailure.(events, 5) },
-        "record: a bad load while a stopped take awaits its frame count: the take completes and reports ended, its length after the failure and the slot's frames its own (synth freed, count awaited, take kept: %; % frames; reports %)".format(
-            phase, engine.bufferFrames[5], events));
-    reset.(5);
-});
-test.("record: a load sent during a synced take's wait drops its preparation", {
-    var path = writeLevelFile.("slot.wav", 1, 0.3), nodes;
-    h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ engine.bufferFrames[4] > 0 });
-    record.(4, 0.3, 1.0, 0, 0, 0, 0, 0.6);
-    0.1.wait;
-    h.command(\loadBuffer, 4, h.monoPath, 0);
-    // past the dropped take's start (0.5 s from here), then the load itself
-    0.8.wait; h.awaitLoad(4);
-    nodes = h.synthNames(context.xg);
-    check.((engine.bufferFrames[4] == 4410) and: { engine.recordSynths[4].isNil } and: { nodes.includes(\strataRecord).not },
-        "record: a load sent during a synced take's wait drops its preparation (% frames, record synths: %)".format(engine.bufferFrames[4], nodes.includes(\strataRecord)));
-});
+        clearSlot.value;
+        soon.({ mover[\pending] == 0 });
+        entry[\reach].value(fire);
+        entry[\release].value;
+        quiet = soon.({ engine.recordSynths[slot].isNil and: { state[\takes][slot].isNil } and: { mover[\pending] == 0 }
+            and: { row[\load].isNil or: { loaded.value } } });
+        (row[\hold] ? 0.05).wait;
+        // (the tree query answers after every message sent before it)
+        left = h.synthNames(state[\tapGroup]).includes(\strataRecord) or: { engine.stopReplies[slot].notNil } or: { engine.slotRecording(slot) };
+        events = mark !? { walkEvents.(mark, records, loads) };
+        frames = engine.bufferFrames[slot];
+        sample = row[\kept] !? { h.bufferSample(engine.buffersL[slot], 100) };
+        passed = (phase == entry[\phase]) and: { quiet } and: { left.not } and: { walkMatches.(events, row[\events]) }
+            and: { if (row[\frames] == \held) { frames > 0 } { frames == row[\frames] } }
+            and: { row[\kept].isNil or: { (sample - row[\kept]).abs < 1e-4 } };
+        check.(passed, "record: the state table's row % (%; %)%: %, % frames% (phase %, reports %, % frames, sample %%)".format(
+            row[\row], entry[\about], row[\does], row[\known] !? { arg issue; " (known, #%)".format(issue) } ? "",
+            row[\events].join(", "), row[\frames], row[\kept] !? { arg level; ", the audio kept" } ? "",
+            phase, events, frames, sample ? "not read", if (quiet and: { left.not }) { "" } { ", a take or a rename left" }));
+    };
+    h.writeTestFile(otherPath, 44100, 22050, [0.25, 0.25]);
+    check.(tableRows.every({ arg number; walkRows.any({ arg each; each[\row] == number }) or: { notWalked.includes(number) } }),
+        "record: the walk has an entry for every row of the state table but rows % (rows %)".format(notWalked,
+            walkRows.collect({ arg each; each[\row] }).asSet.asArray.sort));
+    // The periodic bufferState repeats (a slot every 0.25 s in turn) are not
+    // the table's: held off while the walk runs. The poll's task sends its
+    // next one at most 0.25 s on, then waits the long period; it is started
+    // again after the walk (from its clock's next beat)
+    poll.setTime(10000);
+    periodic = h.pollValues(\bufferState).size;
+    soon.({ h.pollValues(\bufferState).size > periodic }, 0.5);
+    walkRows.do({ arg row;
+        // (a row that throws never leaves the mover stopped)
+        try { walkRow.(row) } { arg error;
+            freeMover.value;
+            check.(false, "record: the state table's row % (threw %)".format(row[\row], error.errorString)) };
+    });
+    poll.stop; poll.setTime(period); poll.start;
+    reset.(slot);
+}.value;
 test.("record: with a delay and a threshold, arming begins at the delay and the level starts the take", {
     var delay = 0.3, count = (0.15 * sampleRate).round.asInteger, source, head, marker, written;
     // above the threshold before the delay: nothing is written until the delay is over
@@ -956,31 +1027,6 @@ test.("record: a playable recording keeps the slot playing and sets its length t
     check.((atCommand == v) and: { atStart == d } and: { atGrain == d } and: { runningAtGrain } and: { engine.bufferFrames[4] == d },
         "record: a playable recording keeps the slot playing and sets its length to max(V, D) at its start (at the command %, at the start %, voice % while recording %, at the end %)".format(
             atCommand, atStart, atGrain, runningAtGrain, engine.bufferFrames[4]));
-});
-test.("record: the length never shrinks", {
-    var path = writeLevelFile.("eight.wav", 8, 0.3), v = (8 * sampleRate).round.asInteger, atStart;
-    h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ engine.bufferFrames[4] == v }, 5);
-    record.(4, 4.0, 1.0, 0.5);
-    settle.(0.2);
-    atStart = engine.bufferFrames[4];
-    h.command(\stopRecord, 4);
-    waitDone.(4);
-    check.((atStart == v) and: { engine.bufferFrames[4] == v },
-        "record: the length never shrinks (at the start %, at the end %)".format(atStart, engine.bufferFrames[4]));
-});
-test.("record: a canceled armed recording leaves the slot as it was", {
-    var path = writeLevelFile.("value.wav", 0.5, 0.3), v = (0.5 * sampleRate).round.asInteger, before, after;
-    h.command(\loadBuffer, 4, path, 0);
-    h.waitFor({ engine.bufferFrames[4] == v });
-    before = h.bufferSample(engine.buffersL[4], 100);
-    record.(4, 1.0, 1.0, 0.5, 0, 0.9);
-    settle.(0.1);
-    h.command(\stopRecord, 4);
-    settle.(0.05);
-    after = h.bufferSample(engine.buffersL[4], 100);
-    check.((engine.bufferFrames[4] == v) and: { (before - after).abs < 1e-5 } and: { engine.recordSynths[4].isNil },
-        "record: a canceled armed recording leaves the slot as it was (% frames, sample % -> %)".format(engine.bufferFrames[4], before, after));
 });
 test.("record: a playable recording into an empty slot zeroes it after the fade", {
     var stain = (1.5 * sampleRate).round.asInteger, inside, after, count = (0.3 * sampleRate).round.asInteger;
@@ -1371,32 +1417,6 @@ test.("record: a stop as the recording arms fades it out and keeps what it wrote
         "record: a stop as the recording arms fades it out and keeps what it wrote (largest step %, states %)".format(peak, states));
 });
 
-// ---- the recordState reports ----------------------------------------------
-test.("record: recordState reports armed, recording, ended and canceled with the record number, in order", {
-    var start = nowReports.value, reports, number, states, numbers, canceled;
-    number = engine.areaState[\record][\recordCounts][2] + 1;
-    record.(2, 0.15, 1.0, 0, 0, 0, 0, 0.2);
-    waitDone.(2, 2);
-    waitReported.(2, start, 2);
-    record.(2, 0.15, 1.0, 0, 0, 0.9);
-    settle.(0.1);
-    h.command(\clearBuffer, 2);
-    settle.(0.1);
-    reports = reportsFor.(2, start);
-    states = reports.collect(_[2]);
-    numbers = reports.collect(_[1]);
-    check.((states == [0, 1, 2, 0, 3]) and: { numbers == [number, number, number, number + 1, number + 1] },
-        "record: recordState reports armed, recording, ended and canceled with the record number, in order (states %, numbers %)".format(states, numbers));
-});
-test.("record: reports carry their record number", {
-    var start = nowReports.value, reports, number = engine.areaState[\record][\recordCounts][1];
-    record.(1, 0.1);
-    waitDone.(1, 2);
-    waitReported.(1, start, 2);
-    reports = reportsFor.(1, start);
-    check.(reports.notEmpty and: { reports.every({ arg each; each[1] == (number + 1) }) },
-        "record: reports carry their record number (reports %, record number %)".format(reports, number + 1));
-});
 test.("record: rapid record, load, clear and stop leave at most one record synth and drop every late step", {
     var running, slot = 3, path = writeLevelFile.("value.wav", 0.5, 0.3);
     h.command(\loadBuffer, slot, path, 0);
@@ -1440,43 +1460,6 @@ test.("record: a stopped recording's frame count is read in onFree and includes 
         "record: a stopped recording's frame count is read in onFree and includes its fade (% frames at the stop, % kept, % in the fade, % past it)".format(
             atStop, kept, inFade, past));
 });
-test.("record: a load, clear or recording during the stop fade frees it at once and drops the take", {
-    var slot = 1, results = List.new;
-    [
-        ["clear", { h.command(\clearBuffer, slot) }, 0],
-        ["load", { h.command(\loadBuffer, slot, h.monoPath, 0) }, 4410, { h.awaitLoad(slot) }],
-        ["recording", { record.(slot, 0.1) }, (0.1 * sampleRate).round.asInteger, { h.awaitTake(slot) }]
-    ].do({ arg case;
-        var name = case[0], act = case[1], frames = case[2], running;
-        record.(slot, 0.8);
-        settle.(0.15);
-        h.command(\stopRecord, slot);
-        act.value;
-        server.sync;
-        running = h.synthNames(context.xg).count({ arg each; each == \strataRecord });
-        // (the dropped take's late steps have come by then; the load or
-        // the new take is waited for itself)
-        0.5.wait; server.sync;
-        case[3].value;
-        results.add([name, running, engine.bufferFrames[slot], frames]);
-        h.waitFor({ engine.recordSynths[slot].isNil }, 2);
-        reset.(slot);
-    });
-    check.(results.every({ arg each; (each[1] <= 1) and: { each[2] == each[3] } }),
-        "record: a load, clear or recording during the stop fade frees it at once and drops the take (%)".format(results));
-});
-test.("record: an armed recording stopped before it starts keeps nothing", {
-    var before;
-    reset.(1);
-    record.(1, 0.3, 1.0, 0, 0, 0.9);
-    settle.(0.1);
-    before = engine.bufferFrames[1];
-    h.command(\stopRecord, 1);
-    settle.(0.1);
-    check.((before == 0) and: { engine.bufferFrames[1] == 0 } and: { engine.recordSynths[1].isNil }
-        and: { engine.stopReplies[1].isNil and: { engine.slotRecording(1).not } },
-        "record: an armed recording stopped before it starts keeps nothing (before %, after %, stopReplies %)".format(before, engine.bufferFrames[1], engine.stopReplies[1]));
-});
 test.("record: a bad load after an armed take was stopped cancels nothing", {
     var changes, start;
     reset.(1);
@@ -1503,24 +1486,6 @@ test.("record: a second stopRecord on an armed take changes nothing", {
     check.((engine.slotChanges[1] == (changes + 1)) and: { engine.stopReplies[1].isNil }
         and: { engine.recordSynths[1].isNil } and: { engine.bufferFrames[1] == 0 },
         "record: a second stopRecord on an armed take changes nothing (changes % -> %, stopReplies %)".format(changes, engine.slotChanges[1], engine.stopReplies[1]));
-});
-test.("record: a take with no delay or threshold reports recording and ended, never armed", {
-    var start = nowReports.value, states;
-    record.(1, 0.1);
-    waitDone.(1, 2);
-    waitReported.(1, start, 2);
-    states = reportsFor.(1, start).collect(_[2]);
-    check.(states == [1, 2], "record: a take with no delay or threshold reports recording and ended, never armed (states %)".format(states));
-});
-test.("record: a clear cancels an armed recording and reports canceled", {
-    var start = nowReports.value, states;
-    record.(1, 0.3, 1.0, 0, 0, 0.9);
-    settle.(0.1);
-    h.command(\clearBuffer, 1);
-    settle.(0.1);
-    states = reportsFor.(1, start).collect(_[2]);
-    check.(states.last == 3 and: { engine.recordSynths[1].isNil },
-        "record: a clear cancels an armed recording and reports canceled (states %)".format(states));
 });
 
 // ---- the end of a take -----------------------------------------------------
