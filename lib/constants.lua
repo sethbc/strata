@@ -148,9 +148,12 @@ local GRID_PORTS = {remote = 5, midigrid = 6}
 -- them): a voice's on/off key (running, stopped), a page key (shown,
 -- other), a pick key (the grid voice or the fader page shown, the others),
 -- a lock key and the play keys; side_two a page key while its page shows
--- its second side (3.8)
+-- its second side (3.8); the waiting blink (#593, #876: the core's
+-- waiting_level), a key whose quantized action waits alternating between
+-- waiting_high and waiting_low, waiting_ticks playhead ticks a phase
 local GRID_LEVELS = {voice_running = 12, voice_stopped = 2, page_shown = 15, page_other = 2,
-  picked = 15, unpicked = 4, locked = 12, unlocked = 2, playing = 15, stopped = 4, side_two = 10}
+  picked = 15, unpicked = 4, locked = 12, unlocked = 2, playing = 15, stopped = 4, side_two = 10,
+  waiting_high = 15, waiting_low = 2, waiting_ticks = 4, waiting_phases = 2}
 
 -- init()'s start steps in the order it runs them, after the params are
 -- added and their actions wrapped: each module registers its own with

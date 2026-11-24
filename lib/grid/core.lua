@@ -532,35 +532,39 @@ return function(S)
   end
 
   -- The waiting blink (#876, the one rule #593's bookmark keys began): a
-  -- key whose quantized action waits alternates between S.lib.positions'
-  -- LEVELS.waiting_high and waiting_low (15 and 2), each for waiting_ticks
-  -- (4) of the playheads' 15 Hz ticks, which blink_tick counts. ticks: the
-  -- ticks counted; shown: the signature of the waits the core's keys show
-  -- at the last tick (nil while none waits)
+  -- key whose quantized action waits alternates between LEVELS.waiting_high
+  -- and waiting_low (15 and 2), each for LEVELS.waiting_ticks (4) of the
+  -- playheads' 15 Hz ticks, which blink_tick counts. ticks: the ticks
+  -- counted; shown: the signature of the waits the grids show at the last
+  -- tick (nil while none waits)
   local blink = {ticks = 0, shown = nil}
 
   -- The blink's level at tick `now` (the ticks counted so far by default)
   function M.waiting_level(now)
-    local levels = S.lib.positions.LEVELS
     now = now or blink.ticks
-    return math.floor(now / levels.waiting_ticks) % levels.waiting_phases == 0 and levels.waiting_high
-      or levels.waiting_low
+    return math.floor(now / LEVELS.waiting_ticks) % LEVELS.waiting_phases == 0 and LEVELS.waiting_high
+      or LEVELS.waiting_low
   end
 
-  -- What the waits the core's keys show come to: the play key's start, a
-  -- scene key's recall (its slot), each voice's freeze key and the cell of
-  -- a voice's jump or loop, with the blink's level; nil when none waits.
-  -- A bookmark key's wait is positions' (its display signature)
+  -- What the waits the grids show come to, with the blink's level; nil
+  -- when none shows. One redraw rule for every blink (#593's): a wait
+  -- counts only while a pane of a connected grid shows its key. The play
+  -- key's start (the strips, always shown) and each voice's freeze key,
+  -- the scene keys' recall (its slot) while a pane shows the scenes page,
+  -- the cell of a voice's jump or loop (S.lib.positions.waiting_cell)
+  -- while one shows the positions page's cells. A bookmark key's wait is
+  -- positions' (its display signature, under the same rule)
   local function blink_signature()
     local quantize = S.lib.quantize
     local parts = {}
     if S.lib.sequencer.play_state() == "armed" then parts[#parts + 1] = "play" end
     local scene = quantize.waiting_detail("scene")
-    if scene ~= nil then parts[#parts + 1] = "scene " .. tostring(scene) end
+    if scene ~= nil and M.any_page(GRID_PAGES.scenes) then parts[#parts + 1] = "scene " .. tostring(scene) end
+    local cells_shown = M.any_page(GRID_PAGES.positions, 1)
     for voice_idx = 1, NUM_VOICES do
       if quantize.waiting("freeze" .. voice_idx) then parts[#parts + 1] = "freeze " .. voice_idx end
-      local position = quantize.waiting_detail("position" .. voice_idx)
-      if type(position) == "table" then parts[#parts + 1] = "cell " .. voice_idx .. ":" .. tostring(position.cell) end
+      local cell = cells_shown and S.lib.positions.waiting_cell(voice_idx)
+      if cell then parts[#parts + 1] = "cell " .. voice_idx .. ":" .. cell end
     end
     if #parts == 0 then return nil end
     parts[#parts + 1] = M.waiting_level()
@@ -569,9 +573,10 @@ return function(S)
 
   -- The playheads' tick (lib/playheads.lua): counts a tick and repaints
   -- the grids when what the waiting keys show changed (a phase of the
-  -- blink, a wait begun, ended or moved, wherever it was started or
-  -- taken back), once more when the last one ends; while none waits it
-  -- repaints nothing. No param action repaints for a wait
+  -- blink, a wait begun, ended or moved, wherever it was started or taken
+  -- back, but an IO action's scene recall, which keeps no slot until #1031),
+  -- once more when the last one ends; while none shows it repaints
+  -- nothing. No param action repaints for a wait
   function M.blink_tick()
     blink.ticks = blink.ticks + 1
     local signature = blink_signature()

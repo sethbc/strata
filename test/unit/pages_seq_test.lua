@@ -1406,4 +1406,34 @@ test("SEQ's hint reads K2:cancel while a start waits", function()
   tap(2)
 end)
 
+
+-- #876 review: the hint follows a start begun or taken back off the
+-- screen (a grid's PL, the arc's button), with no redraw of its own: the
+-- screen's next frame shows it
+test("SEQ's hint follows a start begun or taken back from a grid or the arc", function()
+  local context, S = started_on_seq()
+  context.grid.plug(1, 16, 8)
+  context.arc.plug(1)
+  local frame = 1 / S.constants.UI_PAGES.FRAMES_PER_SECOND
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  context.clock.run_for(frame * 2)
+  assert_equal(hint_text(context), "K2:play K3:step E3:level", "stopped")
+  context.grid.press(1, 1, 8, 1); context.grid.press(1, 1, 8, 0)  -- PL
+  assert_equal(S.lib.sequencer.play_state(), "armed", "PL's start waits")
+  context.clock.run_for(frame * 2)
+  assert_equal(hint_text(context), "K2:cancel K3:step E3:level", "the next frame says K2 cancels")
+  context.grid.press(1, 1, 8, 1); context.grid.press(1, 1, 8, 0)  -- PL again
+  assert_equal(S.lib.sequencer.play_state(), "stopped", "PL took it back")
+  context.clock.run_for(frame * 2)
+  assert_equal(hint_text(context), "K2:play K3:step E3:level", "the next frame is idle again")
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  assert_equal(S.lib.sequencer.play_state(), "armed", "the arc's button starts it")
+  context.clock.run_for(frame * 2)
+  assert_equal(hint_text(context), "K2:cancel K3:step E3:level", "the arc's start shows")
+  context.arc.push(1, 1, 1); context.arc.push(1, 1, 0)
+  context.clock.run_for(frame * 2)
+  assert_equal(hint_text(context), "K2:play K3:step E3:level", "the arc's take-back shows")
+end)
+
 end
