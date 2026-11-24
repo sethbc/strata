@@ -557,11 +557,7 @@ return function(S)
         toggle_voice(voice_idx)
       end
     elseif entry.key == "lock" then
-      local was_locked = S.locked[voice_idx]
-      S.locked[voice_idx] = entry.value
-      if (not was_locked) ~= (not entry.value) then
-        for _, hook in ipairs(S.registry.lock_change) do hook(voice_idx, entry.value) end
-      end
+      S.lib.engine_sync.set_locked(voice_idx, entry.value)
     elseif entry.key == "pattern" then
       S.lib.sequencer.replace_pattern(voice_idx, entry.value)
     elseif voice_idx and entry.id == "v" .. voice_idx .. "_source" then
@@ -586,8 +582,8 @@ return function(S)
   -- back as it was found after (the
   -- v<i>_source and v<i>_type actions then leave the full sync to the end): a param
   -- through set_scene_value, a block through its record's apply, a lock
-  -- that changes runs the lock_change hooks (S.registry.lock_change,
-  -- fn(voice_idx, locked)), a pattern through
+  -- through S.lib.engine_sync.set_locked (a change runs the lock_change
+  -- hooks, contained), a pattern through
   -- S.lib.sequencer.replace_pattern. A voice whose active entry stops it is
   -- stopped there; one it starts is started after its last entry in the
   -- list (its pattern aside, which follows every voice's entries), so

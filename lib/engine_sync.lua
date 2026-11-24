@@ -710,12 +710,27 @@ return function(S)
     grid_redraw()
   end
 
-  -- Flip a voice's lock, then run the lock hooks (S.registry.lock_change)
-  -- with the voice and its new state
+  -- The lock's one writer (#917): set voice_idx's lock (S.locked) to
+  -- locked and, only when that changed it, run the lock hooks
+  -- (S.registry.lock_change, fn(voice_idx, locked)) once each, in
+  -- registration order. Each is contained, as the other hooks are (#910):
+  -- one that raises is printed once per distinct message and the next still
+  -- runs. A voice outside 1..NUM_VOICES or a locked that is no boolean does
+  -- nothing. Redraws are the caller's
+  local lock_change_errors = {}
+  function M.set_locked(voice_idx, locked)
+    if not valid_voice(voice_idx) or type(locked) ~= "boolean" then return end
+    if S.locked[voice_idx] == locked then return end
+    S.locked[voice_idx] = locked
+    for index, hook in ipairs(S.registry.lock_change) do
+      S.lib.ui_frame.contained_call(lock_change_errors, index, "lock change hook", hook, voice_idx, locked)
+    end
+  end
+
+  -- Flip a voice's lock through set_locked, then redraw
   function toggle_lock(voice_idx)
-    if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-    S.locked[voice_idx] = not S.locked[voice_idx]
-    for _, hook in ipairs(S.registry.lock_change) do hook(voice_idx, S.locked[voice_idx]) end
+    if not valid_voice(voice_idx) then return end
+    M.set_locked(voice_idx, not S.locked[voice_idx])
     update_voice_list()
     request_redraw()
     grid_redraw()
