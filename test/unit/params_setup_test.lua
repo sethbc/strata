@@ -1140,11 +1140,10 @@ test("a silent read of a PSET equal to the state sends only scatter's setScatter
   assert_equal(intervals, S.lib.variation.VARIATION.max_intervals + 1, "the chord's list once: each interval and the count")
 end)
 
--- #987 (known, not this package's): turning delay sync off sends under
--- delay_time, so the record the hook compares keeps delay_sync at 1 and
--- the next silent read sends one setDelay it did not need (with the values
--- the engine has). #987's fix removes this allowance
-test("a silent read of an equal PSET after delay sync was turned off sends one setDelay more (known #987)", function()
+-- Turning delay sync off sends under delay_time's sender and records the
+-- sync's own send as well, so the hook finds every delay param as the
+-- engine has it
+test("a silent read of an equal PSET after delay sync was turned off sends only setScale and setScatter", function()
   local context = load_strata({ data_subdir = "pset_engine_sync_off" }); finish_startup(context)
   util.make_dir(context.data_dir)
   local S = local_value("S")
@@ -1156,13 +1155,7 @@ test("a silent read of an equal PSET after delay sync was turned off sends one s
   params:write(path, "equal")
   context.clear_engine_calls()
   params:read(path, true)
-  assert_equal(call_names(context.engine_calls), "setDelay setScale setScatter", "#987's one setDelay more")
-  local delay
-  for _, call in ipairs(context.engine_calls) do if call.name == "setDelay" then delay = call end end
-  assert_near(delay.args[1], params:get("delay_time"), 1e-9, "with the time the delay plays")
-  context.clear_engine_calls()
-  params:read(path, true)
-  assert_equal(call_names(context.engine_calls), "setScale setScatter", "once: the send records delay_sync")
+  assert_equal(call_names(context.engine_calls), "setScale setScatter", "no setDelay")
 end)
 
 test("a silent read sends a command of several params once (#965)", function()

@@ -419,6 +419,40 @@ test("sync off under modulation sends the modulated time at once (#741)", functi
   assert_true(math.abs(last_delay(context)[1] - first) > 1e-6, "and it moves")
 end)
 
+-- #987: the off transition sends under delay_time's sender, so it must
+-- also record delay_sync's own send; the check reads the engine's side
+-- from the test's own record of the last setDelay (its time is delay_time,
+-- not the division: sync is off there)
+test("after the sync is turned off, every delay sender's last value is what the engine holds (#987)", function()
+  local context, S = loaded()
+  local sync = S.lib.engine_sync
+  local function assert_records(where)
+    local args = last_delay(context)
+    assert_near(args[1], 0.6, 1e-9, where .. ": the engine plays delay_time, so its sync is off")
+    assert_equal(sync.expected_value("delay_sync"), 0, where .. ": delay_sync's record is off")
+    assert_near(sync.expected_value("delay_time"), args[1], 1e-9, where .. ": delay_time's record")
+    assert_near(sync.expected_value("delay_pingpong"), args[4], 1e-9, where .. ": delay_pingpong's record")
+    assert_equal(sync.expected_value("delay_division"), DIVISION.quarter, where .. ": delay_division's record")
+  end
+  params:set("delay_time", 0.6); params:set("delay_pingpong", 0.4)
+  params:set("delay_sync", 1); params:set("delay_division", DIVISION.quarter)
+  lfo_step(context)
+  assert_near(last_delay(context)[1], 0.5, 1e-9, "synced: the quarter at 120 BPM")
+  assert_equal(sync.expected_value("delay_sync"), 1, "synced: delay_sync's record is on")
+  context.clear_engine_calls()
+  params:set("delay_sync", 0)
+  assert_equal(#delay_calls(context), 1, "the off sends one setDelay")
+  assert_records("a hand toggle")
+  -- a recall that turns it off (its send held, then flushed as the apply ends)
+  capture_scene(1)
+  params:set("delay_sync", 1); lfo_step(context)
+  assert_equal(sync.expected_value("delay_sync"), 1, "synced again")
+  context.clear_engine_calls()
+  recall_scene(1, 0)
+  assert_equal(#delay_calls(context), 1, "the recall sends one setDelay")
+  assert_records("a recall")
+end)
+
 test("a tempo move under a synced, modulated delay still resends within a step (#741)", function()
   local context, S = loaded()
   synced_under_lfo(context, S)
