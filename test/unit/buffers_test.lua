@@ -2711,6 +2711,46 @@ test("a checked load's failure ends its check whatever was loaded after it", fun
   end
 end)
 
+-- #980's bound: the tracked list keeps every load being checked and at
+-- most tracked_loads others, so after chained long loads it holds them all
+-- while their checks run and returns to tracked_loads once the checks end
+-- and further loads follow (an unchecked load is still dropped at the bound)
+test("the tracked loads return to their bound after chained checks", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  local chained = 2 * tracked
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
+  local function numbers()
+    local list = {}
+    for _, load in ipairs(buffers[1].pending_loads) do list[#list + 1] = load.number end
+    return table.concat(list, " ")
+  end
+  for _ = 1, chained do load_buffer(1, "/tmp/long.wav") end
+  assert_equal(#buffers[1].pending_loads, chained, "every load being checked is kept while the checks run")
+  load_buffer(1, "/tmp/short.wav")
+  assert_equal(#buffers[1].pending_loads, chained + 1, "a short load sent while they run drops none of them")
+  -- the short load fails, giving the last long load's check back; then
+  -- that load's length ends the check, in every snapshot (#399)
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, buffers[1].loads_sent))
+  assert_equal(buffers[1].checking_load, chained, "the last long load checks again")
+  state_report(context, 1, buffers[1].loads_sent, 120)
+  assert_equal(buffers[1].checking_load, nil, "the check is over")
+  assert_equal(#buffers[1].pending_loads, chained, "nothing is dropped until the next load")
+  for _ = 1, 3 do load_buffer(1, "/tmp/short.wav") end
+  assert_equal(#buffers[1].pending_loads, tracked, "back to the bound once the checks have ended")
+  -- (the failed short load's entry is gone: the last long load's is the oldest)
+  assert_equal(numbers(), chained .. " " .. table.concat({chained + 2, chained + 3, chained + 4}, " "),
+    "the newest loads still tracked, oldest first")
+  load_buffer(1, "/tmp/short.wav")
+  assert_equal(#buffers[1].pending_loads, tracked, "an unchecked load is still dropped at the bound")
+  local newest = {}
+  for number = buffers[1].loads_sent - tracked + 1, buffers[1].loads_sent do newest[#newest + 1] = number end
+  assert_equal(numbers(), table.concat(newest, " "), "the oldest went")
+end)
+
 -- The "buffer slots" invariant: a notice clock runs only while the slot
 -- checks a load
 test("the buffer slots invariant: a notice clock only while a load is checked (#903)", function()
