@@ -805,7 +805,8 @@ h.transition_table({
     ["a load fails"] = function(context)
       local S = local_value("S")
       load_buffer(BIND_SLOT, "/tmp/missing.wav")
-      context.polls.fire("bufferLoadFailed", (S.buffers[BIND_SLOT].loads_sent * 2) * 8 + BIND_SLOT - 1)
+      context.polls.fire("bufferLoadFailed",
+        (S.buffers[BIND_SLOT].loads_sent * 2) * S.constants.NUM_BUFFERS + BIND_SLOT - 1)
     end,
     ["a replace take starts"] = function() record_buffer(BIND_SLOT) end,
     ["a replace take settles"] = bind_take,

@@ -508,7 +508,9 @@ return function(S)
   -- settled audio (status "loaded", seconds above 0) is bound, and a free
   -- one ("empty" or "missing") is not, but while a canceled replace take's
   -- slot awaits the engine's next report (kept_state): the take may not
-  -- have prepared it, so the old audio, and its binding, may still be there
+  -- have prepared it, so the old audio, and its binding, may still be there.
+  -- Without the bufferState poll no report comes, so that exception lasts
+  -- until the slot's next load, clear or recording
   S.register_invariant("settings binding", function()
     for slot = 1, NUM_BUFFERS do
       local buffer, status = S.buffers[slot], S.lib.buffers.status(slot)

@@ -15,7 +15,7 @@
 
 ### settings binding
 - **State:** `bound[slot]` (a local of `lib/samples.lua`: nil, `OWN`, the slot's own take's record, or a file's entry), read with `S.lib.samples.is_bound(slot)`; `own[slot]` beside it is the take's record.
-- **Invariant:** `settings binding` (3.9, #907): a slot holding settled audio (status `"loaded"`, `seconds` above 0) is bound, and a free one (`"empty"` or `"missing"`) is not, but while a canceled replace take's slot awaits the engine's next length report (`kept_state`): the take may not have prepared it, so the old audio and its binding may still be there.
+- **Invariant:** `settings binding` (3.9, #907): a slot holding settled audio (status `"loaded"`, `seconds` above 0) is bound, and a free one (`"empty"` or `"missing"`) is not, but while a canceled replace take's slot awaits the engine's next length report (`kept_state`): the take may not have prepared it, so the old audio and its binding may still be there. Without the `bufferState` poll no report comes, and the exception lasts until the slot's next load, clear or recording.
 - **Test:** `test/unit/samples_test.lua`: "settings binding: every cell is decided" and its rows (slot 2), and "the settings binding invariant: settled audio is bound, a free slot is not (#907)".
 
 The binding by the slot's events, each driven through the script with the engine stub's reports in the engine's order. Every cell is a row. The slot's own table (`docs/notes/lua/buffers/slot.md`) has a bind in its Effect column wherever a row binds or unbinds, and its rows hold this invariant too.

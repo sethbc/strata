@@ -2685,4 +2685,20 @@ test("the buffer slots invariant: a notice clock only while a load is checked (#
   assert_equal(broken(), "")
 end)
 
+
+-- The "buffer slots" invariant: a slot whose take could not be written
+-- (take_unsaved) names a path only while it still records (a dub over a
+-- file keeps the file's path until it ends); once it settles, no path
+test("the buffer slots invariant: a path with take_unsaved only while recording (#903)", function()
+  local context = load_strata(); finish_startup(context)
+  h.allow_broken_invariants("the line is broken by hand")
+  local buffers = local_value("buffers")
+  local function broken() return table.concat(h.check_invariants(), "; ") end
+  load_buffer(1, "/tmp/one.wav"); state_report(context, 1, 1, 4)
+  buffers[1].take_unsaved = true
+  assert_equal(broken(), "buffer slots: slot 1 has an unsaved take but names the path /tmp/one.wav")
+  buffers[1].path = nil
+  assert_equal(broken(), "", "an unsaved take with no path holds")
+end)
+
 end
