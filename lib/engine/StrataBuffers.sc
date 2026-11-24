@@ -179,9 +179,10 @@
     // The slots' length (index numBuffers) names none (0). Largest value:
     // (6 * 9 + 7) * 1000 + 300 = 61300, below 2^16: a 32-bit float keeps
     // it to 2^-8 s, the hundredths exactly once rounded, and the slot and
-    // load exactly
-    bufferStateReport { arg index, seconds;
-        var load = if (index < numBuffers) { this.bufferStateLoad(index) % this.bufferStateLoads } { 0 };
+    // load exactly. named: a load number to report instead of
+    // bufferStateLoad's (rejectLoad's re-report, #1016)
+    bufferStateReport { arg index, seconds, named;
+        var load = if (index < numBuffers) { (named ?? { this.bufferStateLoad(index) }) % this.bufferStateLoads } { 0 };
         ^((((load * (numBuffers + 1)) + index) * this.bufferStateStride) + seconds).asFloat
     }
 
@@ -459,17 +460,21 @@
     // canceled: a long file's command already canceled the slot's
     // recording; its length then was reported under the load before this
     // one (the load was in its check, bufferStateLoad), so it is reported
-    // again now, under this load's number (the recording had superseded
-    // every load before it, so no earlier check is left), before the
-    // failure: either way
-    // a load that canceled a recording reports the length the cancel left
-    // under its own number first, which Lua's undo reads (#983)
+    // again now, under this load's own number, before the failure: either
+    // way a load that canceled a recording reports the length the cancel
+    // left under its own number first, which Lua's undo reads (#983). Its
+    // own number, never bufferStateLoad's: a later load rejected during
+    // the check would be named then, and Lua would take the slot's old
+    // audio for the end of the check that later load's failure gave back
+    // (#1016). Once every later load has failed, no other report names
+    // the checked load: bufferStateLoad names one before it while it is
+    // checked, the newest after
     rejectLoad { arg index, load, reason, canceled = false;
         var recording = this.slotRecording(index) and: { this.takeEnding(index).not };
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
             ++ (if (recording or: { canceled }) { " recording canceled" } { " unchanged" }));
         if (recording) { this.cancelSlotRecording(index) };
-        if (canceled) { bufferStatePoll.update(this.announcedBufferState(index)) };
+        if (canceled) { bufferStatePoll.update(this.bufferStateReport(index, areaState[\buffers][\announced][index], load)) };
         bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, false));
     }
 

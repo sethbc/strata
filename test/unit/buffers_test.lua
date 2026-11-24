@@ -2988,6 +2988,164 @@ test("a check no tracked load would give back is dropped with the bound", functi
   assert_equal(buffers[1].pending_loads[1].number, 3, "the long load and the first short one are gone")
 end)
 
+-- #980's twin: a restore (its own load not checked), then four bad loads
+-- back to back (the fourth pushes the restore's own out of the tracked
+-- list), failing in the order sent, then the restore's own failure, late
+-- (its server read failed after the fade, the slot emptied): the slot is
+-- empty with no path, as a tracked restore's failure leaves it, and the
+-- next buffers.data write no longer names the failed restore
+test("a forgotten restore's failure empties the slot as a tracked one's does (#980)", function()
+  local subdir = "forgotten-restore-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  util.make_dir(context.audio_dir)
+  local corrupt = context.audio_dir .. "corrupt.wav"
+  io.open(corrupt, "w"):close()
+  load_buffer(4, corrupt)
+  cleanup()
+  context = load_strata({ data_subdir = subdir })
+  local S, buffers = local_value("S"), local_value("buffers")
+  assert_true(buffers[4].restoring, "the file is restored")
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  for number = 2, tracked + 1 do load_buffer(4, "/tmp/bad" .. number .. ".wav") end
+  for number = 2, tracked + 1 do context.polls.fire("bufferLoadFailed", load_failed_value(4, number)) end
+  assert_true(buffers[4].restoring, "the last failure gives the restore back")
+  assert_equal(buffers[4].path, corrupt)
+  assert_equal(#buffers[4].pending_loads, 0, "its own load forgotten in flight")
+  context.clock.run_for(0.11)
+  local path = context.data_dir .. "strata/buffers.data"
+  local restore, opened = watch_writes("buffers.data")
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, 1, true))
+  assert_equal(S.lib.buffers.status(4), "empty", "the restore's own failure empties the slot")
+  assert_equal(buffers[4].name, "empty"); assert_equal(buffers[4].path, nil)
+  assert_true(not buffers[4].restoring, "no longer restoring"); assert_equal(buffers[4].confirm_since, nil)
+  assert_equal(params:get("buf4_file"), _path.audio, "the file param is back at its starting folder")
+  context.clock.run_for(0.11)
+  restore()
+  assert_true(#data_writes(opened) > 0, "buffers.data is written")
+  assert_equal(S.lib.data_files.read(path).paths[4], "", "and no longer names the failed restore")
+  context.set_time(util.time() + 5); state_report(context, 4, buffers[4].loads_sent, 0)
+  assert_equal(S.lib.buffers.status(4), "empty", "a later 0 s settles nothing")
+end)
+
+-- #1016: a synced replace take armed over a.wav; long1.wav (checked)
+-- cancels it at its command; bad.wav fails at once, giving long1's check
+-- back; then long1's check fails. The engine's rejection re-reports the
+-- slot's length (the take had not prepared it: a.wav's audio) under
+-- long1's own number just before the failure (rejectLoad; it named
+-- bad.wav's, the newest, before #1016's fix, which ended the given-back
+-- check and bound long1 for that moment, forgetting the grid's bank
+-- pick). Nothing of long1 survives the window: no save, no engine send of
+-- its bind left standing, no buffers.data or samples.data write naming
+-- it, the slot back as it was
+test("a given-back check that canceled a take and is rejected leaves nothing of its load (#1016)", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local subdir = "given-back-reject-" .. math.random(1, 1e9)
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local NUM_BUFFERS = local_value("NUM_BUFFERS")
+  context.audio.files["/tmp/long1.wav"] = {2, 48000 * 120, 48000}
+  params:set("v1_source", 2)  -- voice 1 reads buffer 1, running
+  if not S.voices[1].active then toggle_voice(1) end
+  load_buffer(1, "/tmp/a.wav"); state_report(context, 1, 1, 4)
+  assert_equal(S.lib.buffers.status(1), "loaded")
+  -- a.wav's record: its key (the bind's rootNote) and 20 slices, voice 1
+  -- playing them, its grid's bank 2 picked (a bind forgets a pick its
+  -- slot's slices no longer reach)
+  assert_true(S.lib.samples.set(1, "key", 48), "a.wav's key")
+  local markers = {}
+  for n = 1, 20 do markers[n] = (n - 1) * 9600 end
+  assert_true(S.lib.samples.set(1, "frames", 4 * 48000) and S.lib.samples.set(1, "rate", 48000)
+    and S.lib.samples.set(1, "markers", markers), "a.wav's 20 slices")
+  params:set("v1_slices", 2)
+  local positions = S.lib.positions
+  positions.strip_key(1, 1, 2, 1); positions.strip_key(1, 1, 2, 0)
+  assert_equal(positions.bank(1, 1), 2, "grid 1 shows voice 1's bank 2")
+  local record = S.lib.samples.settings(1)
+  local function record_report(state)
+    context.polls.fire("recordState", (buffers[1].records_sent * 4 + state) * NUM_BUFFERS)
+  end
+  params:set("record_sync", 3)
+  record_buffer(1); record_report(0)                                 -- armed, unprepared
+  context.clock.run_for(0.2)
+  local restore, opened = watch_writes("strata/")
+  context.clear_engine_calls()
+  load_buffer(1, "/tmp/long1.wav")                                   -- load 2, checked
+  assert_equal(buffers[1].checking_load, 2)
+  record_report(3); state_report(context, 1, 1, 4)                   -- the command's cancel, under load 1
+  load_buffer(1, "/tmp/bad.wav")                                     -- load 3
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 3))
+  assert_equal(buffers[1].checking_load, 2, "bad.wav's failure gives long1's check back")
+  -- the window: the rejection's re-report, then long1's failure
+  local before = #context.engine_calls
+  state_report(context, 1, 2, 4)
+  assert_equal(buffers[1].checking_load, 2, "the re-report ends no check")
+  assert_true(not S.lib.samples.is_bound(1) or S.lib.samples.settings(1) == record, "and binds nothing")
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
+  local window = {}
+  for index = before + 1, #context.engine_calls do window[#window + 1] = context.engine_calls[index] end
+  context.clock.run_for(0.2)
+  restore()
+  assert_equal(#context.calls_named("saveBuffer"), 0, "no save")
+  for _, name in ipairs(opened) do
+    local text = file_text(name) or ""
+    assert_true(not text:find("long1", 1, true), name .. " never names long1.wav")
+  end
+  for _, name in ipairs({"buffers.data", "samples.data"}) do
+    local text = file_text(context.data_dir .. "strata/" .. name) or ""
+    assert_true(not text:find("long1", 1, true), name .. " does not name long1.wav")
+  end
+  assert_equal(S.lib.buffers.status(1), "loaded", "the slot is back as it was")
+  assert_equal(buffers[1].name, "a.wav"); assert_equal(buffers[1].path, "/tmp/a.wav")
+  assert_equal(params:get("buf1_file"), "/tmp/a.wav")
+  assert_true(S.lib.samples.settings(1) == record, "bound to a.wav's record")
+  assert_equal(positions.bank(1, 1), 2, "grid 1 still shows voice 1's bank 2")
+  -- every send in the window stands as a bind of a.wav sends it
+  context.clear_engine_calls()
+  S.lib.samples.bind(1)
+  local bound = {}
+  for _, call in ipairs(context.engine_calls) do
+    bound[call.name .. " " .. tostring(call.args[1]) .. " " .. tostring(call.args[2])] = call
+  end
+  local last = {}
+  for _, call in ipairs(window) do last[call.name .. " " .. tostring(call.args[1]) .. " " .. tostring(call.args[2])] = call end
+  assert_true(next(window) ~= nil, "the window sends the binds' rootNote and scaleNote")
+  for key, call in pairs(last) do
+    assert_true(bound[key] ~= nil, key .. ": the window sends only what a bind sends")
+    assert_equal(table.concat(call.args, " "), table.concat(bound[key].args, " "), key .. ": the window's last send")
+  end
+end)
+
+-- #1016's other half: the re-report under a given-back check's own number
+-- is what its failure's undo reads. A synced take that prepared the slot
+-- (0 s) just before long1's command reached the engine, a preparation
+-- reported under load 1 and so ignored: the cancel left the slot empty,
+-- and only the rejection's re-report, under long1's number, says so
+test("a given-back check's rejection gives its failure the length its cancel left (#1016)", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  local NUM_BUFFERS = local_value("NUM_BUFFERS")
+  context.audio.files["/tmp/long1.wav"] = {2, 48000 * 120, 48000}
+  load_buffer(1, "/tmp/a.wav"); state_report(context, 1, 1, 4)
+  params:set("record_sync", 3)
+  record_buffer(1); context.polls.fire("recordState", (buffers[1].records_sent * 4) * NUM_BUFFERS)
+  load_buffer(1, "/tmp/long1.wav")                                   -- load 2, checked
+  state_report(context, 1, 1, 0)                                     -- the preparation, under load 1
+  context.polls.fire("recordState", (buffers[1].records_sent * 4 + 3) * NUM_BUFFERS)
+  state_report(context, 1, 1, 0)                                     -- the cancel's length, under load 1
+  load_buffer(1, "/tmp/bad.wav")                                     -- load 3
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 3))
+  assert_equal(buffers[1].checking_load, 2, "long1's check is given back")
+  state_report(context, 1, 2, 0)                                     -- the rejection's re-report
+  assert_equal(buffers[1].checking_load, 2, "which ends no check")
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
+  assert_equal(S.lib.buffers.status(1), "empty", "the prepared take had emptied the slot")
+  assert_equal(buffers[1].path, nil); assert_equal(buffers[1].settled_empty, "take", "its take still adoptable")
+  assert_true(not S.lib.samples.is_bound(1), "unbound")
+end)
+
 -- The "buffer slots" invariant: a notice clock runs only while the slot
 -- checks a load
 test("the buffer slots invariant: a notice clock only while a load is checked (#903)", function()
