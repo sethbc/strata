@@ -7,7 +7,17 @@
 - **A slot whose length changes has no points until its new file is read** (#401): `buffer_state_changed` calls `changed(slot)` on every change of the slot's seconds, which forgets the points at once (a redraw, and a page-5 grid's) and marks the slot, so no frame draws the old audio's overview at the new length. A playable recording's rereads only mark the slot (`stale`): a dub's waveform never blinks.
 - **A load forgets the old overview at once, whatever its length** (#401): `load_buffer` calls `forget(slot)`, which drops the points and holds the slot (`awaiting`): no read until a report of the slot's audio says the new file is in place. That is `changed` (a new length, or the 0 s a load over audio reports first) or `stale`, which `lib/buffers.lua` calls when a load settles with audio (`confirm_buffer_audio`: a file as long as the one it replaced changes no length) and when a failed load's state is put back (`apply_buffer_state`, so the old overview returns with the old file; a state that is a long load still being checked is forgotten instead).
 - **Each tick runs contained** (#330): the loop calls its tick through `S.lib.ui_frame.contained_call` (key `"tick"`, label `peaks read`), so an error in a read or in the grid redraw it calls prints `strata: peaks read failed: ` with its traceback once per distinct message and never ends the loop; slots marked later are still read.
+- **A free slot keeps no mark** (3.9, #976): `stale` and `changed` mark a slot only while it holds or awaits audio (it is not free, `S.lib.buffers.is_free`, or the engine reports a length in it), and clear both marks otherwise, so a failed load's undo to an empty slot or a remembered missing file, and a dub that ended from 0 s, leave none. `clear_buffer` and a canceled replace take's 0 s (`cancel_recording`) call `changed`, so a load the clear superseded, or the audio the take replaced, leaves no mark either; the `"waveform marks"` invariant holds it.
 - The module is a constructor ending with `  return M` and `end`; its table is `S.lib.waveforms`.
+
+## Machines
+
+### waveform marks
+- **State:** per slot, `marked` (a read is due at a frame tick) and `awaiting` (a load's peaks are not on disk yet: no read until a report of the slot's audio), locals of `lib/waveforms.lua`, set by `forget`, `changed` and `stale` and the playable recordings' rereads, cleared by a read.
+- **Invariant:** `waveform marks` (3.9, #976): a slot is marked, or awaits a load's peaks, only while it holds or awaits audio: it is not free (`S.lib.buffers.is_free`), or the engine reports a length in it.
+- **Test:** `test/unit/waveforms_test.lua`: "the waveform marks invariant: a mark only for a slot that holds or awaits audio (#976)", "a clear after a load leaves no waveform mark (#976)", "a failed load put back to a free slot leaves no waveform mark (#976)" and "a canceled take leaves no waveform mark (#976)".
+
+No table: the marks follow the slot's machine (`buffer slot`, `docs/notes/lua/buffers/slot.md`), whose rows run this invariant too.
 
 ## Owns
 

@@ -437,4 +437,66 @@ test("every successful read tells its listeners and keeps the frames and rate", 
   assert_equal(#context.take_script_errors(), 1, "the failing listener is printed once, and the loop runs on")
 end)
 
+
+-- 3.9 (#976): the "waveform marks" invariant: a slot is marked for a read,
+-- or awaits a load's peaks, only while it holds or awaits audio (it is not
+-- free, S.lib.buffers.is_free, or the engine reports a length)
+test("the waveform marks invariant: a mark only for a slot that holds or awaits audio (#976)", function()
+  local context = load_strata(); finish_startup(context)
+  h.allow_broken_invariants("the line is broken by hand")
+  local waveforms = local_value("S").lib.waveforms
+  local function broken() return table.concat(h.check_invariants(), "; ") end
+  waveforms.forget(4)                      -- no load: slot 4 is empty, 0 s
+  assert_equal(broken(), "waveform marks: slot 4 awaits a load's peaks but holds and awaits no audio (empty, 0 s)")
+  load_buffer(4, "/tmp/a.wav")
+  assert_equal(broken(), "", "a load awaits audio")
+end)
+
+-- 3.9 (#976): a clear before a load's report leaves no mark of the load
+test("a clear after a load leaves no waveform mark (#976)", function()
+  local context = load_strata(); finish_startup(context)
+  load_buffer(2, "/tmp/a.wav")
+  clear_buffer(2)
+  assert_equal(local_value("S").lib.buffers.status(2), "empty")
+  assert_equal(table.concat(h.check_invariants(), "; "), "", "no mark on the cleared slot")
+end)
+
+-- 3.9 (#976): a failed load whose undo gives back a free slot (an empty
+-- one, a remembered missing file) leaves no mark
+test("a failed load put back to a free slot leaves no waveform mark (#976)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function failed(slot)
+    context.polls.fire("bufferLoadFailed", (S.buffers[slot].loads_sent * 2) * S.constants.NUM_BUFFERS + slot - 1)
+  end
+  load_buffer(3, "/tmp/bad.wav"); failed(3)
+  assert_equal(S.lib.buffers.status(3), "empty")
+  assert_equal(table.concat(h.check_invariants(), "; "), "", "no mark on the empty slot")
+  util.make_dir(S.lib.scenes.scene_data_dir)
+  assert_true(S.lib.data_files.write(S.lib.scenes.scene_data_dir .. "buffers.data",
+    {version = S.constants.BUFFER_DATA_VERSION, paths = {"/tmp/gone.wav"}, starts = {0}, settings = {}}))
+  load_buffers_from_disk()
+  load_buffer(1, "/tmp/bad.wav"); failed(1)
+  assert_equal(S.lib.buffers.status(1), "missing")
+  assert_equal(table.concat(h.check_invariants(), "; "), "", "no mark on the missing slot")
+end)
+
+
+-- 3.9 (#976): a canceled replace take empties its slot (0 s) until the
+-- next length report says what it left: no mark of the audio it replaced
+-- stays (that report's audio marks the slot again)
+test("a canceled take leaves no waveform mark (#976)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function invariants() return table.concat(h.check_invariants(), "; ") end
+  -- a synced take over a.wav (just settled: marked), stopped while armed,
+  -- then its "canceled"
+  load_buffer(3, "/tmp/a.wav"); report(context, 3, 4, 1)
+  params:set("record_sync", 2); record_buffer(3); params:set("record_sync", 1)
+  record_buffer(3)
+  context.polls.fire("recordState", ((S.buffers[3].records_sent * 4) + 3) * S.constants.NUM_BUFFERS + 2)
+  assert_equal(S.lib.buffers.status(3), "empty")
+  assert_equal(invariants(), "", "no mark once the take is canceled")
+end)
+
 end

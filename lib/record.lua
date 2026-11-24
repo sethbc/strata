@@ -249,6 +249,9 @@ return function(S)
       buffer.name, buffer.path, buffer.loaded, buffer.seconds = "empty", nil, false, 0
       buffer.settled_empty = false
       buffer.kept_state = take.previous
+      -- 0 s until that report: no mark of the replaced audio stays (#976;
+      -- the kept state's audio marks it again)
+      S.lib.waveforms.changed(slot)
     else
       -- a playable recording keeps the slot's audio, but the engine set
       -- its gain to 1 at the command: its peaks are read again, and a
