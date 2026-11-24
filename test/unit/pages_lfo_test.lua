@@ -592,7 +592,7 @@ test("the LFO page's layout states cover each field on LFOs 1 and 6, each window
   local names = {}
   for _, state in ipairs(record.layout_states or {}) do names[state.name] = true end
   local wanted = { "window 1-3", "window 2-4", "window 3-5", "window 4-6", "engine-run and modulated", "rate max",
-    "clocked", "ALT+K2 held past the hold time" }
+    "clocked", "ALT+K2 held past the hold time", "a home this build lacks, at its widest" }
   for _, n in ipairs({ 1, 6 }) do
     for _, field in ipairs({ "dest", "shape", "mode", "rate", "depth", "offset", "phase", "rate mod", "rate amt",
       "depth mod", "depth amt", "on/off" }) do
@@ -742,13 +742,47 @@ test("E3 on dest steps the home; ALT+E3 jumps a group; ALT+K2 held sets none", f
   with_alt(function() hold_k2(context) end)
   assert_equal(matrix.home(1), "", "ALT+K2 held: none")
   assert_equal(lfos().label(1), "none")
-  -- an unknown home shows none, is kept until the row is turned, and E3 steps from none
+  -- an unknown home shows its kept key (#1030), is kept until the row is turned, and E3 steps from none
   matrix.set_home(1, "future_dest")
   redraw()
-  assert_equal(bright_strip_text(context), "none", "an unknown home shows none")
+  assert_equal(bright_strip_text(context), "future_dest", "an unknown home shows its kept key (#1030)")
   assert_equal(matrix.home(1), "future_dest", "kept")
   enc(3, 1)
   assert_equal(matrix.home(1), "master_density", "turned: from none")
+end)
+
+-- #1030: a home routing whose key no destination of this build has (as a
+-- scene apply or a file load leaves it, kept: it does not play) is named
+-- by its kept key on the row and in the strip's dest field, never none,
+-- with no ~ (nothing plays it); a key too wide for its room is cut to it
+test("the LFO page names a home this build lacks (#1030)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("LFO")
+  select_lfo(2); strip_field("dest")
+  S.matrix[S.lib.matrix.home_slot(2)].dest = "v1_gone"
+  context.screen.clear(); redraw()
+  assert_equal(S.lib.matrix.status(S.lib.matrix.home_slot(2)), "unknown", "the home is unknown")
+  assert_equal(lfos().label(2), "v1_gone", "the label is the kept key")
+  assert_equal(bright_strip_text(context), "v1_gone", "the dest field shows it")
+  local row = table.concat(lfo_row_drawing(context, 2).texts, "|")
+  assert_true(row:find("v1_gone", 1, true) ~= nil, "the row's label shows it: " .. row)
+  assert_true(row:find("none", 1, true) == nil and row:find("~", 1, true) == nil, "not none, no ~: " .. row)
+  assert_true(lfos().describe(2):find("^v1_gone ") ~= nil, "describe starts with it: " .. lfos().describe(2))
+  -- a kept key the font has no glyphs for is drawn as plain letters (#551)
+  S.matrix[S.lib.matrix.home_slot(2)].dest = "v1_g\195\182ne"
+  context.screen.clear(); redraw()
+  assert_equal(bright_strip_text(context), "v1_gone", "printable: o for \195\182")
+  -- the widest key a file keeps is cut to its room, on the row and the strip
+  local widest = string.rep("W", S.lib.matrix.MATRIX.max_text)
+  S.matrix[S.lib.matrix.home_slot(2)].dest = widest
+  context.screen.clear(); redraw()
+  local field = bright_strip_text(context)
+  assert_true(field ~= "" and widest:sub(1, #field) == field and #field < #widest, "the strip cuts it: " .. field)
+  assert_screen_layout(context, "a home this build lacks, at its widest")
+  -- a known home is labeled as before
+  aim(2, "v3 pitch"); context.screen.clear(); redraw()
+  assert_equal(bright_strip_text(context), "v3 pitch~", "a known home: its label")
 end)
 
 end

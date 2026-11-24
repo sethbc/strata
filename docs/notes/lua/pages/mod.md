@@ -31,7 +31,7 @@ Five rows from y 18, 8 px apart (`S.lib.ui_field_list`, the scroll marker at x 1
 | scatter | `on`, `pitch`, `pos`, `size`, `cutoff`, `amp` | on/off | on (+), off (−) | toggle |
 | | `depth`, `rate` | `10%`, `0.10 Hz` | the param | — |
 | gestures | `G1`-`G4` | describe (`empty`, `rec 3.2 s`, `play 2 bars`, `play 2 bars dub`) | quantize (`enc`) | `press` |
-| lfos | `L1`-`L6` | describe (`v3 pitch~ 25% <L2`); a kept home this build lacks named as stored in place of `none` (`MOD_PAGE.no_home`), #881; dim while the home moves nothing | depth (`enc`) | `press`: the LFO page with that LFO selected (`show_lfo`) |
+| lfos | `L1`-`L6` | describe (`v3 pitch~ 25% <L2`), alone: a kept home this build lacks is named as stored by `S.lib.lfos.label` (#881, #1030); dim while the home moves nothing | depth (`enc`) | `press`: the LFO page with that LFO selected (`show_lfo`) |
 | matrix | `R1`-`R16` | `L2>v3 pitch~` and the depth right (`+40%`); `-` when empty | the depth | the routing view |
 | audio (and any other) | `IN`, ... | describe | the record's `enc` | the record's `press` |
 

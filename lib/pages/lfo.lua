@@ -31,7 +31,10 @@ return function(S)
   -- 55, above the hint row. Rows 13 px apart: a destination (baseline top +
   -- 4) sits 6 px under the row above's state text, and 7 px over its own
   -- (top + 11), which its descender clears (#422). The wave stops short of
-  -- the mark, which stops short of the widest state text ("off 100% R")
+  -- the mark, which stops short of the widest state text ("off 100% R").
+  -- A destination is cut to its room (S.lib.ui_text.fit_text): on its row
+  -- from the mark's x to 127, in the strip the strip less a ">" marker and
+  -- its gap; only a kept key this build lacks is that wide (#1030)
   local LFO_PAGE = {
     row_first_y = 11,   -- top of the window's first row
     row_spacing = 13,
@@ -59,6 +62,12 @@ return function(S)
 
   local function lfos() return S.lib.lfos end
   local function lfo_param(n, field) return S.lib.lfos.param_id(n, field) end
+
+  -- LFO n's destination label as the font draws it (a kept key comes from
+  -- a file), cut to room px
+  local function dest_label(n, room)
+    return S.lib.ui_text.fit_text(S.lib.ui_text.printable(lfos().label(n)), room)
+  end
 
   -- The strip's cursor: the field E3 edits
   S.lfo_field = 1
@@ -90,7 +99,10 @@ return function(S)
   -- routing), whether ALT+E3 keeps whole steps (a percent), and the value
   -- the strip shows
   local LFO_FIELDS = {
-    {label = "dest", value = function(n) return lfos().label(n) end},
+    {label = "dest", value = function(n)
+      local marker_width = math.max(screen.text_extents("<"), screen.text_extents(">"))
+      return dest_label(n, LFO_PAGE.strip_right - LFO_PAGE.strip_gap - marker_width)
+    end},
     {label = "shape", param = function(n) return lfo_param(n, "shape") end,
       value = function(n) return params:string(lfo_param(n, "shape")) end},
     {label = "mode", param = function(n) return lfo_param(n, "mode") end,
@@ -268,7 +280,7 @@ return function(S)
     -- 7 px above the state text, so a descender (the y of "density") clears
     -- it (#422), and 6 px under the row above's (LFO_PAGE.row_spacing)
     screen.move(127, top + 4)
-    screen.text_right(lfos().label(n))
+    screen.text_right(dest_label(n, 127 - LFO_PAGE.mark_x))
     screen.move(127, top + 11)
     screen.text_right((running and "on " or "off ") .. string.format("%.0f%%", params:get(lfo_param(n, "depth")))
       .. (routed(n) and " R" or ""))
@@ -516,6 +528,12 @@ return function(S)
     params:set(lfo_param(5, "division"), option_named(lfo_param(5, "division"), "1/16"))
     aim_labeled(5, "rev damp")
     params:set(lfo_param(5), 1)
+  end))
+  -- a kept home this build lacks at its widest (a file's longest key), cut
+  -- to its room on the row and in the strip (#1030)
+  table.insert(layout_states, layout_state("a home this build lacks, at its widest", 2, DEST_FIELD, function()
+    S.lib.matrix.set_home(2, string.rep("W", S.lib.matrix.MATRIX.max_text))
+    params:set(lfo_param(2), 1)
   end))
   -- destinations whose labels have descenders over the state text (#422)
   for index, label in ipairs({"density", "v1 pos", "dly fdbk"}) do

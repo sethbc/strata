@@ -36,8 +36,7 @@ return function(S)
   -- 2), a row's label at x 6, its text from x 24 (or 4 px after a wider
   -- label), its value right-aligned at 124. A row that does not play (a
   -- routing or an LFO's home whose S.lib.matrix.status moves nothing: off,
-  -- at depth 0, incomplete, unknown) is dim; no_home, the label an L row's
-  -- describe gives a home this build lacks. The two views: a title on y 16,
+  -- at depth 0, incomplete, unknown) is dim. The two views: a title on y 16,
   -- rows from y 24, 7 px apart (five of the eight targets in view). The
   -- target bounds step 1 % (ALT+E3 0.1 %). The settings view (3.7) draws
   -- as the routing view does, its title the source's name. The randomize ranges (#557,
@@ -55,7 +54,6 @@ return function(S)
     field_label_max = 8,  -- a settings row's label, as drawn and named in the hint (3.7)
     hint_width = 128,     -- the hint row's width (lib/ui/header.lua's HINT_ROW_WIDTH), which K3:edit shares
     random = {depth = {0, 30}, rate = {0.02, 0.5}, matrix = {-50, 50}},
-    no_home = "none",
     empty_corner = "[empty]",              -- a corner's value while the morph is not ready (#896)
     morph_needs = "[need %d]",             -- the morph row's text then, with MORPH.min_corners
   }
@@ -804,17 +802,6 @@ return function(S)
     if right then screen.text_right(text) else screen.text(text) end
   end
 
-  -- An L row's text, its record's describe(): a kept home this build lacks
-  -- (status unknown), which the describe names none, reads as stored in
-  -- none's place (#881), as an R row draws an unknown part
-  local function lfo_text(n, text)
-    local matrix = S.lib.matrix
-    if matrix.status(matrix.home_slot(n)) ~= "unknown" then return text end
-    local rest = text:match("^" .. MOD_PAGE.no_home .. "(.*)$")
-    if not rest then return text end
-    return matrix.home(n) .. rest
-  end
-
   -- While the morph has fewer than MORPH.min_corners corners holding a
   -- scene it can use (#896: S.lib.morph.corners_ready(), the morph's pure
   -- reader, which changes nothing it keeps), a corner the morph cannot use
@@ -854,7 +841,7 @@ return function(S)
     local text = record.describe and record.describe() or ""
     local value = row_macro(row) and percent(S.lib.mod_sources.fraction(record.key)) or nil
     local lfo = row.section == "lfos" and tonumber(record.key:match("^lfo(%d+)$"))
-    if lfo then return row.label, lfo_text(lfo, text), value, not PLAYS[S.lib.matrix.status(S.lib.matrix.home_slot(lfo))] end
+    if lfo then return row.label, text, value, not PLAYS[S.lib.matrix.status(S.lib.matrix.home_slot(lfo))] end
     return row.label, text, value, false
   end
 

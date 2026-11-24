@@ -13,8 +13,8 @@
 -- LFOs, the matrix adds offsets around the stored values and never sets a
 -- destination param: at each LFO step (S.lib.lfos.on_step) a Lua
 -- destination's sum of depth / 100 x normalized(source), and of each
--- playing home's m the LFO does not own (S.lib.lfos.owns: a fast home is
--- its engine node, a macro its own hand-over), becomes one extra offset
+-- home's m whose status(k) is summed (an owned one, its LFO's place engine
+-- or direct, is its engine node or hand-over), becomes one extra offset
 -- (clamped once in with_lfo_offsets), a fast destination's sum,
 -- with the macros' fast extras (set_fast_extra), goes to the engine as
 -- setFastOffset, clamped to -2..2; each send through the LFOs' round robin

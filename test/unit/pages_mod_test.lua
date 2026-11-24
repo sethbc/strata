@@ -1196,6 +1196,17 @@ test("a kept unknown home is named, not none", function()
   assert_screen_layout(context, "an unknown home")
 end)
 
+-- #1030: the L row's text is its record's describe alone, an unknown home
+-- included: the LFOs' label names the kept key, so MOD rewrites nothing
+test("an L row on a home this build lacks reads its describe alone (#1030)", function()
+  local context, S = loaded()
+  S.matrix[S.lib.matrix.home_slot(2)].dest = "v1_gone"
+  place(S, "source:lfo1")
+  local describe = S.lib.lfos.describe(2)
+  assert_true(describe:find("^v1_gone ") ~= nil, "describe names the kept key: " .. describe)
+  assert_equal(row_text(context, list_row(context, "L2").y, ROW_LABEL_X), "L2 " .. describe, "the row is describe")
+end)
+
 
 -- #896 (3.9, package 5d): with fewer than two corners set the morph does
 -- nothing, so its rows say so where the morph is drawn: each empty

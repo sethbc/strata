@@ -2509,28 +2509,21 @@ test("an R routing from an engine-run random LFO plays Lua's draws, never the en
 end)
 
 -- Each case: how LFO 1 is set (its home's label, on, depth), its place,
--- and the three answers as 3.8.0's code gave them (engine_playing: on, a
--- fast home, depth above 0; is_engine_run: a fast home; owns(1, id): id a
--- macro, or a fast home that resolves to id)
+-- and the answers that stay (#1030): playing, 3.8.0's engine_playing (on,
+-- a fast home, depth above 0), now place(1) == "engine"; is_engine_run (a
+-- fast home); and the home's status, which answers what 3.8.0's owns(1, id)
+-- did for the home's own id once the LFO plays (owned: a fast home or a
+-- macro, summed: any other)
 local PLACE_CASES = {
-  { label = "v3 pitch", on = 0, depth = 30, place = "off", playing = false, engine_run = true,
-    owns = { v3_grain_pitch = true, reverb_mix = false, macro_1 = true } },
-  { label = "v3 pitch", on = 1, depth = 0, place = "idle", playing = false, engine_run = true,
-    owns = { v3_grain_pitch = true, reverb_mix = false, macro_1 = true } },
-  { label = "none", on = 1, depth = 30, place = "idle", playing = false, engine_run = false,
-    owns = { v3_grain_pitch = false, reverb_mix = false, macro_1 = true } },
-  { label = "v3 pitch", on = 1, depth = 30, place = "engine", playing = true, engine_run = true,
-    owns = { v3_grain_pitch = true, v3_grain_size = false, reverb_mix = false, macro_1 = true } },
-  { label = "macro 1", on = 1, depth = 30, place = "direct", playing = false, engine_run = false,
-    owns = { v3_grain_pitch = false, reverb_mix = false, macro_1 = true } },
-  { label = "macro 1", on = 1, depth = 0, place = "idle", playing = false, engine_run = false,
-    owns = { macro_1 = true } },
-  { label = "rev mix", on = 1, depth = 30, place = "matrix", playing = false, engine_run = false,
-    owns = { v3_grain_pitch = false, reverb_mix = false, macro_1 = true } },
-  { label = "rev mix", on = 0, depth = 30, place = "off", playing = false, engine_run = false,
-    owns = { reverb_mix = false } },
-  { label = "v3 main", on = 1, depth = 30, place = "matrix", playing = false, engine_run = false,
-    owns = { v3_grain_density = false, v3_buf_pos = false, macro_1 = true } },
+  { label = "v3 pitch", on = 0, depth = 30, place = "off", playing = false, engine_run = true, status = "off" },
+  { label = "v3 pitch", on = 1, depth = 0, place = "idle", playing = false, engine_run = true, status = "zero" },
+  { label = "none", on = 1, depth = 30, place = "idle", playing = false, engine_run = false, status = "empty" },
+  { label = "v3 pitch", on = 1, depth = 30, place = "engine", playing = true, engine_run = true, status = "owned" },
+  { label = "macro 1", on = 1, depth = 30, place = "direct", playing = false, engine_run = false, status = "owned" },
+  { label = "macro 1", on = 1, depth = 0, place = "idle", playing = false, engine_run = false, status = "zero" },
+  { label = "rev mix", on = 1, depth = 30, place = "matrix", playing = false, engine_run = false, status = "summed" },
+  { label = "rev mix", on = 0, depth = 30, place = "off", playing = false, engine_run = false, status = "off" },
+  { label = "v3 main", on = 1, depth = 30, place = "matrix", playing = false, engine_run = false, status = "summed" },
 }
 
 local function set_place_case(case)
@@ -2561,18 +2554,37 @@ test("place answers each of its five values (#925)", function()
   assert_equal(lfos.place(S.constants.NUM_LFOS + 1), nil, "nor LFO 7")
 end)
 
-test("engine_playing, is_engine_run and owns answer as before in each place (#925)", function()
+test("is_engine_run and the home's status answer as before in each place (#925, #1030)", function()
   local context = load_strata(); finish_startup(context)
-  local lfos = local_value("S").lib.lfos
+  local S = local_value("S")
+  local lfos = S.lib.lfos
   for _, case in ipairs(PLACE_CASES) do
     set_place_case(case)
     lfo_step(context)
     local where = case.label .. ", on " .. case.on .. ", depth " .. case.depth .. " (" .. case.place .. ")"
     assert_equal(lfos.place(1), case.place, where)
-    assert_equal(lfos.engine_playing(1), case.playing, where .. ": engine_playing")
+    assert_equal(lfos.place(1) == "engine", case.playing, where .. ": plays in the engine")
     assert_equal(lfos.is_engine_run(1), case.engine_run, where .. ": is_engine_run")
-    for id, owned in pairs(case.owns) do
-      assert_equal(lfos.owns(1, id), owned, where .. ": owns " .. id)
+    assert_equal(S.lib.matrix.status(S.lib.matrix.home_slot(1)), case.status, where .. ": the home's status")
+  end
+end)
+
+-- #1030: who plays an LFO's home is the home's status (S.lib.matrix.status)
+-- and the LFO's place alone; 3.8.0's owns and engine_playing, which nothing
+-- read once the matrix read status, are gone, and no lib file calls them
+test("no lib file calls S.lib.lfos.owns or engine_playing (#1030)", function()
+  load_strata()
+  local lfos = local_value("S").lib.lfos
+  assert_equal(lfos.owns, nil, "no owns")
+  assert_equal(lfos.engine_playing, nil, "no engine_playing")
+  for _, source in ipairs(h.read_lua_sources()) do
+    if source.path:match("^lib/") or source.path == "strata.lua" then
+      local code = source.text:gsub("%-%-[^\n]*", "")
+      assert_true(not code:find("engine_playing", 1, true), source.path .. " calls engine_playing")
+      assert_true(not code:find("lfos%(?%)?%.owns"), source.path .. " calls S.lib.lfos.owns")
+      if source.path == "lib/lfos.lua" then
+        assert_true(not code:find("M%.owns"), "lib/lfos.lua defines owns")
+      end
     end
   end
 end)
