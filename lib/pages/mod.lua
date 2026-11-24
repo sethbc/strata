@@ -35,7 +35,9 @@ return function(S)
   -- The list: five rows from y 18, 8 px apart, section labels at x 0 (level
   -- 2), a row's label at x 6, its text from x 24 (or 4 px after a wider
   -- label), its value right-aligned at 124. A row that does not play (a
-  -- routing off or incomplete) is dim. The two views: a title on y 16,
+  -- routing or an LFO's home whose S.lib.matrix.status moves nothing: off,
+  -- at depth 0, incomplete, unknown) is dim; no_home, the label an L row's
+  -- describe gives a home this build lacks. The two views: a title on y 16,
   -- rows from y 24, 7 px apart (five of the eight targets in view). The
   -- target bounds step 1 % (ALT+E3 0.1 %). The settings view (3.7) draws
   -- as the routing view does, its title the source's name. The randomize ranges (#557,
@@ -53,6 +55,7 @@ return function(S)
     field_label_max = 8,  -- a settings row's label, as drawn and named in the hint (3.7)
     hint_width = 128,     -- the hint row's width (lib/ui/header.lua's HINT_ROW_WIDTH), which K3:edit shares
     random = {depth = {0, 30}, rate = {0.02, 0.5}, matrix = {-50, 50}},
+    no_home = "none",
   }
   S.MOD_PAGE = MOD_PAGE
 
@@ -281,18 +284,22 @@ return function(S)
     return record.name, true
   end
 
-  -- Whether routing k holds a known source and destination, and whether it
-  -- plays as MOD draws it (complete and on; a depth of 0 still shows)
+  -- Whether a routing's (or a home's) status, S.lib.matrix.status, is one
+  -- that moves a sound: summed by the matrix, or owned by an engine node or
+  -- an LFO's hand-over (#926: the one answer MOD, its rings, MAIN's ~ and the
+  -- envelopes read)
+  local PLAYS = {summed = true, owned = true}
+  local INCOMPLETE = {empty = true, incomplete = true, unknown = true}
+
+  -- Whether routing k holds a known source and destination (at any depth,
+  -- on or off), and the routing
   local function routing_complete(k)
-    local routing = S.lib.matrix.routing(k)
-    local _, source_known = source_text(routing.source)
-    local _, dest_known = dest_text(routing.dest)
-    return source_known and dest_known, routing
+    return not INCOMPLETE[S.lib.matrix.status(k)], S.lib.matrix.routing(k)
   end
 
+  -- Whether routing k plays: complete, on and at a depth other than 0
   function M.routing_plays(k)
-    local complete, routing = routing_complete(k)
-    return complete and routing.on
+    return PLAYS[S.lib.matrix.status(k)] == true
   end
 
   -- From index, d whole steps along a list, clamped
@@ -795,7 +802,19 @@ return function(S)
     if right then screen.text_right(text) else screen.text(text) end
   end
 
-  -- A list row's label, text (left), value (right) and whether it is dim
+  -- An L row's text, its record's describe(): a kept home this build lacks
+  -- (status unknown), which the describe names none, reads as stored in
+  -- none's place (#881), as an R row draws an unknown part
+  local function lfo_text(n, text)
+    local matrix = S.lib.matrix
+    if matrix.status(matrix.home_slot(n)) ~= "unknown" then return text end
+    local rest = text:match("^" .. MOD_PAGE.no_home .. "(.*)$")
+    if not rest then return text end
+    return matrix.home(n) .. rest
+  end
+
+  -- A list row's label, text (left), value (right) and whether it is dim:
+  -- a routing or an L row while it moves nothing (S.lib.matrix.status)
   local function row_parts(row)
     if row.kind == "bank" then
       local macros = S.lib.macros.bank_macros(S.lib.macros.bank())
@@ -805,8 +824,8 @@ return function(S)
     elseif row.kind == "toggle" then
       return row.label, nil, on_text(row.param_id), false
     elseif row.kind == "routing" then
-      local complete, routing = routing_complete(row.k)
-      local dim = not (complete and routing.on)
+      local routing = S.lib.matrix.routing(row.k)
+      local dim = not M.routing_plays(row.k)
       if routing.source == "" and routing.dest == "" then return row.label, "-", nil, dim end
       local text = source_text(routing.source) .. ">" .. dest_text(routing.dest)
       return row.label, text, signed(routing.depth), dim
@@ -814,6 +833,8 @@ return function(S)
     local record = row.source
     local text = record.describe and record.describe() or ""
     local value = row_macro(row) and percent(S.lib.mod_sources.fraction(record.key)) or nil
+    local lfo = row.section == "lfos" and tonumber(record.key:match("^lfo(%d+)$"))
+    if lfo then return row.label, lfo_text(lfo, text), value, not PLAYS[S.lib.matrix.status(S.lib.matrix.home_slot(lfo))] end
     return row.label, text, value, false
   end
 

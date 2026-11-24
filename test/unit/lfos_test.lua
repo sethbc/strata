@@ -1679,6 +1679,7 @@ end)
 test("an error inside an LFO step is printed once and the LFOs keep stepping (#517)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
+  h.show_page("FX")  -- MAIN's ~ reads the homes too (#881): its draw would raise the same
   local index = destination_index("filt freq")
   local destination = S.LFO_DESTINATIONS[index]
   local real_resolve = destination.resolve

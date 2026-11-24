@@ -515,7 +515,7 @@ test("an ended envelope whose times were raised starts again when the loop goes 
   assert_true(envelopes.value(3) > 0, "the loop starts it at once, from 0: " .. envelopes.value(3))
 end)
 
-test("a step resolves each envelope routing once and owns needs no second resolution", function()
+test("a step resolves each envelope routing once and owns reads the matrix's status", function()
   local context, S, envelopes = loaded()
   route(S, 3, "env2", "v5_filter_freq", 50)
   route(S, 4, "env3", "reverb_mix", 50)
@@ -526,12 +526,11 @@ test("a step resolves each envelope routing once and owns needs no second resolu
   lfo_step(context)
   matrix.playing = real_playing
   assert_equal(calls, 2, "one resolution per envelope routing a step")
-  -- owns with the resolved id reads no routing again
+  -- owns is the matrix's status (#926), never a resolution of its own
   matrix.playing = function() error("owns resolved the routing again") end
-  assert_true(envelopes.owns(3, "v5_filter_freq"), "routing 3 with its id")
-  assert_true(not envelopes.owns(4, "reverb_mix"), "a Lua destination is the matrix's")
+  assert_true(envelopes.owns(3), "routing 3, status owned")
+  assert_true(not envelopes.owns(4), "a Lua destination is the matrix's")
   matrix.playing = real_playing
-  assert_true(envelopes.owns(3), "and without the id")
 end)
 
 -- The final review's Lua B, Minor 1: ALT+E3 turns an envelope's control

@@ -31,13 +31,14 @@ Five rows from y 18, 8 px apart (`S.lib.ui_field_list`, the scroll marker at x 1
 | scatter | `on`, `pitch`, `pos`, `size`, `cutoff`, `amp` | on/off | on (+), off (−) | toggle |
 | | `depth`, `rate` | `10%`, `0.10 Hz` | the param | — |
 | gestures | `G1`-`G4` | describe (`empty`, `rec 3.2 s`, `play 2 bars`) | quantize (`enc`) | `press` |
-| lfos | `L1`-`L6` | describe (`v3 pitch~ 25% <L2`) | depth (`enc`) | `press`: the LFO page with that LFO selected (`show_lfo`) |
+| lfos | `L1`-`L6` | describe (`v3 pitch~ 25% <L2`); a kept home this build lacks named as stored in place of `none` (`MOD_PAGE.no_home`), #881; dim while the home moves nothing | depth (`enc`) | `press`: the LFO page with that LFO selected (`show_lfo`) |
 | matrix | `R1`-`R16` | `L2>v3 pitch~` and the depth right (`+40%`); `-` when empty | the depth | the routing view |
 | audio (and any other) | `IN`, ... | describe | the record's `enc` | the record's `press` |
 
 - E2 moves over the rows (clamped). K2 jumps to the next section's first row, after the last to the first. ALT+E2 on a macro row shows the next bank (with E2 back, the bank before), the cursor on the same row of it. ALT+E3 is the row's `fine_enc` or a fine `enc_param_delta`.
 - ALT+K3: a routing's on/off; a source's `alt_press(3)` (a recorder's overdub). ALT+K2 held 0.5 s: `alt_hold()`.
 - A routing row draws its source by name (`S.lib.mod_sources.get(key).name`) and its destination by its LFO destination label (from `S.LFO_DESTINATIONS`), with `~` when the param it resolves to now is one of the five fast ones (`S.lib.lfos.fast_destination`; a voice's main entry follows its source); a key or id this build lacks as stored, cut to the room.
+- A routing row, its depth ring (`routing_plays(k)`) and an L row are dim while `S.lib.matrix.status` of the routing or of the LFO's home (`home_slot(n)`) is neither `summed` nor `owned` (#881, #926): off, at depth 0, empty, incomplete or unknown. `routing_complete(k)` (the randomize's complete routings) is a status other than `empty`, `incomplete` and `unknown`. The page keeps no record of either.
 - Hints: `K3:bank E3:bank`; the source's own (`K3:targets E3:value`, `K3:rec E3:quant`, `K3:lfo E3:depth`, `E3:gain`); `E3:scene` (A-D), `E3:morph` (morph and y), `E3:depth`, `E3:rate`; `K3:on|off E3:on/off`; `K3:edit E3:depth`. With ALT: the K2 part (above: `K2:rand` in scatter and the matrix, `K2:clear` on a recorder holding a loop, none on a macro, the morph, an LFO or an empty recorder), ALT+K3's (`K3:on|off`, `K3:dub`), `E2:bank` on a macro row, `E3:fine` on a row that turns finely: `K2:rand E3:fine` on scatter's rate, `E2:bank E3:fine` on a macro, `K2:clear K3:dub` on a playing recorder, an empty hint row on the bank row. K1 let go while ALT+K2 is down: the K2 part alone.
 
 ## The target view

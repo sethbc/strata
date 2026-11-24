@@ -118,4 +118,4 @@ SETUP: no rings.
 - Each level table is a named constant of its file (`ARC_MAIN_LEVELS`, `ARC_VOICE`, `ARC_SEQ.levels`, `ARC_SCENES.level`, `ARC_FX_LEVEL`, `ARC_LFO.levels`, `ARC_BUFFER_LEVELS`, `ARC_MOD.levels`), and `test/unit/arc_pages_test.lua` (`ring brightness: ...`) pins every state below (MOD's list, ALT, matrix with an off and an incomplete routing, routing view and target view) through `device.segments[ring].level` (#439), plus the menu-close redraw of `reconcile()`.
 - VOICE: the cursor row's ring 15, the others 12. SEQ: rings 1-2 at 15, 3-4 at 12; its step editor's set attributes and the level at 15, the off ones at 4. SCENES at 12.
 - FX rings at 12. BUFFER rings at 15 (buffer source) or 4, ALT ring 4 at 12, ALT ring 1 at 8 while the scan is held. LFO depth rings at 15 (running) or 4, ring 4 at 12.
-- MOD rings at 12 (`ARC_MOD.levels.ring`), a routing's depth ring at 4 while the routing is off or incomplete (`ARC_MOD.levels.dim`).
+- MOD rings at 12 (`ARC_MOD.levels.ring`), a routing's depth ring at 4 while the routing does not play (off, at depth 0, incomplete: `S.lib.pages_mod.routing_plays`, the matrix's `status`; `ARC_MOD.levels.dim`).

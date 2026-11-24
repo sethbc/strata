@@ -64,7 +64,7 @@ On the **LFO** page:
 On the **MOD** page:
 
 - **Rings 1-4** - The four macros of the bank shown (macros 1-4 on bank 1, up to 13-16 on bank 4). Changing the bank anywhere (the bank row, ALT+E2, the arc's button, a grid) moves the rings with it
-- With the cursor on a routing (R1-R16), **rings 1-4** are the depths of the four routings around it (R1-R4, R5-R8, R9-R12, R13-R16), filled from the top: clockwise for a positive depth, counter-clockwise for a negative one; dim while the routing is off or misses its source or destination
+- With the cursor on a routing (R1-R16), **rings 1-4** are the depths of the four routings around it (R1-R4, R5-R8, R9-R12, R13-R16), filled from the top: clockwise for a positive depth, counter-clockwise for a negative one; dim while the routing is off, at depth 0, or misses its source or destination
 
 With **ALT** (K1) held on the list:
 
@@ -148,6 +148,6 @@ The button runs the page's main action, on the pages that give it one (each page
 - FX: level 12; frequency and delay time follow their exponential curve. While the delay is synced to the tempo, ring 3 picks its division instead (20 ticks per division) and shows the division's place. The ALT rings at 12 too
 - IO: level 12
 - LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
-- MOD: level 12; a routing's depth ring dim (4) while the routing is off or misses its source or destination
+- MOD: level 12; a routing's depth ring dim (4) while the routing is off, at depth 0, or misses its source or destination
 - BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12; ALT ring 1 at 8 while the voice's scan is held. The slice editor's rings at 15
 - SCENES: level 12

@@ -184,12 +184,16 @@ return function(S)
   -- The engine's routes (design §7.3)
   ---------------------------------------------------------------------------
 
+  -- The voice whose envelope routing k's source is (env<v>), else nil
+  -- (S.lib.matrix.status reads it: such a routing to a fast destination is
+  -- the envelopes')
   local function source_voice(k)
     local source = S.matrix[k] and S.matrix[k].source
     local voice_idx = type(source) == "string" and tonumber(source:match("^env(%d+)$"))
     if valid(voice_idx) then return voice_idx end
     return nil
   end
+  M.source_voice = source_voice
 
   -- What route k carries while its routing is the envelopes' (playing,
   -- from env<v>, to a fast destination), filled into the route's own
@@ -211,13 +215,10 @@ return function(S)
   end
 
   -- Whether matrix routing k is the engine's: a playing routing from an
-  -- envelope to a fast destination. id, when given, is the destination
-  -- S.lib.matrix.playing(k) resolved for it (the matrix's step passes it,
-  -- so the routing is resolved once); without it the routing is resolved
-  function M.owns(k, id)
-    if not is_route(k) or not source_voice(k) then return false end
-    if id == nil then id = S.lib.matrix.playing(k) end
-    return id ~= nil and S.lib.lfos.fast_destination(id) ~= nil
+  -- envelope to a fast destination, the matrix's one answer
+  -- (S.lib.matrix.status(k) "owned", #926)
+  function M.owns(k)
+    return is_route(k) and S.lib.matrix.status(k) == "owned"
   end
 
   local ROUTE_FIELDS = {"source", "voice", "destination", "depth", "attack", "decay", "sustain", "release", "curve",

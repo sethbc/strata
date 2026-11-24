@@ -59,9 +59,10 @@ return function(S)
     end
   end
 
-  -- MAIN's voice list: "<n><+|-|m|s> <name>", "+" for a running voice, "-" for a
+  -- MAIN's voice list: "<n><+|-|m|s|x> <name>", "+" for a running voice, "-" for a
   -- stopped one, "m" for a running voice that is silenced (muted, or another
-  -- is soloed) and "s" for a soloed one, the type's short name, then " [L]" when locked,
+  -- is soloed), "s" for a soloed one and "x" for a stopped one that is
+  -- silenced (#918: it would start silent), the type's short name, then " [L]" when locked,
   -- then (3.5) " <n>" while the voice holds count_from notes or more
   -- (S.lib.notes.held; the notes module rebuilds the list when it changes).
   -- Plain ASCII, so the entries' width does not depend on the font drawing
@@ -77,6 +78,8 @@ return function(S)
         elseif S.lib.voice_mix.silenced(i) then
           status = "m"
         end
+      elseif S.lib.voice_mix.silenced(i) then
+        status = "x"
       end
       local lock = S.locked[i] and " [L]" or ""
       local held = S.lib.notes.held(i)
@@ -129,18 +132,12 @@ return function(S)
     return entry.label, string.format(entry.format, params:get(id))
   end
 
-  -- Whether the engine's modulation moves the voice (3.4, design §10,
-  -- §10.2): an LFO the LFO module plays in the engine
-  -- (S.lib.lfos.engine_playing: on, on a fast destination, at a depth above
-  -- 0) on one of the voice's fast destinations, scatter
-  -- (S.lib.scatter.affects) or a routing of the matrix
-  -- (S.lib.matrix.affects)
+  -- Whether modulation moves the voice (3.4, design §10, §10.2): scatter
+  -- (S.lib.scatter.affects) or a routing of the matrix that plays on one of
+  -- its params, an LFO's home among them (S.lib.matrix.affects, from
+  -- S.lib.matrix.status: an LFO on, at a depth above 0, in its engine node
+  -- or summed by the matrix in Lua, #881)
   local function engine_modulated(voice_idx)
-    local lfos = S.lib.lfos
-    for n = 1, S.constants.NUM_LFOS do
-      local fast = lfos.destination(n).fast
-      if fast and fast.voice == voice_idx and lfos.engine_playing(n) then return true end
-    end
     return S.lib.scatter.affects(voice_idx) or S.lib.matrix.affects(voice_idx)
   end
   M.engine_modulated = engine_modulated
