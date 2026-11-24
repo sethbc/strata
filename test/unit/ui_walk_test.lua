@@ -5,13 +5,13 @@
 -- modal owner opened from its page and closed, the grid's step editor
 -- pushed over whatever is up and popped, SCENES' name entry finished and
 -- canceled, BUFFER's file selector opened and canceled, and time passing.
--- Every invariant is checked after each op, and so is the walk's own
--- rule: a key that is physically up has no press mark anywhere. The end
--- check (the controller's ruling on 3a, docs/notes/lua/ui-core.md, The
--- UI walk): every key up and every owner closed, the states that animate
--- by right quieted, then the press state is a fresh script's, nothing
--- animates, and each page's drawn hint row is its own hints, the same with
--- the press marks cleared
+-- Every invariant is checked after each op, and so are the walk's own
+-- rules: a key that is physically up has no press mark anywhere, and a
+-- press mark names the page shown. The end check (the controller's
+-- ruling on 3a, docs/notes/lua/ui-core.md, The UI walk): every key up
+-- and every owner closed, the states that animate by right quieted, then
+-- the press state is a fresh script's, nothing animates, and each page's
+-- drawn hint row is its own hints, the same with the press marks cleared
 -- Run alone: lua test/run.lua ui_walk
 
 return function(h)
@@ -58,17 +58,24 @@ local function hardware_key(state, n, z)
   state.down[n] = z == 1 or nil
   if z == 1 then
     state.press_went[n] = goes
-    state.press_top[n] = goes == "script" and S.lib.ui_modal.top() or nil
+    -- what the press went to: the top owner, or the bare page
+    state.press_top[n] = goes == "script" and (S.lib.ui_modal.top() or "page") or nil
   else
     -- the counts reached names: a release the menu took (its press went to
-    -- the script) and one made under the owner that covered the one its
-    -- press went to
+    -- the script) and one made under a cover: the grid's step editor on top,
+    -- pushed over what the press went to (an owner still beneath it, or
+    -- the bare page)
     if goes == "menu" and state.press_went[n] == "script" and n ~= 1 then
       state.counts.menu_took_release = state.counts.menu_took_release + 1
     end
-    local top = S.lib.ui_modal.top()
-    if goes == "script" and n ~= 1 and state.press_top[n] and top and top ~= state.press_top[n] then
-      state.counts.released_under_cover = state.counts.released_under_cover + 1
+    local top, editor = S.lib.ui_modal.top(), S.lib.pages_seq.step_editor_owner
+    local pressed = state.press_top[n]
+    if goes == "script" and n ~= 1 and top == editor and pressed and pressed ~= editor then
+      local beneath = pressed == "page"
+      for _, owner in ipairs(h.registered_invariant("modal owner").upvalue("stack")) do
+        if owner == pressed then beneath = true end
+      end
+      if beneath then state.counts.released_under_cover = state.counts.released_under_cover + 1 end
     end
     state.press_went[n], state.press_top[n] = nil, nil
   end
@@ -123,17 +130,24 @@ local function setup_row(S, label)
 end
 
 local OWNER_OPEN = {
-  zones = {page = "SETUP", place = function(S) setup_row(S, "mpe & zones") end},
-  scale = {page = "SETUP", place = function(S) setup_row(S, "scale & tuning") end},
-  factory = {page = "SETUP", place = function(S) setup_row(S, "factory sets") end},
+  zones = {page = "SETUP", place = function(S) setup_row(S, "mpe & zones") end,
+    is_open = function(S) return S.lib.ui_zones.is_open() end},
+  scale = {page = "SETUP", place = function(S) setup_row(S, "scale & tuning") end,
+    is_open = function(S) return S.lib.ui_scale_editor.is_open() end},
+  factory = {page = "SETUP", place = function(S) setup_row(S, "factory sets") end,
+    is_open = function(S) return S.lib.factory.is_open() end},
   picker = {page = "VOICE", place = function(S)
     for index, row in ipairs(voice_page_rows(S.selected_voice)) do
       if row.kind == S.lib.ui_voice_rows.PRESET_KIND then S.lib.pages_voice.place_cursor(index) end
     end
-  end},
+  end, is_open = function(S) return S.lib.ui_voice_picker.is_open() end},
   -- slot 1 holds audio (setup); the slices field is BUFFER's last
-  slice = {page = "BUFFER", place = function(S) S.buffer_page.slot, S.buffer_page.field = 1, WALK.last_field end},
-  io_detail = {page = "IO", place = function(S) S.lib.pages_io.go_to_row("ui walk", "voice", {id = "midi"}) end},
+  slice = {page = "BUFFER", place = function(S) S.buffer_page.slot, S.buffer_page.field = 1, WALK.last_field end,
+    is_open = function(S) return S.lib.ui_slice_editor.is_open() end},
+  -- IO's detail list has no accessor: its open record is the io detail
+  -- invariant's upvalue (lib/pages/io.lua)
+  io_detail = {page = "IO", place = function(S) S.lib.pages_io.go_to_row("ui walk", "voice", {id = "midi"}) end,
+    is_open = function() return h.registered_invariant("io detail").upvalue("detail").owner ~= nil end},
 }
 
 local function open_owner(state, random)
@@ -151,7 +165,7 @@ local function open_owner(state, random)
   how.place(S)
   hardware_tap(state, 3)
   local top = S.lib.ui_modal.top()
-  if top then
+  if top and how.is_open(S) then
     state.owners[kind] = top
     state.counts["opened_" .. kind] = state.counts["opened_" .. kind] + 1
   end
@@ -256,18 +270,25 @@ local function press_marks(state)
 end
 
 -- The physical keys that are up have no press mark anywhere: K1 up, no
--- ALT; K2 or K3 up, no page mark and no owner's press
+-- ALT; K2 or K3 up, no page mark and no owner's press or press time. And
+-- a press mark names the page shown: a page change forgets the presses,
+-- so a key held across one and back never releases on its page (#234)
 local function stale_marks(state)
   local S = state.S
   local problems = {}
   if not state.down[1] and S.alt_held then problems[#problems + 1] = "K1 is up and ALT is held" end
-  local pressed = modal_presses()
+  local pressed, pressed_at = modal_presses()
   for n = 2, 3 do
     if not state.down[n] then
       for _, field in ipairs(PRESS_FIELDS) do
         if S[field][n] ~= nil then problems[#problems + 1] = "K" .. n .. " is up and " .. field .. " is set" end
       end
       if pressed[n] ~= nil then problems[#problems + 1] = "K" .. n .. " is up and an owner holds it" end
+      if pressed_at[n] ~= nil then problems[#problems + 1] = "K" .. n .. " is up and an owner has its press time" end
+    end
+    if S.key_press_page[n] ~= nil and S.key_press_page[n] ~= S.ui_page then
+      problems[#problems + 1] = "K" .. n .. "'s press is on page " .. tostring(S.key_press_page[n]) .. ", not the page shown, "
+        .. tostring(S.ui_page)
     end
   end
   return problems
@@ -422,7 +443,8 @@ h.test("the ui walk's end check names a press mark left, an animation, a hint ro
   local context = h.load_strata(); h.finish_startup(context)
   local state = new_state(context)
   local S = state.S
-  assert_true(#end_check(state) == 0, "a fresh script passes: " .. table.concat(end_check(state), "; "))
+  local fresh = end_check(state)
+  assert_true(#fresh == 0, "a fresh script passes: " .. table.concat(fresh, "; "))
   -- an ALT+K2 press on MAIN the script still holds (its release lost)
   S.lib.ui_keys.set_ui_page(page_index(S, "MAIN"))
   S.key_press_page[2], S.key_press_at[2], S.key_press_alt[2] = page_index(S, "MAIN"), util.time(), true
@@ -441,6 +463,32 @@ h.test("the ui walk's end check names a press mark left, an animation, a hint ro
   problems = table.concat(end_check(state), "\n")
   assert_true(problems:find("an owner is left open after", 1, true), "names the owner left open:\n" .. problems)
   S.lib.ui_modal.pop(stuck)
+end)
+
+-- released_under_cover counts a release made with the grid's step editor
+-- on top, pushed over what its press went to; a release on an owner the
+-- editor uncovered by its pop is no cover
+h.test("the ui walk counts a release under the step editor as under a cover, and one after its pop as not", function()
+  local context = h.load_strata(); h.finish_startup(context)
+  local state = new_state(context)
+  local S = state.S
+  -- a press on the bare page, then the editor pushed over it
+  hardware_key(state, 2, 1)
+  push_step_editor(state, function(n) return n end)
+  assert_true(S.lib.ui_modal.top() == S.lib.pages_seq.step_editor_owner, "the editor is up")
+  hardware_key(state, 2, 0)
+  assert_true(state.counts.released_under_cover == 1, "the page's press released under the editor: counted")
+  -- a press on the editor over the zones editor, the editor popped, the release on the zones editor
+  pop_step_editor(state)
+  open_owner(state, function() return 1 end)
+  assert_true(S.lib.ui_zones.is_open(), "the zones editor is open")
+  push_step_editor(state, function(n) return n end)
+  hardware_key(state, 3, 1)
+  pop_step_editor(state)
+  hardware_key(state, 3, 0)
+  assert_true(state.counts.released_under_cover == 1, "a release after the cover went: not counted, "
+    .. state.counts.released_under_cover)
+  close_owner(state)
 end)
 
 local function toggle_key(n)
