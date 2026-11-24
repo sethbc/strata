@@ -1153,7 +1153,7 @@ test("a silent read whose scale moves a running chord's list sends it once (#994
   local S = local_value("S")
   util.make_dir(context.data_dir)
   local path = context.data_dir .. "chord.pset"
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     if S.voices[voice_idx].active then toggle_voice(voice_idx) end
   end
   toggle_voice(2)
@@ -1175,6 +1175,50 @@ test("a silent read whose scale moves a running chord's list sends it once (#994
     end
   end
   assert_equal(table.concat(sent, ","), table.concat(held, ","), "the file's scale's list")
+end)
+
+-- #994 (review): a silent read whose tuning moves a running chord voice's
+-- list sends it once. The tuning's own hook takes the file's tuning and
+-- sends setTuning and its tones, leaving the chords to the engine params'
+-- hook, whose send_if_changed finds the list moved. The count is
+-- S.lib.arp's (ARP.max_steps + 1), the same as each interval and the count
+test("a silent read whose tuning moves a running chord's list sends it once (#994)", function()
+  local context = load_strata({ data_subdir = "pset_engine_chord_tuning" }); finish_startup(context)
+  local S = local_value("S")
+  local NINE = S.lib.arp.ARP.max_steps + 1
+  assert_equal(NINE, S.lib.variation.VARIATION.max_intervals + 1, "the arp's count is each interval and the count")
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "chord.pset"
+  local entries = {}
+  for _, entry in ipairs(S.lib.tuning.built_ins()) do entries[entry.name] = entry end
+  for voice_idx = 1, S.constants.NUM_VOICES do
+    if S.voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  toggle_voice(2)
+  params:set("v2_intervals", S.lib.variation.VARIATION.set_index.chord)
+  S.lib.tuning.select(entries["19 equal"])
+  params:write(path, "chord")
+  local held = S.lib.arp.list(2, S.lib.variation.interval_set(2))
+  S.lib.tuning.select(entries["12 equal"])
+  assert_true(table.concat(S.lib.arp.list(2, S.lib.variation.interval_set(2)), ",") ~= table.concat(held, ","),
+    "the session's tuning gives another list")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(interval_sends(context), NINE, "the moved list once: each interval and the count")
+  local sent = {}
+  for index = 1, #held do
+    for _, call in ipairs(context.engine_calls) do
+      if call.name == "setGrainParam" and call.args[2] == "interval" .. index then sent[index] = call.args[3] end
+    end
+  end
+  assert_equal(table.concat(sent, ","), table.concat(held, ","), "the file's tuning's list")
+  local counts = {}
+  for _, call in ipairs(context.engine_calls) do counts[call.name] = (counts[call.name] or 0) + 1 end
+  local names = {}
+  for name, count in pairs(counts) do names[#names + 1] = name .. " " .. count end
+  table.sort(names)
+  assert_equal(table.concat(names, ", "), "setGrainParam " .. (NINE + 1) .. ", setScale 1, setScatter 1, setTuning 1, "
+    .. "setTuningTone 19", "the tuning, its tones, the list once, the scaleNote, the scale and scatter")
 end)
 
 -- Turning delay sync off sends under delay_time's sender and records the
