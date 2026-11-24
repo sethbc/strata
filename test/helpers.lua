@@ -1697,6 +1697,7 @@ local UNIT_FILE_SECONDS = {
   ["grid_layout_128v_test.lua"] = 2,
   ["grid_layout_256_test.lua"] = 4,
   ["grid_layout_64_test.lua"] = 2,
+  ["grid_walk_test.lua"] = 5,
   ["history_test.lua"] = 1,
   ["input_level_test.lua"] = 1,
   ["io_actions_test.lua"] = 1,
