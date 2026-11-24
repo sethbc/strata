@@ -1305,4 +1305,58 @@ test("each hold ends as a page randomize's does (#922, #927)", function()
   end
 end)
 
+
+-- #1015: filter_mix was the one matrix destination whose action did not
+-- call note_param_edit, so a set of it after a learn that touched it kept
+-- the learn's hold, and an undo then put back the value from before the
+-- learn over the user's later edit. Fails if filter_mix's action stops
+-- calling note_param_edit
+test("a set of filter_mix after a learn that touched it ends the learn's hold (#1015)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local MOD = S.constants.UI_PAGES.index.MOD
+  S.lib.matrix.set_routing(3, "macro1", "")
+  S.lib.matrix.learn(3)
+  enc_param_delta(3, "filter_mix", 1)                  -- the turn that learns
+  assert_true(S.lib.mutation.undo_for(MOD, "matrix", nil), "the learn holds its undo")
+  assert_equal(S.undo.routing.param, "filter_mix", "the learn touched filter_mix")
+  params:set("filter_mix", 0.5)                        -- PARAMS, MIDI or a script set
+  assert_true(not S.lib.mutation.undo_for(MOD, "matrix", nil), "a set of filter_mix ends the learn's hold")
+  assert_equal(S.lib.mutation.undo(), false, "there is nothing to undo")
+  assert_near(params:get("filter_mix"), 0.5, 1e-9, "the user's edit stays")
+end)
+
+-- #1015: every matrix destination's action calls note_param_edit with its
+-- own id (v<i>_main resolved to its voice's main param, as the matrix
+-- resolves it at each step), so a learn's hold ends at any edit of the
+-- param it touched, and a new destination cannot miss the call. Fails if
+-- the call is removed from any one destination's action
+test("every matrix destination's action calls note_param_edit (#1015)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local destinations = S.lib.matrix.destination_ids()
+  assert_true(#destinations > 0, "the matrix has destinations")
+  local real_note = note_param_edit
+  local noted
+  note_param_edit = function(param_id) noted[param_id] = true; return real_note(param_id) end
+  local checked, silent = 0, {}
+  local ok, problem = pcall(function()
+    for _, dest in ipairs(destinations) do
+      local voice = dest:match("^v(%d+)_main$")
+      local id = voice and main_param_id(tonumber(voice)) or dest
+      assert_true(params.lookup[id] ~= nil, dest .. " resolves to a param (" .. tostring(id) .. ")")
+      noted = {}
+      local before = params:get(id)
+      params:set(id, other_value(id))
+      assert_true(params:get(id) ~= before, id .. ": the set changed its value")
+      if not noted[id] then silent[#silent + 1] = id end
+      checked = checked + 1
+    end
+  end)
+  note_param_edit = real_note
+  if not ok then error(problem, 0) end
+  assert_equal(table.concat(silent, ", "), "", "every destination's action calls note_param_edit")
+  assert_equal(checked, #destinations, "every destination was checked (" .. checked .. " of " .. #destinations .. ")")
+end)
+
 end

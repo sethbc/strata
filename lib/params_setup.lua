@@ -587,6 +587,7 @@ return function(S)
       name = "filter mix",
       controlspec = controlspec.new(0, 1, "lin", 0.01, 0),  -- 0 = bypass
       action = function(x)
+        note_param_edit("filter_mix")
         -- a rise (E3, PARAMS, a scene, a PSET) is the mix K3 brings back
         filter_mix_moved(x)
         send_param_to_engine("filter_mix", x)
