@@ -1154,7 +1154,10 @@ test("the stub's file selector takes key and enc until it closes, from play mode
   -- from the menu (a PARAMS file param): the menu's key and page encoder
   -- go to the selector, the globals stay the script's
   heard = {}
+  _menu.redraw, _menu.refresh = norns.none, norns.none  -- left by another page
   _menu.set_mode(true)
+  assert_equal(norns.menu.get_redraw(), context.menu.page_redraw, "set_mode(true) sets the page's redraw, as set_page does")
+  assert_equal(norns.menu.get_refresh(), context.menu.page_refresh, "and its refresh")
   local menu_key, menu_enc = recorder("menu key"), recorder("menu enc")
   _menu.key, _menu.penc = menu_key, menu_enc
   local menu_seen
@@ -1169,9 +1172,40 @@ test("the stub's file selector takes key and enc until it closes, from play mode
   assert_equal(menu_seen.path, "cancel")
   assert_equal(menu_seen.key, menu_key, "the menu's key is back before the callback runs")
   assert_equal(menu_seen.penc, menu_enc, "and its page encoder")
+  assert_equal(norns.menu.get_redraw(), context.menu.page_redraw, "and the page's redraw")
   _menu.key(2, 1); norns.encoders.callback(3, 1)
   assert_equal(table.concat(heard, ", "), "menu key 2 1, menu enc 3 1", "after close the menu hears them")
   _menu.set_mode(false)
+end)
+
+-- On norns only fs.exit calls the callback, after it handed the keys back.
+-- A test that calls `last.callback` itself leaves the selector holding
+-- them, which no device can show: a key or turn that reaches the selector
+-- then raises, naming close (#985's review)
+test("the stub's file selector raises at a key or turn after a test called its callback itself", function()
+  local context = load_strata(); finish_startup(context)
+  local fileselect = require("fileselect")
+  for _, input in ipairs({"key", "enc"}) do
+    fileselect.enter(_path.audio, function() end)
+    fileselect.last.callback("/x.wav")
+    local ok, message = pcall(_G[input], 2, 1)
+    assert_true(not ok, input .. " after a direct callback raises")
+    assert_true(tostring(message):find("context.fileselect.close", 1, true), "naming close: " .. tostring(message))
+    fileselect.close()  -- hands the keys back
+  end
+  -- a selector closed with close() and opened again takes keys as before
+  fileselect.enter(_path.audio, function() end)
+  fileselect.inputs = {}
+  key(2, 1); enc(2, 1)
+  assert_equal(#fileselect.inputs, 2, "an open selector records its input")
+  -- a PARAMS selector opened over it from the menu and closed: the play
+  -- mode globals are still the selector's, as on norns, and take keys
+  _menu.set_mode(true)
+  fileselect.enter(_path.audio, function() end)
+  fileselect.close("/y.wav")
+  _menu.set_mode(false)
+  key(3, 1)
+  assert_equal(#fileselect.inputs, 3, "after close's own callback the selector still records")
 end)
 
 -- lua/core/menu.lua's set_mode: menu mode puts norns.none in redraw and

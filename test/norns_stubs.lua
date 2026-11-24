@@ -2861,11 +2861,12 @@ end
 -- and makes those redraw() calls, and like fs it takes key and enc until
 -- it closes (#985): the globals from play mode, the menu's handlers
 -- through norns.menu.set from the menu (neither enter nor exit calls init
--- there). Its key and enc record what they get in `inputs`. fs.redraw
--- draws the file list; the stub counts the calls in `redraws` and draws
--- nothing. Like
--- fs.enter, enter stores the callback in `callback`: norns has one selector,
--- so a second enter (from a PARAMS file param) replaces the first's.
+-- there). Its key and enc record what they get in `inputs`, and raise
+-- after a test called `last.callback` itself. fs.redraw draws the file
+-- list; the stub counts the calls in `redraws` and draws nothing. Like
+-- fs.enter, enter stores the callback in `callback`: norns has one
+-- selector, so a second enter (from a PARAMS file param) replaces the
+-- first's.
 ---------------------------------------------------------------------------
 
 -- lib/musicutil.lua's scale data and generate_scale (the scales' chord
@@ -2994,10 +2995,21 @@ local function make_fileselect()
   end
   function fileselect.refresh() fileselect.redraw() end
   -- fs.key and fs.enc: the stub's record what they get in `inputs`
-  -- ({"key", n, z} or {"enc", n, d}) and do nothing else
+  -- ({"key", n, z} or {"enc", n, d}) and do nothing else. On norns only
+  -- fs.exit calls the callback, after it handed the keys back; a test that
+  -- calls `last.callback` itself leaves the selector holding them, a state
+  -- no device has, so input that reaches the selector then raises
   fileselect.inputs = {}
-  function fileselect.key(n, z) table.insert(fileselect.inputs, {"key", n, z}) end
-  function fileselect.enc(n, d) table.insert(fileselect.inputs, {"enc", n, d}) end
+  local called_back = false
+  local function take(kind, n, value)
+    if called_back then
+      error("a " .. kind .. " reached the file selector after the test called its callback itself (fs.exit hands"
+        .. " the keys back first): end it with context.fileselect.close(path)", 3)
+    end
+    table.insert(fileselect.inputs, {kind, n, value})
+  end
+  function fileselect.key(n, z) take("key", n, z) end
+  function fileselect.enc(n, d) take("enc", n, d) end
   -- fs.enter's swap (#985): from play mode it keeps the globals key, enc,
   -- redraw and refresh, puts its own key and enc and norns.none there, and
   -- norns.menu.init() routes them (its set_mode(false) puts norns.script's
@@ -3033,7 +3045,13 @@ local function make_fileselect()
     -- string raises there (#481)
     if type(folder) ~= "string" then error("attempt to index a " .. type(folder) .. " value (field 'folder')", 2) end
     entered = true
-    fileselect.last = { folder = folder, callback = callback, filter = filter }
+    called_back = false
+    -- `last.callback` is the callback, noting the call (close clears the note)
+    local function call_back(path)
+      called_back = true
+      return callback(path)
+    end
+    fileselect.last = { folder = folder, callback = call_back, filter = filter }
     fileselect.callback = callback
     take_input()
     fileselect.redraw()
@@ -3057,6 +3075,9 @@ local function make_fileselect()
     local request = assert(fileselect.last, "the file selector is not open")
     give_input_back()
     request.callback(path or "cancel")
+    -- close's own call: a selector the closed one replaced (opened from play
+    -- mode, then a PARAMS one over it) still takes the keys it holds
+    called_back = false
   end
   return fileselect
 end
@@ -3309,14 +3330,16 @@ function stubs.install(options)
   -- _menu.mode is true while the norns menu (K1) owns the keys and screen;
   -- in play mode _menu.key and norns.encoders.callback route the hardware
   -- keys and encoders to the script (set_mode(false) copies them from the
-  -- globals key and enc). page_key and page_enc are the menu's page's
-  -- handlers, which set_mode(true) puts in key and penc; they do nothing in
-  -- the stub. enc is _menu.enc, the encoders' callback while the menu is
-  -- open: it passes E2, E3 and ALT+E1 to penc (E1's panel change is not
-  -- modeled)
+  -- globals key and enc). page_key, page_enc, page_redraw and
+  -- page_refresh are the menu's page's handlers, which set_mode(true) puts
+  -- in key, penc, redraw and refresh, as _menu.set_page does; they do
+  -- nothing in the stub (the menu draws nothing). enc is _menu.enc, the
+  -- encoders' callback while the menu is open: it passes E2, E3 and ALT+E1
+  -- to penc (E1's panel change is not modeled)
   context.menu = { rebuilds = 0, mode = false, key = nil, alt = false, page_key = function() end,
-    page_enc = function() end }
+    page_enc = function() end, page_redraw = function() end, page_refresh = function() end }
   context.menu.penc = context.menu.page_enc
+  context.menu.redraw, context.menu.refresh = context.menu.page_redraw, context.menu.page_refresh
   function context.menu.enc(n, delta)
     if n ~= 1 or context.menu.alt then context.menu.penc(n, delta) end
   end
@@ -3404,6 +3427,7 @@ function stubs.install(options)
       _G.redraw, _G.refresh = norns.none, norns.none
       norns.encoders.callback = context.menu.enc
       context.menu.key, context.menu.penc = context.menu.page_key, context.menu.page_enc
+      context.menu.redraw, context.menu.refresh = context.menu.page_redraw, context.menu.page_refresh
     end
   end
 
