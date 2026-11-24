@@ -86,6 +86,9 @@ return function(S)
     name_min_width = 12,    -- the cursor row's name keeps this much (a row with 16.0s still fits "v2+")
     minute_from = 59.95,    -- slot lengths from here on (60.0 to a tenth) show as m:ss ("1:05")
     checking_text = "...",  -- the length of a slot whose long file the engine is still checking
+    saving_text = "saving",      -- a slot whose save awaits the engine's report (#905)
+    missing_text = "missing",    -- a slot whose remembered file was not found on start (#877)
+    unsettled_text = "wait",     -- a named load the engine has reported no audio for yet (#905)
     hold_seconds = S.constants.ALT_HOLD_SECONDS,
     -- the start field: below `below` s it shows the start rounded to `step`
     -- s, as `format` of start / `unit`, so the label "start" always fits
@@ -112,12 +115,17 @@ return function(S)
   -- and field (1..#BUFFER_FIELDS, what ALT+E2 picks and E3 edits)
   S.buffer_page = {slot = 1, field = 1}
 
-  -- Show `text` (a save result, a failed load, a random file) in BUFFER's
-  -- hint row for HEADER.flash_seconds (1.5 s), through the shared "hints"
-  -- flash (lib/ui/flash.lua), owned by BUFFER: redraw() draws it there
-  -- instead of the key hints while BUFFER is up (other pages keep their own
-  -- hints; draw_hints cuts it to the screen), and its clock asks for a
-  -- redraw when it ends
+  -- Show `text` (progress and results: saving, saved, a random file, the
+  -- fill, a check still running) in BUFFER's hint row for
+  -- HEADER.flash_seconds (1.5 s), through the shared "hints" flash
+  -- (lib/ui/flash.lua), owned by BUFFER: redraw() draws it there instead of
+  -- the key hints while BUFFER is up (other pages keep their own hints;
+  -- draw_hints cuts it to the screen), and its clock asks for a redraw when
+  -- it ends. A refusal or a failure of a load, a save or a recording (a load
+  -- failed, a take unsaved, a save failed, busy or empty, an overdub
+  -- refused while a load is loading) goes to the header flash instead
+  -- (header_flash), which shows on every page: a grid key, a param or an
+  -- engine report brings it while any page is up (#878)
   function buffer_page_flash(text)
     S.lib.ui_flash.start("hints", text, S.constants.HEADER.flash_seconds, UI_PAGES.index.BUFFER)
   end
@@ -353,18 +361,18 @@ return function(S)
   -- its extension, as norns' font draws it (S.lib.ui_text.printable: "café"
   -- is "cafe", measured as it is drawn, #551; the slot keeps its real name).
   -- Cached per slot and width until the name changes (load, take, clear),
-  -- so a redraw does not measure names a character at a time
+  -- so a redraw does not measure names a character at a time. `shown` is
+  -- the name to draw: the slot's own, or a missing slot's remembered file
   local display_names = {}
-  local function buffer_display_name(slot, max_width)
-    local buffer = S.buffers[slot]
+  local function buffer_display_name(slot, max_width, shown)
     local cache = display_names[slot]
-    if not cache or cache.of ~= buffer.name then
-      cache = {of = buffer.name, cut = {}}
+    if not cache or cache.of ~= shown then
+      cache = {of = shown, cut = {}}
       display_names[slot] = cache
     end
     if not cache.cut[max_width] then
-      local name = buffer.name:gsub("%.[^.]*$", "")
-      if name == "" then name = buffer.name end
+      local name = shown:gsub("%.[^.]*$", "")
+      if name == "" then name = shown end
       cache.cut[max_width] = S.lib.ui_text.fit_text(S.lib.ui_text.printable(name), max_width)
     end
     return cache.cut[max_width]
@@ -380,8 +388,12 @@ return function(S)
     return buffer.path ~= nil or buffer.loaded
   end
 
-  local function slot_is_empty(slot)
-    return S.lib.buffers.is_free(slot)
+  -- The name a row draws, uncut: the slot's own, a missing slot's
+  -- remembered file (S.lib.buffers.missing_file, #877), else nil ("-")
+  local function slot_shown_name(slot, buffer)
+    if slot_has_name(buffer) then return buffer.name end
+    local missing = S.lib.buffers.missing_file(slot)
+    return missing and (missing:match("[^/]*$") or missing) or nil
   end
 
   -- The voices reading a slot ("v2 v6"), cut to max_width a whole voice at
@@ -431,12 +443,31 @@ return function(S)
     return width
   end
 
+  -- What a row shows right-aligned, the first that applies: the recording's
+  -- state; saving while a save awaits its report (S.lib.buffers.saving,
+  -- #905); missing for a remembered file not found on start (#877); wait
+  -- for a named load the engine reported no audio for yet ("unsettled", a
+  -- later report adopts it, #905); nothing for an empty slot; "..." while
+  -- the engine checks a long file (the old length is still reported); else
+  -- the length. Each from the buffers' accessors, none kept here
+  local function slot_value_text(slot, buffer)
+    local record = slot_record_text(slot)
+    if record then return record end
+    if S.lib.buffers.saving(slot) then return PAGE.saving_text end
+    local status = S.lib.buffers.status(slot)
+    if status == "missing" then return PAGE.missing_text end
+    if status == "unsettled" then return PAGE.unsettled_text end
+    if status == "empty" then return nil end
+    if buffer.checking_from ~= nil then return PAGE.checking_text end
+    return slot_seconds_text(buffer.seconds)
+  end
+
   -- One slot row at y: slot number, name and seconds (or the recording's
-  -- state); the cursor row is bright and also lists the voices reading it
+  -- state, a save, a missing file or an unsettled load); the cursor row is
+  -- bright and also lists the voices reading it
   local function draw_slot_row(row, y, selected, value_right)
     local slot = row.slot
     local buffer = S.buffers[slot]
-    local empty = slot_is_empty(slot)
     local level = 2
     if selected then
       level = 15
@@ -447,15 +478,15 @@ return function(S)
     screen.move(PAGE.slot_x, y)
     screen.text(tostring(slot))
     -- names end before the seconds column (the widest seconds: "16.0s" on
-    -- standard, "59.9s" once the tier's slots reach a minute)
+    -- standard, "59.9s" once the tier's slots reach a minute), or before a
+    -- wider word (missing, saving)
     local name_right = value_right - widest_seconds_width() - PAGE.column_gap
-    if not empty then
-      -- "..." while the engine checks a long file (the old length is still reported)
-      local seconds = slot_record_text(slot)
-        or (buffer.checking_from ~= nil and PAGE.checking_text or slot_seconds_text(buffer.seconds))
+    local value = slot_value_text(slot, buffer)
+    if value then
       screen.move(value_right, y)
-      screen.text_right(seconds)
-      if selected then name_right = value_right - text_width(seconds) - PAGE.column_gap end
+      screen.text_right(value)
+      local before_value = value_right - text_width(value) - PAGE.column_gap
+      if selected or before_value < name_right then name_right = before_value end
     end
     if selected then
       local voices_room = name_right - PAGE.name_x - PAGE.name_min_width - PAGE.column_gap
@@ -466,7 +497,8 @@ return function(S)
         name_right = name_right - text_width(voices) - PAGE.column_gap
       end
     end
-    local name = slot_has_name(buffer) and buffer_display_name(slot, math.max(name_right - PAGE.name_x, 0)) or "-"
+    local shown = slot_shown_name(slot, buffer)
+    local name = shown and buffer_display_name(slot, math.max(name_right - PAGE.name_x, 0), shown) or "-"
     if name ~= "" then
       screen.move(PAGE.name_x, y)
       screen.text(name)
@@ -801,9 +833,9 @@ return function(S)
     if sent then
       buffer_page_flash("saving buf " .. slot .. (loop and " loop" or ""))
     elseif reason == "busy" then
-      buffer_page_flash("buf " .. slot .. " busy")
+      header_flash("buf " .. slot .. " busy")   -- a refusal: the header's (#878)
     elseif reason == "empty" then
-      buffer_page_flash("buf " .. slot .. " empty")
+      header_flash("buf " .. slot .. " empty")
     end
   end
 
@@ -1075,7 +1107,30 @@ return function(S)
     end},
     {name = "busy flash", setup = function() record_buffer(1); save_cursor_slot(false) end},
     {name = "empty flash", setup = function() save_cursor_slot(false) end},
-    {name = "load failed flash", setup = function() buffer_page_flash("buf 8 load failed") end},
+    {name = "load failed flash", setup = function() header_flash("buf 8 load failed") end},
+    {name = "take unsaved flash", setup = function() header_flash("take 8 unsaved") end},
+    -- every slot's remembered file missing on start, long names, every voice
+    -- reading the cursor slot (#877; as SETUP's state, the field restore sets)
+    {name = "missing slots", setup = function()
+      for slot = 1, NUM_BUFFERS do
+        S.buffers[slot].missing_path = "/gone/" .. LAYOUT.long_names[(slot - 1) % #LAYOUT.long_names + 1]
+      end
+      LAYOUT.voices_on_slot(1, NUM_VOICES)
+    end},
+    -- every slot's load reported 0 s past the settle time (#905)
+    {name = "unsettled slots", setup = function(context)
+      local now = util.time()
+      for slot = 1, NUM_BUFFERS do load_buffer(slot, "/tmp/" .. LAYOUT.long_names[(slot - 1) % #LAYOUT.long_names + 1]) end
+      context.set_time(now + 2 * S.lib.buffers.BUFFER_SETTLE.confirm_seconds)
+      for slot = 1, NUM_BUFFERS do LAYOUT.report(context, slot, 0) end
+      LAYOUT.voices_on_slot(1, NUM_VOICES)
+    end},
+    -- every slot's save awaiting its report (#905)
+    {name = "every slot saving", setup = function(context)
+      LAYOUT.load_long_names(context)
+      for slot = 1, NUM_BUFFERS do save_buffer(slot) end
+      LAYOUT.voices_on_slot(1, NUM_VOICES)
+    end},
     {name = "random file flash", setup = function() buffer_page_flash("buf 8: " .. LAYOUT.long_names[2]) end},
     {name = "filled flash", setup = function() buffer_page_flash("filled 8 slots") end},
     -- an empty folder whose path below the audio folder is too long: its own name

@@ -344,7 +344,7 @@ test("the engine's event polls decode in Lua's handlers (#459)", function()
   assert_equal(S.lib.ui_flash.text("hints"), "saved buf 6", "bufferSaveResult: save 1 written")
   assert_true(save_buffer(6))
   context.polls.fire("bufferSaveResult", save_result_value(5, 2, true))
-  assert_equal(S.lib.ui_flash.text("hints"), "buf 6 save failed", "bufferSaveResult: save 2 failed")
+  assert_equal(S.lib.ui_flash.text("header"), "buf 6 save failed", "bufferSaveResult: save 2 failed (the header's, #878)")
 end)
 
 -- #858: the freeze area's report of a hold it abandoned, as the engine

@@ -225,24 +225,26 @@ test("folder_for a take n slot is the last chosen folder", function()
   assert_equal(files.folder_for(2), "/b/", "not the scratch folder")
 end)
 
--- #404 (7): a remembered file missing on start leaves its slot free, so the
--- fill gives it a file
-test("fill_empty fills a slot whose remembered file is missing", function()
+-- #877 (re-bases #404 (7) by the design's call, decided 2026-11-22): a slot
+-- whose remembered file is missing on start is not filled: the fill skips
+-- it and leaves its path for the next start; an empty slot still fills
+test("fill skips a missing slot and keeps its path", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  local folder = make_folder(context, "fill-missing", { "a.wav" })
+  local folder = make_folder(context, "fill-missing", { "a.wav", "b.wav" })
   S.lib.files.note_chosen(folder .. "x.wav")
   for slot = 1, local_value("NUM_BUFFERS") do
-    if slot ~= 3 then load_buffer(slot, "/elsewhere/" .. slot .. ".wav") end
+    if slot ~= 3 and slot ~= 5 then load_buffer(slot, "/elsewhere/" .. slot .. ".wav") end
   end
   S.buffers[3].missing_path = "/gone/pad.wav"
   assert_equal(S.lib.buffers.status(3), "missing")
   context.clear_engine_calls()
   S.buffer_page.slot = 3
-  assert_equal(S.lib.files.fill_empty(), 1)
+  assert_equal(S.lib.files.fill_empty(), 1, "one slot filled")
   local loads = context.calls_named("loadBuffer")
-  assert_equal(#loads, 1); assert_equal(loads[1].args[1], 2, "into slot 3")
-  assert_equal(loads[1].args[2], folder .. "a.wav")
+  assert_equal(#loads, 1); assert_equal(loads[1].args[1], 4, "into slot 5, the empty one")
+  assert_equal(S.lib.buffers.status(3), "missing", "slot 3 is still missing")
+  assert_equal(S.buffers[3].missing_path, "/gone/pad.wav", "and keeps its path")
 end)
 
 test("filling eight free slots writes buffers.data once (#566)", function()

@@ -268,7 +268,7 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   context.clear_engine_calls()
   with_alt(function() tap(3) end); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 0, "an empty slot is not saved")
-  assert_equal(hint_text(context), "buf 4 empty", "the hint says the slot is empty")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 4 empty", "the header says the slot is empty (#878)")
   assert_screen_layout(context, "BUFFER with the empty flash")
   -- a recording slot is busy: nothing saved, the recording goes on
   tap(3); assert_true(buffers[4].recording, "K3 records into slot 4")
@@ -276,14 +276,14 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   with_alt(function() tap(3) end); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while recording")
   assert_equal(#context.calls_named("stopRecord"), 0, "ALT+K3 does not stop the recording")
-  assert_equal(hint_text(context), "buf 4 busy", "the hint says the slot is busy")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 4 busy", "the header says the slot is busy (#878)")
   assert_screen_layout(context, "BUFFER with the busy flash while recording")
   -- stopped early: the take waits for the engine (finishing), still busy
   tap(3); assert_true(buffers[4].finishing, "the stopped take is finishing")
   context.clear_engine_calls()
   with_alt(function() tap(3) end); next_frame(context)
   assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while finishing")
-  assert_equal(hint_text(context), "buf 4 busy", "still busy while finishing")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 4 busy", "still busy while finishing")
   -- once the engine reports the take, ALT+K3 saves it
   context.polls.fire("bufferState", context.polls.buffer_state_value(4, 0, 5))
   assert_true(not buffers[4].finishing, "the take settled")
@@ -291,7 +291,8 @@ test("ALT+K3 saves the cursor slot with the busy, saving, saved and empty flashe
   assert_equal(#context.calls_named("saveBuffer"), 1, "the settled take saves")
   assert_equal(hint_text(context), "saving buf 4")
   context.polls.fire("bufferSaveResult", (1 * 2 + 1) * 8 + 3); next_frame(context)
-  assert_equal(hint_text(context), "buf 4 save failed", "a save the engine could not write says so")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 4 save failed", "a save the engine could not write says so")
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "and the saving flash it answers ends with it (#878)")
   -- K2 held, then K3: records, never saves (the old K2+K3 gesture is gone)
   context.clear_engine_calls()
   key(2, 1); tap(3)
@@ -988,7 +989,8 @@ test("BUFFER lists its layout states", function()
     "load failed flash", "random file flash", "filled flash", "no files flash", "meter peak",
     "armed", "take recording", "take finishing", "dub recording", "loop recording", "len 16b max",
     "seven heads on one slot", "record head", "a long file's start", "a long file's start (high, 300 s)",
-    "eight slots of 4:59 (high, 300 s)", "a recording at 1:05 (high, 300 s)", "long files checking (high, 300 s)" }) do
+    "eight slots of 4:59 (high, 300 s)", "a recording at 1:05 (high, 300 s)", "long files checking (high, 300 s)",
+    "take unsaved flash", "missing slots", "unsettled slots", "every slot saving" }) do
     assert_true(names[name], "a layout state " .. name)
   end
 end)
@@ -1488,7 +1490,7 @@ test("a loaded file named empty shows its name; a slot with nothing shows -", fu
   local rows = slot_rows(context)
   assert_equal(slot_row_text(context, rows[1]), "1 empty 5.0s", "the file's name")
   assert_equal(slot_row_text(context, rows[2]), "2 -", "an empty slot")
-  assert_equal(slot_row_text(context, rows[3]), "3 -", "a remembered file missing on start")
+  assert_equal(slot_row_text(context, rows[3]), "3 pad missing", "a remembered file missing on start (#877)")
   -- a dub into an empty slot is take 2 once it has a length (#400)
   params:set("record_feedback", 50)
   record_buffer(2); context.polls.fire("recordState", (1 * 4 + 1) * 8 + 1)
@@ -1646,7 +1648,7 @@ test("ALT+K3 saves the slot on release before 0.5 s and its loop region after it
   record_buffer(1); context.clear_engine_calls()
   context.set_time(110); key(1, 1); key(3, 1); context.set_time(110.7); key(3, 0); key(1, 0); redraw()
   assert_equal(#context.calls_named("saveBuffer"), 0, "nothing saved while recording")
-  assert_equal(hint_text(context), "buf 1 busy")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 1 busy")
 end)
 
 test("ALT+K2 keeps its release when K1 comes up first", function()
@@ -2188,6 +2190,75 @@ test("BUFFER has no alt_key: its ALT keys act at the release alone, and no funct
   local empty = {}
   for name in source:gmatch("function%s+([%w_.:]*)%s*%([^)]*%)%s*end") do empty[#empty + 1] = name end
   assert_equal(#empty, 0, "empty functions in lib/pages/buffer.lua: " .. table.concat(empty, ", "))
+end)
+
+-- #877: a slot whose remembered file was not found on start (status
+-- "missing") names the file it waits for and says missing, on the cursor
+-- row and on another, never the empty slot's "-"
+test("a missing slot's row says so", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  S.buffers[1].missing_path = "/x/gone.wav"
+  S.buffers[2].missing_path = "/x/a_very_long_sample_name_that_is_gone.wav"
+  params:set("v1_source", 2); params:set("v2_source", 2)   -- voices 1 and 2 read slot 1
+  redraw()
+  assert_equal(S.lib.buffers.status(1), "missing")
+  local rows = slot_rows(context)
+  -- (missing is wide: the readers' list has no room beside the name's first 12 px)
+  assert_equal(slot_row_text(context, rows[1]), "1 gone missing", "the cursor row: the file and missing")
+  local second = slot_row_text(context, rows[2])
+  assert_true(second:match("^2 a_v") and second:match(" missing$"), "another row, its name cut: " .. second)
+  assert_equal(slot_row_text(context, rows[3]), "3 -", "an empty slot is still -")
+  assert_screen_layout(context, "BUFFER with missing slots")
+end)
+
+-- #905: a named load the engine reported no audio for, a second after it
+-- (status "unsettled", a later report adopts it), says wait, never 0.0s
+test("an unsettled row has a word", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  context.set_time(50)
+  load_buffer(2, "/tmp/slow.wav")
+  context.set_time(51.5)
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 0))
+  assert_equal(S.lib.buffers.status(2), "unsettled")
+  redraw()
+  local rows = slot_rows(context)
+  assert_equal(slot_row_text(context, rows[2]), "2 slow wait", "a word for the length")
+  assert_true(not h.screen_shows(context, "0.0s"), "no 0.0s")
+  -- a later report of audio adopts it
+  context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 3)); redraw()
+  assert_equal(slot_row_text(context, rows[2]), "2 slow 3.0s", "then its length")
+end)
+
+-- #905: a slot whose save the engine has not reported shows saving in
+-- place of its length, past the saving flash's 1.5 s, until the save's
+-- bufferSaveResult report (written or failed)
+test("a slot being saved shows saving until its report", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local S = local_value("S")
+  load_buffer(2, "/tmp/a_long_drone_name.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(2, 1, 16))
+  enc(2, 1)   -- the cursor on slot 2
+  with_alt(function() tap(3) end); next_frame(context)
+  assert_equal(#context.calls_named("saveBuffer"), 1, "ALT+K3 saved")
+  local rows = slot_rows(context)
+  local function value() local parts = {}; for word in slot_row_text(context, rows[2]):gmatch("%S+") do parts[#parts + 1] = word end; return parts[#parts] end
+  assert_equal(value(), "saving", "the row says saving")
+  assert_screen_layout(context, "BUFFER with a slot saving")
+  context.clock.run_for(5); next_frame(context)
+  assert_equal(hint_text(context), "K2:ld/clr K3:rec", "the saving flash has ended")
+  assert_equal(value(), "saving", "the row still says saving")
+  enc(2, -1); next_frame(context)   -- off the cursor row
+  rows = slot_rows(context)
+  assert_equal(value(), "saving", "on another row too")
+  assert_screen_layout(context, "BUFFER with a slot saving off the cursor")
+  context.polls.fire("bufferSaveResult", (1 * 2 + 0) * 8 + 1); next_frame(context)
+  assert_equal(value(), "16.0s", "the report ends it: the length again")
+  -- a failed save's report ends it too
+  enc(2, 1); with_alt(function() tap(3) end); next_frame(context)
+  assert_equal(value(), "saving")
+  context.polls.fire("bufferSaveResult", (2 * 2 + 1) * 8 + 1); next_frame(context)
+  assert_equal(value(), "16.0s", "a failure's report ends it")
 end)
 
 end
