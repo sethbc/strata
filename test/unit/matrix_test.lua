@@ -2116,4 +2116,29 @@ test("a learn that changes nothing keeps the earlier undo (#927)", function()
   assert_true(not mutation.undo_for(S.constants.UI_PAGES.index.MOD, "matrix", nil), "nothing held on MOD")
 end)
 
+
+-- #927, review round 2: the PARAMS menu turns E3 through the param's own
+-- delta, which a filtered param (freq, the loop pair) runs as a turn; it is
+-- never the turn that learned (it runs no touch hook), so it ends the hold.
+-- Only the detent path's mark keeps it
+test("a PARAMS-menu turn of the touched param ends a learn's hold; a further detent keeps it (#927)", function()
+  local _, S, matrix = loaded()
+  local mutation = S.lib.mutation
+  local MOD_PAGE = S.constants.UI_PAGES.index.MOD
+  local function held() return mutation.undo_for(MOD_PAGE, "matrix", nil) end
+  local function learn()
+    matrix.set_routing(3, "macro1", "v2_grain_size")
+    params:set("matrix_3_depth", 0)
+    matrix.learn(3)
+    enc_param_delta(3, "v1_freq", 1)
+    assert_equal(matrix.routing(3).dest, "v1_main", "freq is voice 1's main param: it learns v1_main")
+    assert_true(held(), "the learn is held")
+  end
+  learn()
+  enc_param_delta(3, "v1_freq", 1)              -- the same turn, not reaching 0
+  assert_true(held(), "a plain further detent keeps it")
+  params:lookup_param("v1_freq"):delta(1)       -- PARAMS' E3: the param's own delta
+  assert_true(not held(), "a PARAMS-menu turn ends it")
+end)
+
 end

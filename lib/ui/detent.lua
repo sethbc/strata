@@ -43,9 +43,29 @@ return function(S)
     if not turned then error(turn_error, 0) end
   end
 
-  -- No turn is marked between events
+  -- The id of the param delta_with_detent is setting right now (nil
+  -- otherwise): the detent path alone (its apply and its stop at 0), never
+  -- the PARAMS menu's own delta or a mutation step, which are turns too. A
+  -- matrix learn's hold keeps through it only (#927: the turn that learned
+  -- going on; S.lib.mutation's note_param_edit reads it). Call-scoped as
+  -- S.turning_param is: put back on every exit, an error's too
+  local detent_param = nil
+
+  local function as_detent(param_id, fn)
+    local outer = detent_param
+    detent_param = param_id
+    local done, detent_error = xpcall(fn, with_traceback)
+    detent_param = outer
+    if not done then error(detent_error, 0) end
+  end
+
+  -- The param the detent path is setting right now, or nil
+  function M.detent_param() return detent_param end
+
+  -- No turn is marked between events, nor a detent
   S.register_invariant("param turn", function()
     if S.turning_param ~= nil then return "turning_param is still " .. tostring(S.turning_param) end
+    if detent_param ~= nil then return "the detent mark is still " .. tostring(detent_param) end
   end)
 
   -- Whether a move from old to new reaches or passes 0 (old is not 0)
@@ -94,14 +114,17 @@ return function(S)
     local source = opts.source or (opts.arc_ticks and "arc" or "enc")
     local before = params:get(param_id)
 
-    -- a turn, marked as one (S.turning_param); so is the stop at 0 below
+    -- a turn, marked as one (S.turning_param); the hold's own set to 0
+    -- below is a set. Both are the detent path's (as_detent)
     local function apply()
-      M.as_turn(param_id, function()
-        if raw_delta then
-          params:set_raw(param_id, params:get_raw(param_id) + raw_delta)
-        else
-          params:delta(param_id, d)
-        end
+      as_detent(param_id, function()
+        M.as_turn(param_id, function()
+          if raw_delta then
+            params:set_raw(param_id, params:get_raw(param_id) + raw_delta)
+          else
+            params:delta(param_id, d)
+          end
+        end)
       end)
       M.run_touch_hooks(param_id, source, before)
     end
@@ -135,10 +158,7 @@ return function(S)
       new = util.clamp(old + d, param.min, param.max)
     end
     if old ~= 0 and reaches_zero(old, new) then
-      -- the stop at 0 is the turn's too (#927: a learn's hold keeps through
-      -- the turn that learned); no filtered param spans 0, so it changes
-      -- no filter's result
-      M.as_turn(param_id, function() params:set(param_id, 0) end)
+      as_detent(param_id, function() params:set(param_id, 0) end)
       detent_holds[param_id] = {units = HOLD_UNITS, started = util.time()}
       M.run_touch_hooks(param_id, source, before)
     else

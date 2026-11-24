@@ -1,16 +1,18 @@
 ## Must not break
 
 - Never call `params:delta` from an encoder or a ring: a page's `enc` calls `enc_param_delta(n, id, d)` for every param edit, a ring `arc_sweep_param` or `delta_with_detent` (a test checks `lib/pages/` and `lib/arc/`). Fine adjustment is ALT+E3 only, never ALT+E2 or the arc. A change that reaches or crosses 0 on a range through 0 lands on exactly 0, whatever the size of the delta (an accelerated encoder delta of 2-5 included), and holds there for 3 detents or 24 ticks, but only within `DETENT.hold_seconds` (1 s) of reaching 0: a hold never outlives that, so one left from an old turn never swallows a later detent.
-- Every change `delta_with_detent` applies is a turn, marked through `S.lib.ui_detent.as_turn` (#318), so a param filter (the quantized `freq`'s) moves its shadow; the stop at 0 (the detent's own `params:set(id, 0)`) is marked a turn too (3.9, #927: a matrix learn's hold keeps through the turn that learned), which changes no filter's result, since no filtered param's range spans 0. `S.turning_param` is nil between events (the `param turn` invariant), and an error in a param action never leaves it set.
+- Every change `delta_with_detent` applies is a turn, marked through `S.lib.ui_detent.as_turn` (#318), so a param filter (the quantized `freq`'s) moves its shadow; the detent's own `params:set(id, 0)` is a set.
+- **The detent mark** (3.9, #927): `S.lib.ui_detent.detent_param()` names the param only while the detent path itself sets it, inside `delta_with_detent`'s `apply` and its stop at 0 (the local `as_detent`), never the PARAMS menu's own delta, a mutation step or any other `as_turn`, which are turns too but never the turn that learned. A matrix learn's hold keeps through it alone (`S.lib.mutation`'s `note_param_edit`). Like `S.turning_param`, it is put back as it was found on every exit, an error's too, and both are nil between events (the `param turn` invariant).
+- `S.turning_param` is nil between events (the `param turn` invariant), and an error in a param action never leaves it set.
 
 ## Machines
 
 ### param turn
-- **State:** `S.turning_param` (`lib/ui/detent.lua`): nil between events, or the id of the param a turn is setting right now, set and put back only by `S.lib.ui_detent.as_turn(param_id, fn)`.
-- **Invariant:** `param turn`: `S.turning_param` is nil between events (an error in a param action never leaves it set).
-- **Test:** `test/unit/variation_test.lua`: "the PARAMS menu's own delta turns a quantized freq by scale tones" (and `test/unit/mutation_test.lua`: "mutation steps walk a quantized freq by scale tones (#318)"), each ending with no turn marked; the invariant runs after every unit test.
+- **State:** `S.turning_param` (`lib/ui/detent.lua`): nil between events, or the id of the param a turn is setting right now, set and put back only by `S.lib.ui_detent.as_turn(param_id, fn)`; and the local `detent_param` (read through `S.lib.ui_detent.detent_param()`), the param the detent path is setting right now, set and put back only by the local `as_detent` (3.9, #927).
+- **Invariant:** `param turn`: `S.turning_param` and the detent mark are nil between events (an error in a param action never leaves either set).
+- **Test:** `test/unit/variation_test.lua`: "the PARAMS menu's own delta turns a quantized freq by scale tones" (and `test/unit/mutation_test.lua`: "mutation steps walk a quantized freq by scale tones (#318)"), each ending with no turn marked; `test/unit/ui_detent_test.lua`: "the detent mark is the detent path's alone and never outlives an error (#927)"; the invariant runs after every unit test.
 
-No table: a two-state mark with one writer, which puts back the mark it found (a turn inside a turn restores the outer one) whether `fn` returns or raises. The holds at 0 (`detent_holds`) are another state with no illegal mix and expire lazily, at the next turn.
+No table: two two-state marks, each with one writer, which puts back the mark it found (a turn inside a turn restores the outer one) whether `fn` returns or raises. The holds at 0 (`detent_holds`) are another state with no illegal mix and expire lazily, at the next turn.
 
 ## Center detents and fine adjustment
 

@@ -273,9 +273,9 @@ return function(S)
   -- lib/matrix.lua), at where, when the writes changed the routing or its
   -- depth (a learn that changes nothing leaves an earlier undo). Both
   -- params are held as values, so an edit of either ends the undo, but the
-  -- turn that learned going on (note_param_edit: a turn of the touched
-  -- param, S.turning_param) and the undo puts back the value from before
-  -- it. Returns whether it holds
+  -- turn that learned going on (note_param_edit: the detent path's own set
+  -- of the touched param, S.lib.ui_detent.detent_param()), and the undo
+  -- puts back the value from before it. Returns whether it holds
   function M.hold_routing(k, where, writes, depth_id, param_id, before)
     check_where(where, "hold_routing")
     local matrix = S.lib.matrix
@@ -443,10 +443,13 @@ return function(S)
     if S.drift_writing or undo_writing then return end
     local undo = S.undo
     if not (undo and undo.values[param_id] ~= nil) then return end
-    -- a learn's touched param keeps its hold through the turn that learned:
-    -- a turn of it (S.lib.ui_detent's as_turn, its stop at 0 included; a
-    -- mutation step's turn ends it in set_mutated_param), never a set (#927)
-    if undo.routing and undo.routing.param == param_id and S.turning_param == param_id then return end
+    -- a learn's touched param keeps its hold through the turn that learned
+    -- going on: the detent path's own set of it (S.lib.ui_detent's mark,
+    -- its stop at 0 included), never a set, a grid fader, the PARAMS
+    -- menu's turn or a mutation step (#927)
+    if undo.routing and undo.routing.param == param_id and S.lib.ui_detent.detent_param() == param_id then
+      return
+    end
     clear_undo()
   end
 
@@ -542,16 +545,11 @@ return function(S)
   -- Set one of voice_idx's params as a mutation step. A step moves the
   -- param from its stored value: a turn (S.lib.ui_detent.as_turn), so a
   -- quantized freq walks by scale tones (#318). A step that changes a param
-  -- of the undo's voice (stored or not), or a learn's touched param (a turn
-  -- note_param_edit would keep, #927), clears the undo
+  -- of the undo's voice (stored or not) clears the undo
   local function set_mutated_param(voice_idx, param_id, value)
     local before = params:get(param_id)
     S.lib.ui_detent.as_turn(param_id, function() params:set(param_id, value) end)
-    local undo = S.undo
-    if undo and params:get(param_id) ~= before
-      and (undo.voice == voice_idx or (undo.routing and undo.routing.param == param_id)) then
-      clear_undo()
-    end
+    if S.undo and S.undo.voice == voice_idx and params:get(param_id) ~= before then clear_undo() end
   end
 
   local function mutate_voices()
