@@ -40,6 +40,12 @@
         bufferLoads = Array.fill(numBuffers, 0);
         // Per slot: the newest load number that can no longer take effect (loadsSuperseded)
         areaState[\buffers][\loadsSuperseded] = Array.fill(numBuffers, 0);
+        // Per slot: the load numbers whose check routine runs (a long file
+        // on the high tier, from its command to its outcome), which no
+        // bufferState report names (bufferStateLoad, #983). Nothing else
+        // records it: a load rejected at once and a check still running
+        // leave bufferLoads, loadsSuperseded and slotChanges alike
+        areaState[\buffers][\checks] = Array.fill(numBuffers, { IdentitySet.new });
         // Per slot: its gain (3.7, design §4.4: setSlotGain's, 0-16; 1 at
         // alloc and whenever its audio is replaced: setSlotGainValue), and
         // what setSlotGain last took, for the engine check
@@ -148,21 +154,34 @@
         ^seconds
     }
 
+    // The load a slot's bufferState reports name (#578, #983): the newest
+    // of its loadBuffer commands (bufferLoads, which Lua's load_buffer
+    // counts alike) that, with every load before it, has an outcome: it
+    // took effect, was rejected or failed, or can no longer take effect
+    // (loadsSuperseded). A load still in its check is never named, nor any
+    // after it, so a report of the slot's old audio sent during a long
+    // load's check names the load before that one
+    bufferStateLoad { arg index;
+        var superseded = this.loadsSuperseded(index), first = bufferLoads[index] + 1;
+        areaState[\buffers][\checks][index].do({ arg load; if (load > superseded) { first = first.min(load) } });
+        ^first - 1
+    }
+
     // One bufferState message (#578): (load number * (numBuffers + 1) +
     // index) * bufferStateStride + seconds, a Float (matron's /poll/value
-    // is typed "if"). The load number is the slot's loadBuffer commands
-    // received so far (bufferLoads, which Lua's load_buffer counts alike)
-    // modulo bufferStateLoads, whatever change the report is of (a load, a
-    // clear, a recording, a periodic repeat): Lua acts on a slot's report
-    // only when it names Lua's own count, so a report sent before the
-    // engine had a load never settles that load, while the reports of
-    // anything after it (a clear, a recording, a rejected load) name it.
+    // is typed "if"). The load number is bufferStateLoad's modulo
+    // bufferStateLoads, whatever change the report is of (a load, a clear,
+    // a recording, a periodic repeat): Lua acts on a slot's report only
+    // when it names Lua's own count, so a report sent before the engine had
+    // a load, or before a load's check ended, never settles that load,
+    // while the reports of anything after it (a clear, a recording, a
+    // rejected load) name it.
     // The slots' length (index numBuffers) names none (0). Largest value:
     // (6 * 9 + 7) * 1000 + 300 = 61300, below 2^16: a 32-bit float keeps
     // it to 2^-8 s, the hundredths exactly once rounded, and the slot and
     // load exactly
     bufferStateReport { arg index, seconds;
-        var load = if (index < numBuffers) { bufferLoads[index] % this.bufferStateLoads } { 0 };
+        var load = if (index < numBuffers) { this.bufferStateLoad(index) % this.bufferStateLoads } { 0 };
         ^((((load * (numBuffers + 1)) + index) * this.bufferStateStride) + seconds).asFloat
     }
 
@@ -172,8 +191,9 @@
     // What the periodic poll reports for a slot: the seconds bufferChanged
     // last sent, so a length is never announced before the peaks file it
     // describes is in place (docs/notes/engine/waveform.md), with the
-    // slot's load number now (a load rejected since, which Lua counted
-    // too, is named, so the state Lua puts back is settled by it)
+    // slot's load number now (bufferStateLoad: a load rejected since, which
+    // Lua counted too, is named, so the state Lua puts back is settled by
+    // it; a load still in its check is not)
     announcedBufferState { arg index; ^this.bufferStateReport(index, areaState[\buffers][\announced][index]) }
 
     // The slots' length (bufferSeconds) as a bufferState message for the
@@ -298,9 +318,12 @@
             if (decodes.not) { ^this.rejectLoad(index, load, damaged) };
             ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate, startFrame, peaks)
         };
-        // a long file: whatever the check finds, the recording is over
-        // (Lua's load_buffer ends it), but for a take that is ending, which
-        // completes (takeEnding, #890)
+        // a long file: in its check from now until its outcome, so no
+        // report names it meanwhile (bufferStateLoad, #983), the cancel's
+        // length below included. Whatever the check finds, the recording is
+        // over (Lua's load_buffer ends it), but for a take that is ending,
+        // which completes (takeEnding, #890)
+        areaState[\buffers][\checks][index].add(load);
         canceled = this.slotRecording(index) and: { this.takeEnding(index).not };
         if (canceled) { this.cancelSlotRecording(index, load - 1) };
         // (stops at the first chunk after something supersedes the load,
@@ -322,6 +345,8 @@
                     error.tryPerform(\what) ? "no message");
             };
             try { file.close };
+            // the check has its outcome: from here the reports name it
+            areaState[\buffers][\checks][index].remove(load);
             if (load > this.loadsSuperseded(index)) {
                 if (failed.not and: { decodes }) {
                     this.areaCall(\applyLoad, index, load, path, frames, rightChannel, sampleRate, startFrame, peaks)
@@ -431,12 +456,20 @@
     // A take that is ending (its record synth freed, its frame count or
     // peaks file awaited: takeEnding) is not canceled, whichever kind it is,
     // and completes after the failure (#890).
-    // canceled: a long file's command already canceled the slot's recording
+    // canceled: a long file's command already canceled the slot's
+    // recording; its length then was reported under the load before this
+    // one (the load was in its check, bufferStateLoad), so it is reported
+    // again now, under this load's number (the recording had superseded
+    // every load before it, so no earlier check is left), before the
+    // failure: either way
+    // a load that canceled a recording reports the length the cancel left
+    // under its own number first, which Lua's undo reads (#983)
     rejectLoad { arg index, load, reason, canceled = false;
         var recording = this.slotRecording(index) and: { this.takeEnding(index).not };
         postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
             ++ (if (recording or: { canceled }) { " recording canceled" } { " unchanged" }));
         if (recording) { this.cancelSlotRecording(index) };
+        if (canceled) { bufferStatePoll.update(this.announcedBufferState(index)) };
         bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, false));
     }
 

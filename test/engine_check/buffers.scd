@@ -707,6 +707,79 @@ var checkLoadCheckFault = { arg other, path60;
             load, reports, other.bufferFrames[2]));
 };
 
+// #983: a bufferState report names the newest load of its slot that, with
+// every load before it, has an outcome, never a load still in its check.
+// The value the periodic poll sends for the slot (announcedBufferState: the
+// high engine's own poll function is never registered, its polls being the
+// default engine's) names the load before a long one at its command and
+// during its check, and the check's 0 s and length name it. The length a
+// long load's cancel of a recording reports at its command names the load
+// before it too, and a check rejected after canceling one reports the
+// slot's length under its own number before its failure, so Lua resolves
+// the failure from the length the cancel left. The reports are read in
+// the order they arrived (h.pollMessages, a window of a few messages)
+var checkCheckedLoadNumbers = { arg other, path60, damaged;
+    var slot = 1, cmd = { arg name ... args; h.commandTo(other, name, *args) };
+    var stateIndex = CronePollRegistry.getPollFromName(\bufferState).index;
+    var failedIndex = CronePollRegistry.getPollFromName(\bufferLoadFailed).index;
+    var loads = other.bufferStateLoads, before, shown, atCommand, during, since, events, wanted, decode, slotEvents;
+    // whether the default engine's idle slot names none of the loads a
+    // check wants, so leaving its value out hides none of the high engine's
+    var apart = { arg numbers; numbers.includes(decode.(engine.announcedBufferState(slot))[0]).not };
+    // [load number, seconds] of a bufferState value, as Lua decodes it
+    decode = { arg value; var cell = (value / 1000).floor.asInteger; [cell div: 9, ((value - (cell * 1000)) * 100).round / 100] };
+    // the slot's reports since `since`, in arrival order: [\state, load
+    // number, seconds] or [\failed, load number]. The default engine's
+    // periodic poll, which the high engine's reports share, also reports
+    // its own slot of that index every 2.25 s: its value (that idle slot's,
+    // fixed meanwhile) is left out
+    slotEvents = { arg since;
+        var found = List.new(16), idle = engine.announcedBufferState(slot);
+        h.pollMessages.array.copyRange(since, h.pollMessages.size - 1).do({ arg msg;
+            var value = msg[2], whole = value.round.asInteger;
+            case
+            { (msg[1] == stateIndex) and: { ((value / 1000).floor.asInteger % 9) == slot }
+                and: { (value - idle).abs > 0.004 } } { found.add([\state] ++ decode.(value)) }
+            { (msg[1] == failedIndex) and: { (whole % other.numBuffers) == slot } } {
+                found.add([\failed, (whole div: other.numBuffers) div: 2]) };
+        });
+        found.asArray
+    };
+    cmd.(\clearBuffer, slot);
+    cmd.(\loadBuffer, slot, stereoPath, 0); h.awaitLoad(slot, other);
+    0.05.wait; server.sync;
+    before = other.bufferLoads[slot];
+    shown = other.bufferStateSeconds(slot);
+    other.loadCheckFaultHook = { arg index; if (index == slot) { during = other.announcedBufferState(slot) } };
+    since = h.pollMessages.size;
+    cmd.(\loadBuffer, slot, path60, 0);
+    atCommand = other.announcedBufferState(slot);
+    h.awaitLoad(slot, other, 10);
+    other.loadCheckFaultHook = nil;
+    0.05.wait; server.sync;
+    events = slotEvents.(since);
+    wanted = [[\state, (before + 1) % loads, 0], [\state, (before + 1) % loads, 60]];
+    check.((decode.(atCommand ? 0) == [before % loads, shown]) and: { decode.(during ? 0) == [before % loads, shown] }
+        and: { events == wanted } and: { apart.([before % loads, (before + 1) % loads]) },
+        "buffers: a periodic report during a long load's check names the load before it, its 0 s and length name it (#983; at the command %, during the check %, reports %, wanted [%, %] then %)".format(
+            atCommand !? decode, during !? decode, events, before % loads, shown, wanted));
+    // a replace take, prepared at once (0 s), then a long file that cancels
+    // it at its command and fails its check
+    cmd.(\recordBuffer, slot, 5, 1.0, 0, 0, 0, 0, 0);
+    0.1.wait; server.sync;
+    before = other.bufferLoads[slot];
+    since = h.pollMessages.size;
+    cmd.(\loadBuffer, slot, damaged, 0);
+    waitFor.({ slotEvents.(since).any({ arg event; event[0] == \failed }) }, 10);
+    0.05.wait; server.sync;
+    events = slotEvents.(since);
+    wanted = [[\state, before % loads, 0], [\state, (before + 1) % loads, 0], [\failed, before + 1]];
+    check.((events == wanted) and: { apart.([before % loads, (before + 1) % loads]) },
+        "buffers: a long load's cancel of a recording reports under the load before it, and its rejected check under its own number before its failure (#983; reports %, wanted %)".format(
+            events, wanted));
+    cmd.(\clearBuffer, slot); server.sync;
+};
+
 // #946: a slot being loaded is at the server's rate, with 0 frames, until
 // its length is reported: the file's rate goes to the peaks write and is
 // set with the length in the write's action. The peaks mover, stopped,
@@ -747,6 +820,7 @@ var checkLongSlots = {
     checkLoadYields.(other, path60);
     checkDecodeStops.(other, path60);
     checkLoadCheckFault.(other, path60);
+    checkCheckedLoadNumbers.(other, path60, damaged);
     // freed during a check: nothing applies to the freed buffers, and the
     // check stops at its next chunk (the file closed)
     freedChunks = decodeChunks.(other);

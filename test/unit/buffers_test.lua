@@ -1303,8 +1303,9 @@ end)
 
 
 -- A file the engine checks in its routine (high tier, longer than 16 s at
--- 48 kHz) is checking until the engine reports a length other than the one
--- shown before the load: the old length's reports never settle it (#171)
+-- 48 kHz) is checking until the engine reports the load's 0 s: the old
+-- length's reports never settle it (#171). The engine names no load still
+-- in its check, so its periodic reports name the load before (#983)
 test("a long file's load waits for the engine's check before it settles", function()
   h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
     reason = "high: setting" })
@@ -1318,9 +1319,10 @@ test("a long file's load waits for the engine's check before it settles", functi
   assert_true(buffers[1].loaded); assert_equal(buffers[1].checking_from, nil, "a file with no info is not checked")
   load_buffer(1, "/tmp/long.wav")
   assert_equal(buffers[1].checking_from, 8, "checking, from the 8 s shown before")
-  -- periodic reports of the old audio that name load 2, the newest (the
-  -- engine counted it at its command): only the check rule holds them (#578)
-  context.set_time(5); state_report(context, 1, 2, 8); state_report(context, 1, 2, 8)
+  -- periodic reports of the old audio during the check name load 1 (#578,
+  -- #983); one under load 2 is the check's rejection (its failure follows):
+  -- the check rule holds it
+  context.set_time(5); state_report(context, 1, 1, 8); state_report(context, 1, 2, 8)
   assert_equal(buffers[1].checking_from, 8, "the old length's reports do not end the check")
   assert_true(buffers[1].confirm_since ~= nil, "nor settle the load")
   state_report(context, 1, 2, 0)            -- the load takes effect: the slot is zeroed
@@ -1329,11 +1331,15 @@ test("a long file's load waits for the engine's check before it settles", functi
   state_report(context, 1, 2, 120)
   assert_true(buffers[1].loaded); assert_equal(buffers[1].confirm_since, nil, "settled on the new length")
   assert_equal(buffers[1].name, "long.wav")
-  -- over an empty slot: the periodic 0 s never settles it empty
+  -- over an empty slot: the periodic 0 s during the check (load 0) never
+  -- settles it empty; the load's own 0 s ends the check
   load_buffer(2, "/tmp/long.wav")
   assert_equal(buffers[2].checking_from, 0)
-  context.set_time(10); state_report(context, 2, 1, 0)
-  assert_equal(buffers[2].settled_empty, false, "not settled empty while the engine checks")
+  context.set_time(10); state_report(context, 2, 0, 0)
+  assert_equal(buffers[2].checking_from, 0, "the periodic 0 s does not end the check")
+  state_report(context, 2, 1, 0)
+  assert_equal(buffers[2].checking_from, nil, "the load's own 0 s does")
+  assert_equal(buffers[2].settled_empty, false, "not settled empty while the engine reads it")
   state_report(context, 2, 1, 120)
   assert_equal(buffers[2].checking_from, nil); assert_true(buffers[2].loaded)
   -- a short file is applied at once, as before; a high-rate file by its frames
@@ -1409,7 +1415,7 @@ test("a long file's check that outlasts 30 s is still adopted when the engine ap
   local pending = context.clock.pending_count()
   load_buffer(4, "/tmp/long.wav")
   assert_equal(context.clock.pending_count(), pending + 1, "the notice waits")
-  state_report(context, 4, 1, 300)
+  state_report(context, 4, 1, 0); state_report(context, 4, 1, 300)
   assert_equal(context.clock.pending_count(), pending, "the end of the check cancels it")
   -- a short load that fails while a long one checks starts the long one's notice again
   load_buffer(5, "/tmp/long.wav")
@@ -1423,6 +1429,46 @@ test("a long file's check that outlasts 30 s is still adopted when the engine ap
   assert_equal(told_about(5), 1, "its notice started again")
   assert_equal(buffers[5].name, "long.wav", "and changes nothing"); assert_equal(buffers[5].checking_from, 0)
   assert_equal(S.lib.buffers.BUFFER_SETTLE.check_notice_seconds, 30, "the bound is a named setting")
+end)
+
+-- #983: the engine names no load still being checked, so a report under
+-- the checked load's number comes after the check's outcome: its own 0 s
+-- when it took effect; any other length only at its rejection, whose
+-- failure report undoes it. So a check ends only at its own 0 s, or at a
+-- report naming a later load once that load's failure gave the check back
+-- (every load up to it has an outcome then): never at the previous load's
+-- length repeated under the checked load's number
+test("a long file's check ends only at its own 0 s or a later load's report (#983)", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  context.audio.files["/tmp/long1.wav"] = {2, 48000 * 120, 48000}   -- 120 s: checked
+  -- a.wav (load 1, unchecked) then long1.wav (load 2, checked from the 0 s shown)
+  load_buffer(1, "/tmp/a.wav"); load_buffer(1, "/tmp/long1.wav")
+  assert_equal(buffers[1].checking_from, 0, "long1.wav is checked from 0 s")
+  state_report(context, 1, 2, 4)            -- a.wav's 4 s under long1's number
+  assert_equal(buffers[1].checking_from, 0, "a.wav's length does not end long1's check")
+  assert_equal(S.lib.buffers.status(1), "loading", "nor settle the slot")
+  assert_equal(buffers[1].name, "long1.wav")
+  assert_equal(S.lib.record.clock_role(1), "notice", "the check's notice still waits")
+  state_report(context, 1, 2, 0)            -- long1.wav takes effect
+  assert_equal(buffers[1].checking_from, nil, "its own 0 s ends the check")
+  assert_equal(S.lib.record.clock_role(1), nil, "and its notice")
+  state_report(context, 1, 2, 120)
+  assert_equal(S.lib.buffers.status(1), "loaded"); assert_equal(buffers[1].name, "long1.wav")
+  -- a check a later load's failure gave back, over a file as long as the
+  -- checked one: its own 0 s came under its own number, before the later
+  -- load's (ignored then); the later load's report of its length ends it
+  load_buffer(2, "/tmp/old.wav"); state_report(context, 2, 1, 120)
+  load_buffer(2, "/tmp/long1.wav")                                    -- load 2
+  load_buffer(2, "/tmp/bad.wav")                                      -- load 3
+  state_report(context, 2, 2, 0)                                      -- long1's 0 s: before load 3's
+  context.polls.fire("bufferLoadFailed", load_failed_value(2, 3))
+  assert_equal(buffers[2].checking_load, 2, "bad.wav's failure gives long1.wav's check back")
+  state_report(context, 2, 3, 120)
+  assert_equal(buffers[2].checking_from, nil, "a report under the later load's number ends it")
+  assert_equal(S.lib.buffers.status(2), "loaded"); assert_equal(buffers[2].name, "long1.wav")
 end)
 
 -- #904: a check the engine never ends is left the way the notice says, a
@@ -1484,7 +1530,7 @@ test("a restored long file whose check outlasts the bound counts as restored", f
   context.clock.run_for(40)
   assert_equal(buffers[6].name, "long_kept.wav", "still the restore's file after the bound")
   assert_equal(buffers[6].path, kept)
-  state_report(context, 6, 1, 300)
+  state_report(context, 6, 1, 0); state_report(context, 6, 1, 300)   -- it takes effect, then its length
   assert_equal(S.lib.buffers.status(6), "loaded")
   assert_equal(S.buffers_restored, 1, "and counted as restored")
 end)
@@ -1539,7 +1585,8 @@ test("a failed second long load leaves the first one, which took effect, loaded"
   load_buffer(1, "/tmp/x.wav"); state_report(context, 1, 1, 0); state_report(context, 1, 1, 300)
   assert_equal(S.lib.buffers.status(1), "loaded")
   load_buffer(1, "/tmp/a.wav"); load_buffer(1, "/tmp/b.wav")       -- both checked; b is damaged
-  state_report(context, 1, 3, 0); state_report(context, 1, 3, 300)   -- a took effect
+  -- a took effect: its reports name load 2 while b is in its check (#983)
+  state_report(context, 1, 2, 0); state_report(context, 1, 2, 300)
   context.polls.fire("bufferLoadFailed", load_failed_value(1, 3))               -- b's check failed
   state_report(context, 1, 3, 300)
   assert_equal(buffers[1].name, "a.wav"); assert_equal(buffers[1].path, "/tmp/a.wav")
@@ -1564,8 +1611,12 @@ test("a long file that fails its check while a synced take waits puts the slot b
   record_buffer(1); context.polls.fire("recordState", 32)
   load_buffer(1, "/tmp/long.wav")                                    -- load 2
   assert_equal(buffers[1].checking_from, 8, "the check waits from the engine's 8 s, not a 0 Lua wrote")
-  context.polls.fire("recordState", 56); state_report(context, 1, 2, 8)   -- the command's cancel
+  -- the command's cancel, its length under load 1 (load 2 is in its check, #983)
+  context.polls.fire("recordState", 56); state_report(context, 1, 1, 8)
   assert_equal(S.lib.buffers.status(1), "loading", "the kept length does not end the check")
+  -- the check's rejection reports the length the cancel left under load 2, then fails
+  state_report(context, 1, 2, 8)
+  assert_equal(S.lib.buffers.status(1), "loading", "nor does it under the load's own number")
   context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
   assert_equal(buffers[1].name, "old.wav"); assert_equal(buffers[1].path, "/tmp/old.wav"); assert_true(buffers[1].loaded)
   assert_equal(S.lib.buffers.status(1), "loaded")
