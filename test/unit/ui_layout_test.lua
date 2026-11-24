@@ -22,22 +22,19 @@ local LAYOUT_SOURCES, LAYOUT_FLASHES = parts.SOURCES, parts.FLASHES
 local function started_script() return parts.started_script(h) end
 
 -- A state a record lists is drawn, with ALT up and down, each on a fresh
--- script: a probe on FX, against FX's own states (the part files draw
--- every record's, test/layout_parts.lua)
+-- script: a probe on FX, whose states it replaces (the part files draw
+-- every record's own, test/layout_parts.lua)
 test("a page record's layout state is drawn with ALT up and down, each on a fresh script", function()
   started_script()
   local FX = local_value("S").constants.UI_PAGES.index.FX
-  local baseline = parts.check_layout_states(h, started_script, { FX })
-  local fx_own = 0
   local probed = 0
   local drawn = parts.check_layout_states(h, function()
     local probe_context = started_script()
-    fx_own = #(local_value("S").registry.pages[FX].layout_states or {})
     local_value("S").registry.pages[FX].layout_states = {
       { name = "probe", setup = function() probed = probed + 1; params:set("filter_mix", 0) end } }
     return probe_context
   end, { FX })
-  assert_equal(drawn, baseline - fx_own + 1, "the probe state is drawn beside the other records' own")
+  assert_equal(drawn, 1, "the probe state, FX's one, is drawn")
   assert_equal(probed, 2, "with ALT up and down, each on a fresh script")
 end)
 
@@ -52,6 +49,16 @@ test("the ui_layout part files draw every page by every voice, source, ALT state
   local records = local_value("S").registry.pages
   local voice_count = #local_value("voices")
   assert_equal(#records, #PAGE_TITLES, "a page record for each page title")
+  -- the sources and flashes today's loops drew, pinned here so a shorter
+  -- list in test/layout_parts.lua cannot shrink both sides
+  local source_names, source_options, flash_names = {}, {}, {}
+  for index, source in ipairs(LAYOUT_SOURCES) do
+    source_names[index], source_options[index] = source.name, tostring(source.option)
+  end
+  for index, flash in ipairs(LAYOUT_FLASHES) do flash_names[index] = flash end
+  assert_equal(table.concat(source_names, ", "), "synth, buf 1, input", "the sources every page is drawn with")
+  assert_equal(table.concat(source_options, ", "), "1, 2, 10", "their v<i>_source options")
+  assert_equal(table.concat(flash_names, ", "), "no flash, header flash, hints flash", "the flashes")
   local expected, expected_count = {}, 0
   for page = 1, #PAGE_TITLES do
     for voice_idx = 1, voice_count do
@@ -72,6 +79,12 @@ test("the ui_layout part files draw every page by every voice, source, ALT state
       end
     end
   end
+  local voice_states, other_states = 0, 0
+  for page, record in ipairs(records) do
+    local count = #(record.layout_states or {})
+    if PAGE_TITLES[page] == "VOICE" then voice_states = count else other_states = other_states + count end
+  end
+  h.real_print(string.format("     (layout states: VOICE %d, the other pages %d)", voice_states, other_states))
   assert_true(expected_count > #PAGE_TITLES * voice_count * #LAYOUT_SOURCES * 2 * #LAYOUT_FLASHES,
     "the pages list layout states")
   local drawn, extra, total = {}, {}, 0
@@ -87,9 +100,13 @@ test("the ui_layout part files draw every page by every voice, source, ALT state
   parts.draw_state = function(_, _, entry, state_index, alt)
     count(string.format("%s state %d%s", entry.name, state_index, alt and " with ALT" or ""))
   end
-  local files = {}
-  for _, name in ipairs(h.unit_files(h.test_dir .. "/unit")) do
-    if name:match("^ui_layout_.+_test%.lua$") then files[#files + 1] = name end
+  -- the part files PARTS names, each one that exists
+  local files, present = {}, {}
+  for _, name in ipairs(h.unit_files(h.test_dir .. "/unit")) do present[name] = true end
+  for _, part in ipairs(parts.PARTS) do
+    local name = "ui_layout_" .. part.name .. "_test.lua"
+    assert_true(present[name], "part " .. part.name .. " has its unit file " .. name)
+    files[#files + 1] = name
   end
   local ok, problem = pcall(function()
     for _, name in ipairs(files) do

@@ -975,7 +975,7 @@ test("BUFFER changes reach the screen and arc on the next frame (#11)", function
   assert_true(grid_device.refresh_count > 0, "the grid still redraws on its own")
 end)
 
--- what the layout test (ui_layout_test.lua) draws: each state named here
+-- what the layout test (ui_layout_pages_2_test.lua) draws: each state named here
 test("BUFFER lists its layout states", function()
   local context = load_strata(); finish_startup(context)
   local record = local_value("S").registry.pages[local_value("UI_PAGES").index.BUFFER]

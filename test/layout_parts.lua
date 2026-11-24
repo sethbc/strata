@@ -13,9 +13,10 @@ local M = {}
 -- The parts, each a unit file's: `pages` by title, and for a page with
 -- many layout states `states = {from, every}`, the states from, from +
 -- every, ... (its grid cases go with from = 1). The layout states are the
--- weight (a fresh script each, VOICE's 542 about 54 s under Lua 5.3, the
--- other pages' 356 about 35 s; the grid cases about 1 s in all), so each
--- file weighs well under the longest other unit file
+-- weight (a fresh script each; at #1001 VOICE's 542 took about 54 s under
+-- Lua 5.3, the other pages' 314 about 35 s, the grid cases about 1 s in
+-- all; ui_layout_test.lua's counting test prints today's two counts), so
+-- each file weighs well under the longest other unit file
 M.PARTS = {
   { name = "pages_1", pages = { "MAIN", "SEQ", "FX", "LFO", "MOD" } },
   { name = "pages_2", pages = { "BUFFER", "SCENES", "SETUP", "IO" } },
