@@ -2141,4 +2141,82 @@ test("a PARAMS-menu turn of the touched param ends a learn's hold; a further det
   assert_true(not held(), "a PARAMS-menu turn ends it")
 end)
 
+
+-- #926 (3.9, package 5d): one answer to whether a routing plays, for the
+-- routings 1-16 and the LFOs' homes 17-22, which MOD, MAIN's ~ and the
+-- envelopes read
+test("matrix: status names each routing's state, the homes' too", function()
+  local _, S, matrix = loaded()
+  assert_equal(matrix.status(1), "empty", "nothing set")
+  matrix.set_routing(1, "lfo1", "")
+  assert_equal(matrix.status(1), "incomplete", "a source and no destination")
+  matrix.set_routing(1, "", "reverb_mix")
+  assert_equal(matrix.status(1), "incomplete", "a destination and no source")
+  matrix.set_routing(1, "later_source", "reverb_mix")
+  assert_equal(matrix.status(1), "unknown", "a source this build lacks")
+  matrix.set_routing(1, "lfo1", "v9_wobble")
+  assert_equal(matrix.status(1), "unknown", "a destination this build lacks")
+  route(S, 1, "lfo1", "reverb_mix", 0)
+  assert_equal(matrix.status(1), "zero", "on at depth 0")
+  params:set("matrix_1_depth", 40)
+  assert_equal(matrix.status(1), "summed", "on at a depth: the matrix's sum")
+  params:set("matrix_1", 0)
+  assert_equal(matrix.status(1), "off", "off")
+  params:set("matrix_1", 1)
+  route(S, 2, "env2", "v5_filter_freq", 50)
+  assert_equal(matrix.status(2), "owned", "an envelope to a fast destination: its engine route")
+  route(S, 3, "env2", "reverb_mix", 50)
+  assert_equal(matrix.status(3), "summed", "an envelope to a Lua destination is summed")
+  -- the homes: LFO n's at 16 + n
+  local home = matrix.home_slot(1)
+  assert_equal(matrix.status(home), "empty", "a home with no destination")
+  matrix.set_home(1, "future_dest")
+  assert_equal(matrix.status(home), "unknown", "a kept unknown home")
+  matrix.set_home(1, "v1_grain_density")
+  assert_equal(matrix.status(home), "off", "the LFO off")
+  params:set(lfo_id(1), 1)
+  params:set(lfo_id(1, "depth"), 0)
+  assert_equal(matrix.status(home), "zero", "on at depth 0")
+  params:set(lfo_id(1, "depth"), 30)
+  assert_equal(matrix.status(home), "summed", "a Lua home is the matrix's")
+  matrix.set_home(1, "v1_grain_pitch")
+  assert_equal(matrix.status(home), "owned", "a fast home is the LFO's node")
+  matrix.set_home(1, "macro_3")
+  assert_equal(matrix.status(home), "owned", "a macro home is the LFO's hand-over")
+  for _, k in ipairs({0, 23, 1.5, "1"}) do assert_equal(matrix.status(k), nil, "no routing " .. tostring(k)) end
+end)
+
+-- #926: playing(k) is status's summed or owned, so the three readers agree
+test("matrix: playing and the envelopes' owns read status", function()
+  local _, S, matrix = loaded()
+  route(S, 1, "lfo1", "reverb_mix", 0)
+  route(S, 2, "env2", "v5_filter_freq", 50)
+  local real = matrix.status
+  matrix.status = function(k) if k == 2 then return "summed" end return real(k) end
+  assert_true(not S.lib.envelopes.owns(2), "owns follows status")
+  matrix.status = function(k) if k == 1 then return "owned" end return real(k) end
+  assert_true(S.lib.envelopes.owns(1), "an owned status is the envelopes'")
+  matrix.status = real
+  assert_equal(matrix.playing(1), nil, "a routing at depth 0 does not play")
+  assert_equal(matrix.playing(2), "v5_filter_freq", "an owned routing plays")
+end)
+
+-- #881: MAIN's ~ counts the LFOs' homes, as an R routing to the same param
+test("matrix: affects counts an LFO's home on a voice's param", function()
+  local _, S, matrix = loaded()
+  matrix.set_home(1, "v3_grain_density")
+  params:set(lfo_id(1, "depth"), 40)
+  assert_equal(matrix.affects(3), false, "the LFO off")
+  params:set(lfo_id(1), 1)
+  assert_equal(matrix.affects(3), true, "a Lua home on voice 3's density")
+  assert_equal(matrix.affects(4), false, "not another voice")
+  params:set(lfo_id(1, "depth"), 0)
+  assert_equal(matrix.affects(3), false, "at depth 0 it moves nothing")
+  params:set(lfo_id(1, "depth"), 40)
+  matrix.set_home(1, "v3_grain_pitch")
+  assert_equal(matrix.affects(3), true, "a fast home, the LFO's node")
+  matrix.set_home(1, "reverb_mix")
+  assert_equal(matrix.affects(3), false, "a global home moves no voice")
+end)
+
 end

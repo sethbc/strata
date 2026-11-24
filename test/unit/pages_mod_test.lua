@@ -1102,4 +1102,68 @@ test("a quick ALT+K2 on another sequence leaves a new alone (#922)", function()
   assert_equal(sequences.values(2)[1], before[1], "rseq2's row undoes it")
 end)
 
+
+-- The levels of a list row's texts (x 6 on), not under the cursor
+local function row_levels(context, label)
+  local row = list_row(context, label)
+  assert_true(row ~= nil, "a row " .. label .. " in view")
+  local levels = {}
+  for _, entry in ipairs(context.screen.texts) do
+    if entry.y == row.y and entry.x >= ROW_LABEL_X then levels[entry.level] = true end
+  end
+  return levels
+end
+
+-- #881 (3.9, package 5d): an L row is dim while its LFO moves nothing (off,
+-- at depth 0, or on no home it can play), as the matrix's status says
+test("an L row whose LFO is off or has no depth is dim", function()
+  local context, S = loaded()
+  S.lib.matrix.set_home(2, "v1_grain_density")
+  params:set("strata_lfo2_depth", 40)
+  place(S, "source:lfo1")                                 -- L2 in view, not under the cursor
+  assert_true(row_levels(context, "L2")[4], "off: dim")
+  params:set("strata_lfo2", 1); redraw()
+  local levels = row_levels(context, "L2")
+  assert_true(levels[8] and not levels[4], "on at a depth: a playing row")
+  params:set("strata_lfo2_depth", 0); redraw()
+  assert_true(row_levels(context, "L2")[4], "no depth: dim")
+  params:set("strata_lfo2_depth", 40)
+  S.lib.matrix.set_home(2, ""); redraw()
+  assert_true(row_levels(context, "L2")[4], "on no home: dim")
+  assert_screen_layout(context, "dim L rows")
+end)
+
+-- #926: a routing that is on and complete at depth 0 moves nothing, so it
+-- is dim as an off one
+test("a routing at depth 0 is not bright", function()
+  local context, S = loaded()
+  S.lib.matrix.set_routing(3, "lfo2", "v3_grain_pitch"); params:set("matrix_3_depth", 0)
+  place(S, "routing:1")
+  local levels = row_levels(context, "R3")
+  assert_true(levels[4] and not levels[8], "depth 0: dim")
+  params:set("matrix_3_depth", 10); redraw()
+  levels = row_levels(context, "R3")
+  assert_true(levels[8] and not levels[4], "a depth: it plays")
+  assert_true(S.lib.pages_mod.routing_plays(3), "and the rings read it playing")
+  params:set("matrix_3_depth", 0)
+  assert_true(not S.lib.pages_mod.routing_plays(3), "at 0 the rings dim it too")
+end)
+
+-- #881: a home this build lacks is kept (it does not play); its L row names
+-- it as stored, as an R row names an unknown part, not none
+test("a kept unknown home is named, not none", function()
+  local context, S = loaded()
+  S.lib.matrix.set_home(2, "future_dest")
+  place(S, "source:lfo1")
+  local text = row_text(context, list_row(context, "L2").y, ROW_LABEL_X)
+  assert_true(text:find("future_dest", 1, true) ~= nil, "the stored id: " .. text)
+  assert_true(text:find("none", 1, true) == nil, "not none: " .. text)
+  assert_true(row_levels(context, "L2")[4], "dim: it does not play")
+  S.lib.matrix.set_home(2, "")
+  redraw()
+  assert_true(row_text(context, list_row(context, "L2").y, ROW_LABEL_X):find("none", 1, true) ~= nil,
+    "no home still reads none")
+  assert_screen_layout(context, "an unknown home")
+end)
+
 end

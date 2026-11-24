@@ -20,8 +20,8 @@ What each row shows:
 - **A**, **B**, **C**, **D** - the four scenes the morph goes between, with their names (`S3 dusk`): A and B along the first axis, C and D above them; **morph** - the position across, 0 % at A (and C), 100 % at B (and D); **y** - the position up, 0 % at A and B, 100 % at C and D. With `y` at 0 % the morph goes between A and B alone
 - **scatter** - on or off, its depth and rate, and which settings it moves
 - **G1**-**G4** - each recorder: `empty`, `rec 3.2 s` while it records, `play 2 bars` or `play 5.0 s` while it plays, `stop 5.0 s`
-- **L1**-**L6** - each LFO's destination (`~` when it runs in the engine), depth, and the LFOs its rate and depth follow (`v3 pitch~ 25% <L2`)
-- **R1**-**R16** - each routing: its source, `>`, its destination and its depth (`R3 L2>v3 pitch~  +40%`), or `-` when empty. A routing that is off, or misses its source or destination, is dim
+- **L1**-**L6** - each LFO's destination (`~` when it runs in the engine), depth, and the LFOs its rate and depth follow (`v3 pitch~ 25% <L2`). The row is dim while the LFO moves nothing: off, at depth 0 or with no destination. A destination from another release is kept, named as it was saved, and the row stays dim
+- **R1**-**R16** - each routing: its source, `>`, its destination and its depth (`R3 L2>v3 pitch~  +40%`), or `-` when empty. A routing that is off, at depth 0, or misses its source or destination, is dim: only a bright row moves a sound
 - **IN** - the input level now, as a routing reads it
 - **PRES**, **SLID** - the largest pressure and slide among every voice's held notes (slide as the controller sends it); **PR1**-**PR7**, **SL1**-**SL7** - each voice's. Read-only, as a routing reads them ([Expression](../modulation.md#expression))
 

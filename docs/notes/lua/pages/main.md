@@ -13,7 +13,7 @@
 - A locked voice's fields are drawn at the same levels as an unlocked one's (the selected field 15, the others 4); `[L]` is drawn at 15.
 - The status row (y 26) holds `OFF [L] [T] [F]` at its widest, ending by x 127 (fixed x: 65, 84, 99, 113). `[F]` comes from `S.lib.freeze.is_frozen` (3.2's audio freeze, `docs/notes/lua/freeze.md`), never from `S.locked` (the lock); the voice list has no room for it.
 - The name on y 18 is cut with `fit_text` to end `LAYOUT.name_gap` px before the right-aligned source, so the two never overlap. Under the harness estimate RESONATOR and KARPLUS are cut; with the norns font only RESONATOR is (`RESONAT`).
-- 3.4's mark (`LAYOUT.modulated_mark`, `~`) follows the name on y 18, never the status row (y 26 is full: plan item 15), while `engine_modulated(voice)` holds: an LFO the LFO module plays in the engine (`S.lib.lfos.engine_playing(n)`, its own answer, never a copy: on, on a fast destination, at a depth above 0; design §2.6) whose destination is one of the voice's (`S.lib.lfos.destination(n).fast.voice`), `S.lib.scatter.affects(voice)` (on, depth above 0, a destination on, the voice unlocked) or `S.lib.matrix.affects(voice)` (a routing that plays on one of its params). The name is cut by the mark's width and `LAYOUT.mark_gap` (1 px) more, so the mark ends 2 px before the source and name, mark and source never overlap. Scatter and the matrix are always loaded and read directly. Every change the mark follows already asks for a redraw (the params' actions, `toggle_lock`, the matrix's routing changes).
+- 3.4's mark (`LAYOUT.modulated_mark`, `~`) follows the name on y 18, never the status row (y 26 is full: plan item 15), while `engine_modulated(voice)` holds: `S.lib.scatter.affects(voice)` (on, depth above 0, a destination on, the voice unlocked) or `S.lib.matrix.affects(voice)` (a routing or an LFO's home that plays on one of its params, from `S.lib.matrix.status`: an LFO on, at a depth above 0, in its engine node or summed in Lua, #881; the LFO's place is the LFO module's own answer, `S.lib.lfos.place(n)`, never a copy). The name is cut by the mark's width and `LAYOUT.mark_gap` (1 px) more, so the mark ends 2 px before the source and name, mark and source never overlap. Scatter and the matrix are always loaded and read directly. Every change the mark follows already asks for a redraw (the params' actions, `toggle_lock`, the matrix's routing changes).
 
 ## Owns
 
@@ -43,9 +43,9 @@
 ## Voice list
 
 - `update_voice_list()` recreates the `UI.ScrollingList` (`S.voice_list`) on every change.
-- Each entry is `<n><+|-|m|s> <name>[ [L]][ <count>]` (`m`: a running voice that `S.lib.voice_mix.silenced` says is silenced; `s`: a running voice that is soloed and not muted; a stopped voice is always `-`; the mute and solo params' actions rebuild the list), plain ASCII, so its width does not depend on how the norns font draws other glyphs:
+- Each entry is `<n><+|-|m|s|x> <name>[ [L]][ <count>]` (`m`: a running voice that `S.lib.voice_mix.silenced` says is silenced; `s`: a running voice that is soloed and not muted; `x`: a stopped voice that `silenced` says is silenced, so it would start silent, #918; any other stopped voice is `-`; the mute and solo params' actions rebuild the list), plain ASCII, so its width does not depend on how the norns font draws other glyphs:
   - the voice number;
-  - active status (`+` running, `-` stopped);
+  - active status (`+` running, `-` stopped, or the silenced and soloed marks above);
   - the voice's current type's short name, its record's `list_name` (`S.lib.types.of(i).list_name`: `reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`; at most 5 characters, which the registry checks); a type change rebuilds the list. The details column shows the full name and ON/OFF;
   - lock status (` [L]` suffix);
   - 3.5: the voice's held notes (` <n>`, `S.lib.notes.held(i)`) while it holds `LAYOUT.count_from` (2) or more: `1+ reso 3`, `5m pulse [L] 8`. One note (the own note alone) shows no count.

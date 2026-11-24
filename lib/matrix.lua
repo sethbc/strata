@@ -190,14 +190,52 @@ return function(S)
     return source_known(routing.source) and resolve(routing.dest) ~= nil
   end
 
-  -- Routing k's resolved destination and depth while it plays (on, both
-  -- parts set and known, a depth other than 0), else nil
-  local function playing(k)
-    if not has_params(k) or params:get(on_id(k)) ~= 1 then return nil end
-    local depth = params:get(depth_id(k))
+  -- Routing k's status (#926, 3.9), derived each time from the routing,
+  -- its params and its source's kind, never stored, with the destination
+  -- it resolves to and its depth while it plays: "empty" (no part set; a
+  -- home with no destination), "incomplete" (one part set), "unknown" (a
+  -- part this build lacks, kept: it does not play), "off", "zero" (on at
+  -- depth 0, or no params yet: it moves nothing), "summed" (the matrix's
+  -- step sums it) or "owned" (it plays in its own engine node or hand-over:
+  -- an envelope to a fast destination, the envelopes' route; an LFO's home
+  -- on a fast param or a macro, the LFO's). A home's on and depth are its
+  -- LFO's (S.lib.lfos.place). nil for no slot k
+  local function examine(k)
+    if not is_slot(k) then return nil end
     local routing = S.matrix[k]
-    if depth == 0 or not source_known(routing.source) then return nil end
-    local id = resolve(routing.dest)
+    if k > MATRIX_SLOTS then
+      local n = k - MATRIX_SLOTS
+      if routing.dest == "" then return "empty" end
+      local id = home_known(routing.dest) and S.lib.lfos.destination(n).resolve()
+      if not id then return "unknown" end
+      local place = S.lib.lfos.place(n)
+      if place == "off" then return "off" end
+      if place == "idle" then return "zero" end
+      local depth = params:get(S.lib.lfos.param_id(n, "depth"))
+      if place == "matrix" then return "summed", id, depth end
+      return "owned", id, depth
+    end
+    if routing.source == "" and routing.dest == "" then return "empty" end
+    if routing.source == "" or routing.dest == "" then return "incomplete" end
+    local id = source_known(routing.source) and resolve(routing.dest)
+    if not id then return "unknown" end
+    if not has_params(k) then return "zero" end
+    if params:get(on_id(k)) ~= 1 then return "off" end
+    local depth = params:get(depth_id(k))
+    if depth == 0 then return "zero" end
+    if S.lib.envelopes.source_voice(k) and S.lib.lfos.fast_destination(id) then return "owned", id, depth end
+    return "summed", id, depth
+  end
+
+  function M.status(k)
+    return (examine(k))
+  end
+
+  -- Routing k's (1-16) resolved destination and depth while it plays
+  -- (summed or owned), else nil
+  local function playing(k)
+    if not is_index(k) then return nil end
+    local _, id, depth = examine(k)
     if not id then return nil end
     return id, depth
   end
@@ -205,7 +243,6 @@ return function(S)
   -- Routing k's resolved destination and depth while it plays, else nil
   -- (lib/envelopes.lua reads it for the routings it owns)
   function M.playing(k)
-    if not is_index(k) then return nil end
     return playing(k)
   end
 
@@ -217,10 +254,11 @@ return function(S)
     return false
   end
 
-  -- Whether a playing routing moves one of the voice's params (MAIN's ~)
+  -- Whether a playing routing or LFO home moves one of the voice's params
+  -- (MAIN's ~): the homes 17-22 count as the routings 1-16 do (#881)
   function M.affects(voice_idx)
-    for k = 1, MATRIX_SLOTS do
-      local id = playing(k)
+    for k = 1, ROUTINGS do
+      local _, id = examine(k)
       if id and id:match("^v(%d+)_") == tostring(voice_idx) then return true end
     end
     return false
@@ -365,8 +403,8 @@ return function(S)
   -- A routing the envelopes own (an envelope to a fast destination: its
   -- node in the engine plays it, design 3.7 §7.3) is left out
   local function read_routing(k)
-    local id, depth = playing(k)
-    if not id or S.lib.envelopes.owns(k, id) then return end
+    local status, id, depth = examine(k)
+    if status ~= "summed" then return end
     local m = depth / 100 * S.lib.mod_sources.normalized(S.matrix[k].source)
     if m ~= 0 and finite(m) then
       local into = S.lib.lfos.fast_destination(id) and scratch.fast_sums or scratch.lua_sums
@@ -380,10 +418,10 @@ return function(S)
   -- on a fast home, its own step on a macro): the rest is the matrix's,
   -- Lua or fast (a buffer voice's main on its position, ruling 16)
   local function read_home(n)
+    local status, id = examine(home_slot(n))
+    if status ~= "summed" then return end
     local m = S.lib.lfos.home_m(n)
     if not m or m == 0 or not finite(m) then return end
-    local id = S.lib.lfos.destination(n).resolve()
-    if not id or S.lib.lfos.owns(n, id) then return end
     local into = S.lib.lfos.fast_destination(id) and scratch.fast_sums or scratch.lua_sums
     into[id] = (into[id] or 0) + m
   end

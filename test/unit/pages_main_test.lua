@@ -78,9 +78,9 @@ test("the voice list marks a silenced voice m and a soloed one s, inside the lis
   assert_equal(entries[2], "2s fm", "the soloed voice")
   params:set("v1_mute", 0)
   assert_equal(local_value("voice_list").entries[1], "1m reso", "silenced by the solo")
-  assert_equal(local_value("voice_list").entries[3], "3- fold", "a stopped voice stays -")
+  assert_equal(local_value("voice_list").entries[3], "3x fold", "a stopped voice silenced by the solo is x (#918)")
   params:set("v3_mute", 1)
-  assert_equal(local_value("voice_list").entries[3], "3- fold", "a stopped muted voice stays -")
+  assert_equal(local_value("voice_list").entries[3], "3x fold", "a stopped muted voice is x (#918)")
   params:set("v2_solo", 0)
   assert_equal(local_value("voice_list").entries[1], "1+ reso")
   for voice_idx = 1, 7 do
@@ -840,7 +840,7 @@ test("MAIN marks a voice an engine LFO, scatter or a routing moves", function()
   assert_true(not marked("voice 2"), "not another voice")
   select_voice(1)
   local_value("S").lib.matrix.set_home(1, local_value("S").lib.lfos.destination_id(destination_labeled("v1 main")))
-  assert_true(not marked("an LFO in Lua"), "an LFO Lua runs is no engine modulation")
+  assert_true(marked("an LFO in Lua"), "an LFO Lua runs on the voice's main moves it too (#881)")
   params:set("strata_lfo1", 0)
   -- scatter, on an unlocked voice
   params:set("scatter", 1)
@@ -862,9 +862,10 @@ test("MAIN marks a voice an engine LFO, scatter or a routing moves", function()
   assert_true(marked("the widest source"), "the mark with buf 8")
 end)
 
--- The engine-run test is the LFO module's own (S.lib.lfos.engine_playing),
--- so MAIN's mark and the LFOs' engine sends cannot disagree
-test("MAIN's mark reads whether an LFO plays in the engine from the LFO module", function()
+-- Where an LFO plays is the LFO module's own answer (S.lib.lfos.place),
+-- which the matrix's status of its home reads (#881, #926), so MAIN's mark
+-- and the LFOs' engine sends cannot disagree
+test("MAIN's mark reads whether an LFO plays from the LFO module's place", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   show_page("MAIN")
@@ -872,13 +873,12 @@ test("MAIN's mark reads whether an LFO plays in the engine from the LFO module",
   for _, destination in ipairs(S.LFO_DESTINATIONS) do
     if destination.label == "v1 pitch" then local_value("S").lib.matrix.set_home(2, destination.key) end
   end
-  assert_equal(type(S.lib.lfos.engine_playing), "function", "the LFO module answers it")
-  assert_true(not S.lib.lfos.engine_playing(2), "LFO 2 is off")
-  local real = S.lib.lfos.engine_playing
-  S.lib.lfos.engine_playing = function(n) return n == 2 end
+  assert_equal(S.lib.lfos.place(2), "off", "LFO 2 is off")
+  local real = S.lib.lfos.place
+  S.lib.lfos.place = function(n) if n == 2 then return "engine" end return real(n) end
   redraw()
   assert_true(screen_shows(context, "~"), "the mark follows the module's answer")
-  S.lib.lfos.engine_playing = real
+  S.lib.lfos.place = real
   redraw()
   assert_true(not screen_shows(context, "~"))
 end)
@@ -964,6 +964,42 @@ test("MAIN shows v2 and grain size for a voice on voice 2", function()
   local label, value = field_texts(context, 1)
   assert_equal(label and label.text, "size")
   assert_equal(value and value.text, string.format("%.2f s", params:get("v1_grain_size")))
+end)
+
+
+-- #881 (3.9, package 5d): an LFO homed on a voice's param that Lua runs
+-- (density) moves the voice as an R routing to it does, so MAIN marks it
+test("MAIN shows ~ for an LFO homed on the voice's Lua-run param", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  show_page("MAIN")
+  select_voice(1)
+  S.lib.matrix.set_home(3, "v1_grain_density")
+  params:set("strata_lfo3_depth", 40)
+  redraw()
+  assert_true(not screen_shows(context, "~"), "the LFO off: no mark")
+  params:set("strata_lfo3", 1)
+  redraw()
+  assert_true(screen_shows(context, "~"), "an LFO in Lua on v1 dens")
+  params:set("strata_lfo3_depth", 0)
+  redraw()
+  assert_true(not screen_shows(context, "~"), "at depth 0: no mark")
+  assert_screen_layout(context, "a Lua LFO's mark")
+end)
+
+-- #918: a stopped voice that is silenced (muted, or another is soloed)
+-- shows x, so the list says which stopped voices would start silent
+test("a stopped, muted voice's row shows its mute", function()
+  local context = load_strata(); finish_startup(context)  -- voices 1 and 2 run
+  params:set("v3_mute", 1)
+  assert_equal(local_value("voice_list").entries[3], "3x fold", "a stopped muted voice")
+  params:set("v3_mute", 0)
+  assert_equal(local_value("voice_list").entries[3], "3- fold", "unmuted: -")
+  params:set("v2_solo", 1)
+  assert_equal(local_value("voice_list").entries[3], "3x fold", "silenced by another's solo")
+  params:set("v3_solo", 1)
+  assert_equal(local_value("voice_list").entries[3], "3- fold", "a stopped soloed voice is not silenced")
+  assert_true(context ~= nil)
 end)
 
 end

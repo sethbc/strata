@@ -23,12 +23,12 @@ The hint row shows `K2:field K3:start` (or `K3:stop` for a running voice). While
 
 ## Voice list
 
-The left column lists the voices, four at a time: each entry is the voice number, `+` (running), `-` (stopped), `m` (running but silenced: muted, or another voice is soloed) or `s` (soloed), the short name (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`) and `[L]` when locked, for example `3- fold [L]`. A voice playing two or more notes at once (a chord from MIDI or a sequencer step) ends with how many: `1+ reso 3`, up to `8`. The selected voice is bright. The list keeps four voices in view at both ends.
+The left column lists the voices, four at a time: each entry is the voice number, `+` (running), `-` (stopped), `m` (running but silenced: muted, or another voice is soloed), `s` (soloed) or `x` (stopped and silenced: it would start silent), the short name (`reso`, `fm`, `fold`, `sub`, `pulse`, `karp`, `ring`) and `[L]` when locked, for example `3- fold [L]`. A voice playing two or more notes at once (a chord from MIDI or a sequencer step) ends with how many: `1+ reso 3`, up to `8`. The selected voice is bright. The list keeps four voices in view at both ends.
 
 ## Details
 
 The right column shows the selected voice:
-- its full name and its source on the right (`synth`, `buf 1`-`buf 8`, `input`, or `v1`-`v7` for a voice that grains a voice's sound). A long name is shortened where it would run into the source. A `~` after the name (`RESONAT~`) says the engine is moving the voice: an LFO that is on and runs in the engine on one of its grain pitch, buffer position, grain size, voice filter cutoff or level, scatter (which leaves a locked voice alone) or a routing of the modulation matrix ([MOD](mod.md)). These move the sound around your settings, so the values below stay as you set them;
+- its full name and its source on the right (`synth`, `buf 1`-`buf 8`, `input`, or `v1`-`v7` for a voice that grains a voice's sound). A long name is shortened where it would run into the source. A `~` after the name (`RESONAT~`) says modulation is moving the voice: an LFO that is on, at a depth above 0, on one of its parameters, scatter (which leaves a locked voice alone) or a routing of the modulation matrix ([MOD](mod.md)) that is on at a depth. These move the sound around your settings, so the values below stay as you set them;
 - `ON` or `OFF`, then `[L]` when locked and `[T]` when its grains are in triggered mode. Last comes `[F]` while the voice's audio is frozen: its grains keep playing the same few seconds (freeze is on the [VOICE](voice.md) page, the grid and MIDI);
 - three fields, each with its unit. The cursor (`>`) marks the one E3 adjusts:
   - the main parameter, then grain size (`size`, seconds) and grain density (`dens`, grains per second). The main parameter is:
