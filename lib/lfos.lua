@@ -226,7 +226,14 @@ return function(S)
   end
   M.destination = destination_of
 
+  -- LFO n's destination as the pages show it: the entry's label, "~" after
+  -- a fast one; while the home's status is unknown (a key this build lacks,
+  -- kept: S.lib.matrix.status), the kept key itself, with no "~" since
+  -- nothing plays it (#1030)
   function M.label(n)
+    local matrix = S.lib.matrix
+    local key = matrix.home(n)  -- nil for no LFO n
+    if key and matrix.status(matrix.home_slot(n)) == "unknown" then return key end
     local destination = destination_of(n)
     return destination.label .. (destination.fast and "~" or "")
   end
@@ -500,16 +507,6 @@ return function(S)
     return is_on(n) and home_kind(n) == "engine"
   end
 
-  -- Whether LFO n's home routing to id is this module's to play: its home
-  -- is fast and resolves to id (its engine node), or id is a direct
-  -- destination (a macro, handed over in its step). Whatever its on/off
-  -- and depth, as S.lib.envelopes.owns is about kind
-  function M.owns(n, id)
-    if type(n) ~= "number" or n < 1 or n > NUM_LFOS or n % 1 ~= 0 or id == nil then return false end
-    if direct.known[id] then return true end
-    return home_kind(n) == "engine" and destination_of(n).resolve() == id
-  end
-
   -- The offset of a Lua destination for m half ranges (the matrix's too)
   function M.offset_for(id, m)
     local minval, maxval = param_range(id)
@@ -612,13 +609,6 @@ return function(S)
   -- Engine-run LFOs (design §2.6)
   ---------------------------------------------------------------------------
   local function engine_key(n) return "lfo" .. n .. " engine" end
-
-  -- Whether LFO n plays in the engine now: on, on a fast destination, at a
-  -- depth above 0 (its place). Its node is kept at depth 0 too (keeps_node)
-  local function engine_playing(n)
-    return place(n) == "engine"
-  end
-  M.engine_playing = engine_playing  -- MAIN's ~ (lib/pages/main.lua) reads this one answer
 
   -- The settings LFO n's node should have. At a depth param of 0 its
   -- offset is 0 too (fix round 1 of #925): the kept node then plays
