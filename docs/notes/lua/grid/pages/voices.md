@@ -25,7 +25,7 @@ Line v is voice v (1-7); every key acts at its press but CL and RN, which act at
 | 1 | MU | `v<v>_mute` toggled (`set_binary_param`) | - | 15 muted, 4 |
 | 2 | SO | `v<v>_solo` toggled (`set_binary_param`) | - | 15 soloed, 4 |
 | 3 | LK | `toggle_lock(v)` | - | `lock_level(v)` 12 / 2 |
-| 4 | FZ | `S.lib.freeze.toggle_quantized(v)` | - | 15 frozen, 3; blinking (`grid_core.waiting_level()`) while the voice's set waits (`S.lib.quantize.waiting("freeze<v>")`, #876) |
+| 4 | FZ | `S.lib.freeze.toggle_quantized(v)` | - | 15 frozen, 3; blinking (`grid_core.waiting_level()`) while the voice's set waits (`S.lib.freeze.waiting(v)`, #876, #1031) |
 | 5 | CL | `pane.on_hold(5, v, hold_seconds, ...)` | 0.5 s: `clear_pattern(v)`, grids and screen redrawn | 15 pending (`pane.hold_pending`), 2 |
 | 6 | RN | the same | 0.5 s: `randomize_pattern(v)` | 15 / 2 |
 | 7 | PC | no copy: copy v's steps; another voice's copy: `replace_pattern(v, steps)` (the copy stays); the copied voice: drop it | - | 15 the copied voice, 4 the others while a copy exists, 2 with none |

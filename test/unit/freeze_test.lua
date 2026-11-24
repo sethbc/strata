@@ -1058,4 +1058,49 @@ h.transition_table({
   impossible = {},
 })
 
+
+-- #1031: the freeze's own reader of whether a voice's quantized freeze set
+-- waits (the grid core's blink and the voices page's FZ key read it)
+test("S.lib.freeze.waiting says a voice's freeze set waits (#1031)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function run_to_beat(beat)
+    context.clock.run_for((beat - clock.get_beats()) * clock.get_beat_sec())
+  end
+  assert_true(not S.lib.freeze.waiting(3), "nothing waits at first")
+  S.lib.freeze.toggle_quantized(3)
+  assert_true(not S.lib.freeze.waiting(3) and S.lib.freeze.is_frozen(3), "quantize off: at once, never waiting")
+  S.lib.freeze.toggle(3)
+  params:set("quantize_actions", 3)  -- bar
+  run_to_beat(1.5)
+  S.lib.freeze.toggle_quantized(3)
+  assert_true(S.lib.freeze.waiting(3), "under quantize the set waits")
+  assert_true(not S.lib.freeze.waiting(2), "another voice's does not")
+  for _, bad in ipairs({0, 8, 2.5, "3", false}) do
+    assert_equal(S.lib.freeze.waiting(bad), false, "out of range: " .. tostring(bad))
+  end
+  assert_equal(S.lib.freeze.waiting(nil), false, "nil")
+  run_to_beat(4.02)
+  assert_true(S.lib.freeze.is_frozen(3), "it landed")
+  assert_true(not S.lib.freeze.waiting(3), "and waits no more")
+  S.lib.freeze.toggle_quantized(3)
+  assert_true(S.lib.freeze.waiting(3), "a press waits again")
+  S.lib.freeze.toggle_quantized(3)
+  assert_true(not S.lib.freeze.waiting(3), "a second press takes it back")
+end)
+
+-- #1031: the freeze's quantizer key (freeze<v>) is built in one place, so
+-- its readers ask S.lib.freeze.waiting
+test("only lib/freeze.lua builds the freeze's quantizer key", function()
+  local listing = assert(io.popen("cd '" .. h.repo_root .. "' && git ls-files 'lib/*.lua' 'lib/**/*.lua' strata.lua"))
+  local builders = {}
+  for path in listing:lines() do
+    local file = assert(io.open(h.repo_root .. "/" .. path))
+    local text = file:read("*a"); file:close()
+    if text:find('"freeze" ..', 1, true) or text:find("'freeze' ..", 1, true) then builders[#builders + 1] = path end
+  end
+  listing:close()
+  assert_equal(table.concat(builders, ","), "lib/freeze.lua")
+end)
+
 end

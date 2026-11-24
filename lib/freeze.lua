@@ -63,14 +63,26 @@ return function(S)
   -- set, not a toggle: after a source switch, a hand set or a recall, the
   -- bar still sets what the player asked for (#864). A press while the voice's
   -- set waits takes that set back (#625)
+  -- The quantizer's key of voice voice_idx's freeze set (freeze<v>), built
+  -- here alone (#1031)
+  local function quantize_key(voice_idx) return "freeze" .. voice_idx end
+
   function M.toggle_quantized(voice_idx)
     if not valid_voice(voice_idx) then return end
-    local key = "freeze" .. voice_idx
+    local key = quantize_key(voice_idx)
     if S.lib.quantize.cancel(key) then return end
     local asked = M.is_frozen(voice_idx) and 0 or 1
     S.lib.quantize.schedule(key, function()
       if M.is_frozen(voice_idx) ~= (asked == 1) then set_binary_param(param_id(voice_idx, M.FREEZE.key), asked) end
     end, "v" .. voice_idx .. " frz")
+  end
+
+  -- Whether voice voice_idx's quantized freeze set (toggle_quantized)
+  -- waits for its beat or bar; false for any other value. The grid's FZ
+  -- keys blink by it (#876, #1031)
+  function M.waiting(voice_idx)
+    if not valid_voice(voice_idx) then return false end
+    return S.lib.quantize.waiting(quantize_key(voice_idx))
   end
 
   -- The freeze-change hooks' last printed errors (contained_call), per hook

@@ -209,4 +209,40 @@ test("record does what BUFFER's key does on the page's slot", function()
   assert_equal(#context.calls_named("stopRecord"), 1, "again stops it")
 end)
 
+
+-- #1031: an IO action's recall (crow, OSC, a Teletype) keeps its scene as
+-- the quantizer's detail, as a grid key's and SCENES' do, so the grid's
+-- keys of that scene blink while it waits and stop once it lands
+test("an IO action's recall under quantize blinks that scene's key until it lands (#1031)", function()
+  local context, S, actions = started()
+  local LEVELS = S.constants.GRID_LEVELS
+  local tick = 1 / S.constants.PLAYHEADS.update_hz
+  local slot = 5
+  local pane = h.grid_pane(context, "128h")
+  pane.show(S.constants.GRID_PAGES.scenes)
+  S.lib.scenes.save(slot)
+  params:set("scene_transition_time", 0)
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  local function watch(ticks)
+    local seen, before = {}, pane.device.refresh_count
+    for _ = 1, ticks do
+      context.clock.run_for(tick)
+      seen[pane.led(slot, 1)] = true
+    end
+    return seen, pane.device.refresh_count - before
+  end
+  assert_equal(actions.recall_scene(slot), true, "scheduled")
+  assert_true(S.current_scene ~= slot, "not before the bar")
+  assert_equal(S.lib.quantize.waiting_detail("scene"), slot, "the recall keeps its scene")
+  local seen, repaints = watch(12)
+  assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], "the scene's recall key blinks")
+  assert_true(repaints > 0, "the blink repaints the grid")
+  context.clock.run_for((4.05 - clock.get_beats()) * clock.get_beat_sec())
+  assert_equal(S.current_scene, slot, "the bar recalled it")
+  assert_equal(S.lib.quantize.waiting_detail("scene"), nil, "nothing waits")
+  seen = watch(8)
+  assert_true(seen[15] and not seen[LEVELS.waiting_low], "landed: current, steady at 15")
+end)
+
 end

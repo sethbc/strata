@@ -41,14 +41,15 @@ return function(S)
   end
 
   -- Scheduled as a scene key schedules it (the quantizer's "scene" action,
-  -- with the scene transition time)
+  -- with the scene transition time, keeping its slot: the grid's keys of
+  -- that scene blink while it waits, #1031)
   function M.recall_scene(n)
     if not whole(n) or n < 1 or n > NUM_SCENES then
       return ignored("recall_scene", "scene " .. tostring(n) .. " is not 1 to " .. NUM_SCENES)
     end
     if not saved(n) then return ignored("recall_scene", "scene " .. n .. " is empty") end
     local transition_time = params:get("scene_transition_time")
-    S.lib.quantize.schedule("scene", function() recall_scene(n, transition_time) end, "S" .. n)
+    S.lib.quantize.schedule("scene", function() recall_scene(n, transition_time) end, "S" .. n, n)
     return true
   end
 

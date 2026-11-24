@@ -570,7 +570,7 @@ return function(S)
     local cells_shown = M.any_page(GRID_PAGES.positions, 1)
     local freeze_shown = M.any_page(GRID_PAGES.voices)
     for voice_idx = 1, NUM_VOICES do
-      if freeze_shown and quantize.waiting("freeze" .. voice_idx) then parts[#parts + 1] = "freeze " .. voice_idx end
+      if freeze_shown and S.lib.freeze.waiting(voice_idx) then parts[#parts + 1] = "freeze " .. voice_idx end
       local cell = cells_shown and S.lib.positions.waiting_cell(voice_idx)
       if cell then parts[#parts + 1] = "cell " .. voice_idx .. ":" .. cell end
     end
@@ -582,8 +582,7 @@ return function(S)
   -- The playheads' tick (lib/playheads.lua): counts a tick and repaints
   -- the grids when what the waiting keys show changed (a phase of the
   -- blink, a wait begun, ended or moved, wherever it was started or taken
-  -- back, but an IO action's scene recall, which keeps no slot until #1031),
-  -- once more when the last one ends; while none shows it repaints
+  -- back), once more when the last one ends; while none shows it repaints
   -- nothing. No param action repaints for a wait
   function M.blink_tick()
     blink.ticks = blink.ticks + 1
