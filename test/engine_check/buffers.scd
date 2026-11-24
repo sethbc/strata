@@ -788,6 +788,22 @@ var checkCheckedLoadNumbers = { arg other, path60, damaged;
     check.(apart.([before % loads, (before + 1) % loads], "cancel's") and: { events == wanted },
         "buffers: a long load's cancel of a recording reports under the load before it, and its rejected check under its own number before its failure (#983; reports %, wanted %)".format(
             events, wanted));
+    // #1016: the same with a missing file loaded during the check (rejected
+    // at once): the rejected check's length still names its own load, not
+    // the later one, so Lua never takes it for a given-back check's end
+    cmd.(\recordBuffer, slot, 5, 1.0, 0, 0, 0, 0, 0);
+    0.1.wait; server.sync;
+    before = other.bufferLoads[slot];
+    since = h.pollMessages.size;
+    cmd.(\loadBuffer, slot, damaged, 0);
+    cmd.(\loadBuffer, slot, scratchRoot +/+ "missing.wav", 0);
+    waitFor.({ slotEvents.(since).select({ arg event; event[0] == \failed }).size >= 2 }, 10);
+    0.05.wait; server.sync;
+    events = slotEvents.(since);
+    wanted = [[\state, before % loads, 0], [\failed, before + 2], [\state, (before + 1) % loads, 0], [\failed, before + 1]];
+    check.(apart.([before % loads, (before + 1) % loads, (before + 2) % loads], "later load's") and: { events == wanted },
+        "buffers: a rejected check that canceled a recording reports its length under its own number when a later load was rejected first (#1016; reports %, wanted %)".format(
+            events, wanted));
     cmd.(\clearBuffer, slot); server.sync;
 };
 

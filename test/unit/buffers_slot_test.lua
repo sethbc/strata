@@ -347,6 +347,9 @@ end
 local function role(expected) return function() assert_equal(S_().lib.record.clock_role(SLOT), expected, "clock") end end
 
 local ZERO_SETTLES = then_settles("unsettled")
+-- a given-back check's own number (the load before the newest): its
+-- seconds are kept for its failure's undo, which reads them (#1016)
+local function KEPT_SECONDS() assert_equal(buffer().seconds, OTHER_AUDIO, "the seconds kept") end
 
 -- The rows a state whose slot holds no take has for the reports of a take
 -- a load, a clear or a settle has left (engine rows 12 and 13): ignored
@@ -444,7 +447,7 @@ local ROWS = {
     named("long1.wav")(); no_clock(); bound()
   end},
   {"loading, checking, given back", "bufferState 0 s", "loading", check = no_clock},
-  {"loading, checking, given back", "another load's number", "loading, checking, given back"},
+  {"loading, checking, given back", "another load's number", "loading, checking, given back", check = KEPT_SECONDS},
   {"loading, checking, given back", "bufferLoadFailed newest", "loaded", check = function()
     named("a.wav")(); no_clock()
   end},
@@ -462,7 +465,7 @@ local ROWS = {
   {"loading, checking, empty before, given back", "bufferState 0 s", "loading", check = function(context)
     no_clock(); ZERO_SETTLES(context)
   end},
-  {"loading, checking, empty before, given back", "another load's number", "loading, checking, empty before, given back"},
+  {"loading, checking, empty before, given back", "another load's number", "loading, checking, empty before, given back", check = KEPT_SECONDS},
   {"loading, checking, empty before, given back", "bufferLoadFailed newest", "loading", check = function()
     named("z.wav")(); no_clock()
   end},
@@ -490,11 +493,13 @@ local ROWS = {
   {"loading, restoring, no load tracked", "bufferState 0 s", "loading, restoring, no load tracked",
     check = ZERO_SETTLES},
   {"loading, restoring, no load tracked", "another load's number", "loading, restoring, no load tracked"},
-  -- #980: the restore's own failure finds nothing to undo, so the slot
-  -- waits on a load the engine has ended (a later 0 s settles it
-  -- unsettled, named for the failed file)
-  {"loading, restoring, no load tracked", "bufferLoadFailed untracked", "loading, restoring, no load tracked",
-    known = 980, check = ZERO_SETTLES},
+  -- #980: the restore's own failure, the one load whose outcome is still
+  -- to come, leaves the slot as a tracked restore's does: empty, no path
+  {"loading, restoring, no load tracked", "bufferLoadFailed untracked", "empty", check = function()
+    assert_equal(buffer().path, nil, "no path"); assert_equal(buffer().confirm_since, nil, "awaits nothing")
+    assert_equal(params:get("buf" .. SLOT .. "_file"), _path.audio, "the file param at its folder")
+    no_clock(); unbound()
+  end},
 
   -- a restore that a canceled take's undo gave back (6 s known, take 1
   -- canceled by the failed load, engine row 9)
@@ -533,7 +538,7 @@ local ROWS = {
   {"loading, checking, restoring, given back", "bufferState 0 s", "loading, restoring", check = function(context)
     no_clock(); ZERO_SETTLES(context)
   end},
-  {"loading, checking, restoring, given back", "another load's number", "loading, checking, restoring, given back"},
+  {"loading, checking, restoring, given back", "another load's number", "loading, checking, restoring, given back", check = KEPT_SECONDS},
   {"loading, checking, restoring, given back", "bufferLoadFailed newest", "empty", check = no_clock},
   {"loading, checking, restoring, given back", "the notice", "loading, checking, restoring, given back", check = noticed},
 

@@ -812,7 +812,8 @@ return function(S)
   -- the engine is still checking (checking_from) settles nothing until its
   -- own 0 s, the load taking effect (its read then settles as any load's),
   -- or, for a check a later load's failure gave back, the first report
-  -- that names that later load (#983).
+  -- that names that later load (#983); a report under that check's own
+  -- number is its rejection's, whose seconds alone are kept (#1016).
   local function buffer_state_changed(value)
     local cell = math.floor(value / BUFFER_STATE_STRIDE)
     local engine_slot = cell % (NUM_BUFFERS + 1)
@@ -826,6 +827,21 @@ return function(S)
     local slot = engine_slot + 1
     if not valid_buffer_slot(slot) then return end
     local buffer = S.buffers[slot]
+    -- a check a later load's failure gave back, rejected after canceling a
+    -- recording: the engine re-reports the length the cancel left under
+    -- the checked load's own number just before its failure, and no other
+    -- report names that load once every later one has failed (#1016). Its
+    -- seconds are what the failure's undo reads (resolve_previous); it
+    -- ends no check and settles nothing
+    local given_back = buffer.checking_load ~= nil and buffer.checking_load ~= buffer.loads_sent
+    if given_back and load_number == buffer.checking_load % BUFFER_STATE_LOADS
+        and load_number ~= buffer.loads_sent % BUFFER_STATE_LOADS then
+      if buffer.seconds ~= seconds then
+        buffer.seconds = seconds
+        request_redraw()
+      end
+      return
+    end
     -- sent before the engine had the slot's newest load (#578)
     if load_number ~= buffer.loads_sent % BUFFER_STATE_LOADS then return end
     local changed = buffer.seconds ~= seconds
@@ -900,7 +916,8 @@ return function(S)
   -- load_buffer count a slot's loads alike, from 1. emptied is 0 when the load
   -- left the slot as it was (canceling a recording in it), 1 when it left it
   -- empty (the server's read failed after the slot was zeroed). The failed
-  -- load is undone only while the slot still tracks it (pending_loads): the
+  -- load is undone only while the slot still tracks it (pending_loads), or
+  -- when it is a restore's own that the bound pushed out (#980): the
   -- newest load gives the slot the state the failed load left (the state it
   -- replaced: name, path, the file param, settled or not, from
   -- buffer_state_before_load; or an empty slot), so the bad path is never
@@ -928,10 +945,21 @@ return function(S)
         break
       end
     end
-    if not found then return end
-    local failed = table.remove(pending, found)
-    local left = emptied and empty_buffer_state(false) or resolve_previous(slot, failed.previous)
-    if found <= #pending then
+    local failed, left
+    if found then
+      failed = table.remove(pending, found)
+      left = emptied and empty_buffer_state(false) or resolve_previous(slot, failed.previous)
+    elseif #pending == 0 and buffer.restoring then
+      -- (#980's twin) a restore that tracks no load was given back by the
+      -- failures of every later one, its own load pushed out of the list:
+      -- that load is the only one whose outcome is still to come, so this
+      -- is its failure, and it leaves what a tracked restore's leaves (a
+      -- restore loads into the empty slot of a fresh script)
+      failed, left = {path = buffer.path}, empty_buffer_state(false)
+    else
+      return
+    end
+    if found and found <= #pending then
       pending[found].previous = left
     else
       -- buffers_restored needs no undo: a restore loads into a slot that is empty at start, so no report of old audio counted it
