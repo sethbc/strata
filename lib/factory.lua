@@ -512,7 +512,9 @@ return function(S)
   ---------------------------------------------------------------------------
 
   -- open; the cursor (an index into sets); the sets listed at open; the
-  -- armed prompt's end (util.time(); 0: not armed)
+  -- armed prompt's end (util.time(); 0: not armed). While armed the
+  -- prompt is the list's own hint row, whatever flashes (#897, as SCENES'
+  -- overwrite prompt since #255): the next K3 loads, so it always says so
   local list = {open = false, cursor = 1, sets = {}, armed_until = 0}
   local owner
 
@@ -546,7 +548,13 @@ return function(S)
       spacing = layout.spacing, value_right = layout.value_right}, draw_row)
   end
 
+  -- Armed: the first K3's prompt has not lapsed
+  local function armed()
+    return util.time() < list.armed_until
+  end
+
   local function hints(alt_held)
+    if armed() then return S.lib.pages_setup.SETUP_PAGE.load_texts.confirm end  -- load scenes' prompt
     local flash = S.lib.ui_flash.text("hints")
     if flash then return flash end
     if #list.sets == 0 then return alt_held and "" or "K2:back" end
@@ -571,9 +579,9 @@ return function(S)
       return
     end
     local confirm_seconds = S.lib.scenes.SCENE_LOAD.confirm_seconds
-    if S.scene_file.unsaved and util.time() >= list.armed_until then
+    if S.scene_file.unsaved and not armed() then
       list.armed_until = util.time() + confirm_seconds
-      list_flash(S.lib.pages_setup.SETUP_PAGE.load_texts.confirm, confirm_seconds)  -- load scenes' prompt
+      request_redraw()
       return
     end
     list.armed_until = 0
@@ -590,7 +598,16 @@ return function(S)
     end
   end
 
-  owner = {draw = draw, hints = hints, enc = enc, key = key}
+  -- The frame clock draws the list every frame while armed: the prompt
+  -- lapses with no clock of its own. Once lapsed it disarms and returns
+  -- true once more, for the frame that takes the prompt off the hint row
+  local function animates()
+    if list.armed_until == 0 then return false end
+    if not armed() then list.armed_until = 0 end
+    return true
+  end
+
+  owner = {draw = draw, hints = hints, enc = enc, key = key, animates = animates}
 
   -- Open the list over SETUP (its factory sets row): the index's sets, read
   -- now; already open, nothing

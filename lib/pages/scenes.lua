@@ -84,11 +84,20 @@ return function(S)
   -- The sequencer's three chances (3.7): each field's label
   local CHANCE_LABELS = {scene_chance_next = "next", scene_chance_previous = "prev", scene_chance_random = "random"}
 
+  -- The sequencer's field (#893): on with no slot in 1..length it can play
+  -- (S.lib.scenes.playable_slots, the pass's own list), it holds a slot and
+  -- recalls nothing, and the field says so
+  local function sequencer_text()
+    if params:get("scene_sequencer_enabled") ~= 1 then return "seq off" end
+    if #S.lib.scenes.playable_slots(1, params:get("scene_sequence_length")) == 0 then return "seq on [none]" end
+    return "seq on"
+  end
+
   local function field_text(field_id)
     if field_id == "scene_transition_time" then
       return string.format("fade %.1fs", params:get(field_id))
     elseif field_id == "scene_sequencer_enabled" then
-      return params:get(field_id) == 1 and "seq on" or "seq off"
+      return sequencer_text()
     elseif field_id == "scene_sequence_length" then
       return "len " .. params:get(field_id)
     elseif CHANCE_LABELS[field_id] then
@@ -366,6 +375,13 @@ return function(S)
       populate_all()
       S.cursors.scene = 12
       S.scene_sequencer_position = 12
+    end))
+    -- the sequencer on with no scene to play (#893), the cursor on its field
+    table.insert(states, state("sequencer on with nothing to play", function()
+      params:set("scene_sequencer_enabled", 1)
+      for index, field_id in ipairs(SCENES_FIELDS) do
+        if field_id == "scene_sequencer_enabled" then S.cursors.scene = NUM_SCENES + index end
+      end
     end))
     table.insert(states, state("S16 current beside REC", function()
       populate_all()
