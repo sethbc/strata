@@ -300,6 +300,8 @@
             // overview the take's start had put on the record length (#313)
             if (take[\started].not and: { take[\peaksBefore].notNil }) { this.storeSlotPeaks(index, take[\peaksBefore]) };
             this.reportRecordState(index, take[\number], if (ending) { 2 } { 3 });
+            // a recording queued behind an ending take never starts (#966)
+            take[\queued] !? { arg queued; this.reportRecordState(index, queued[\number], 3) };
         };
         // its take may have just completed (sendToSynth); free(false) marks
         // it freed. The head goes back to idle after the free (in order on
@@ -405,8 +407,13 @@
     // Every delayed step (the preparation, the start) runs only if nothing
     // changed the slot meanwhile (slotChanges): a later load, clear or
     // recording always wins.
+    // A playable recording sent while a replace take is ending (takeEnding,
+    // the slot still reading 0 frames: the take has not announced its
+    // length) waits for that take's end (#966): it is queued in the take
+    // (\queued: its record number and its start), the take completes in
+    // full, and endTake then starts it, judged on the take's frames.
     recordSlot { arg index, seconds, level, feedback = 0, source = 0, threshold = 0, loop = 0, delay = 0, sent;
-        var state, server = context.server, frames, change, take, playable, prepareAt, now = thisThread.seconds, startAt;
+        var state, server = context.server, frames, number, ending, now = thisThread.seconds, startAt;
         if (this.validBuffer(index).not) { ^this };
         // delay after the send, never more than delay after now (read first,
         // before the work below)
@@ -414,11 +421,29 @@
         state = areaState[\record];
         // counted first: matches Lua's records_sent, whatever happens to this command
         state[\recordCounts][index] = state[\recordCounts][index] + 1;
+        number = state[\recordCounts][index];
         frames = (seconds * server.sampleRate).round.asInteger.clip(0, buffersL[index].numFrames);
         if (frames < 1) { ^this };
         // long enough for its two 5 ms fades (\strataRecord's one-shot release)
         frames = frames.max((2 * this.recordFadeSeconds * server.sampleRate).ceil.asInteger).min(buffersL[index].numFrames);
+        ending = state[\takes][index];
+        if (this.takeEnding(index) and: { bufferFrames[index] == 0 } and: { (feedback > 0) or: { loop > 0 } }) {
+            // a recording queued before it is canceled (the later command wins)
+            ending[\queued] !? { arg queued; this.reportRecordState(index, queued[\number], 3) };
+            ending[\queued] = (number: number, start: {
+                this.areaCall(\beginRecording, index, number, frames, level, feedback, source, threshold, loop, delay, startAt)
+            });
+            ^this
+        };
+        this.areaCall(\beginRecording, index, number, frames, level, feedback, source, threshold, loop, delay, startAt);
+    }
 
+    // The rest of recordSlot, at its command or, for a recording queued
+    // behind an ending take (#966), once that take has ended (endTake):
+    // what was recording is canceled, the kind is judged on what the slot
+    // holds now, and the take is prepared at once or before its start
+    beginRecording { arg index, number, frames, level, feedback, source, threshold, loop, delay, startAt;
+        var state = areaState[\record], server = context.server, change, take, playable, prepareAt, now = thisThread.seconds;
         this.stopRecording(index);
         change = this.slotChanged(index);
         // (a slot's rate describes its audio, so only a slot holding audio is
@@ -428,7 +453,7 @@
         playable = ((feedback > 0) or: { loop > 0 })
             and: { (bufferFrames[index] == 0) or: { bufferSampleRates[index] == server.sampleRate } };
         take = (
-            number: state[\recordCounts][index], kind: if (playable) { \playable } { \replace },
+            number: number, kind: if (playable) { \playable } { \replace },
             frames: frames, level: level, feedback: if (playable) { feedback.clip(0, 1) } { 0 },
             source: source, threshold: threshold.max(0), loop: if (playable and: { loop > 0 }) { 1 } { 0 },
             delay: delay.max(0), startAt: startAt, change: change,
@@ -673,6 +698,9 @@
                         this.areaCall(\writeSlot, index, this.scratchPath(index), { arg written;
                             if (written.not) { this.takeWriteFailedPoll.update(this.takeWriteFailedValue(index, take[\number])) };
                         });
+                        // a playable recording queued behind this take (#966)
+                        // starts now, judged on the take's frames
+                        take[\queued] !? { arg queued; queued[\start].value };
                     };
                 });
             };
@@ -694,6 +722,15 @@
         var state = areaState[\record], take, change;
         if (this.validBuffer(index).not) { ^this };
         take = state[\takes][index];
+        // a take that is ending has nothing to stop, but a recording queued
+        // behind it (#966) is canceled: the take ends as it would have, and
+        // the slot's length follows the cancel, as for one waiting (row 6)
+        if (this.takeEnding(index) and: { take[\queued].notNil }) {
+            this.reportRecordState(index, take[\queued][\number], 3);
+            take[\queued] = nil;
+            this.bufferChanged(index);
+            ^this
+        };
         if (take.isNil or: { recordSynths[index].isNil }) { ^this };
         if (take[\stopping]) { ^this };
         // not started as far as sclang knows and not sent yet (waiting for

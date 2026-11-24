@@ -455,6 +455,36 @@ var checkRefused = {
     File.delete(path);
 };
 
+// ... and a slot whose take is ending (#966): a playable recording over the
+// audio, its record synth freed and its peaks file held by the stopped
+// mover (the slot holds audio and no record synth, so only takeEnding tells
+// it), is refused as a recording slot is, at once
+var checkRefusedEnding = {
+    var slot = 4, path = scratchRoot +/+ "onsets-ending.wav", mover = engine.areaState[\waveform][\mover];
+    var count, run, ending = false, atOnce = false, stopped = false;
+    h.writeTestFile(path, rate, rate, [0.25, 0.25]);
+    loadInto.(engine, slot, path);
+    if (mover.notNil and: { mover[\alive] }) {
+        waitFor.({ mover[\pending] == 0 });
+        ("kill -STOP " ++ mover[\pid]).systemCmd;
+        stopped = true;
+        protect {
+            command.(\recordBuffer, slot, 0.05, 1.0, 0.5, 0, 0, 0, 0);
+            ending = waitFine.({ engine.takeEnding(slot) }, 2);
+            count = analysesOf.(engine)[slot] + 1;
+            run = startAnalysis.(engine, slot);
+            atOnce = poll.value == engine.bufferOnsetsValue(slot, count, true);
+        } { ("kill -CONT " ++ mover[\pid]).systemCmd };
+        finishAnalysis.(run);
+        h.awaitTake(slot);
+    };
+    check.(stopped and: { ending } and: { run[\failed] == true } and: { atOnce } and: { tempFilesOf.(engine, slot, count).isEmpty },
+        "onsets: a slot whose take is ending is refused with a failed report (#966; mover held %, ending %, failed %, at once %)".format(
+            stopped, ending, run !? { run[\failed] }, atOnce));
+    command.(\clearBuffer, slot); server.sync;
+    File.delete(path);
+};
+
 // A 16 s pass on the standard tier, timed; then a 300 s pass on a high
 // engine: a message sent every 10 ms while it runs is each handled within
 // 5 ms (an OSC message waits for the language lock, which the pass holds
@@ -538,6 +568,7 @@ body = {
         checkSuperseded.value;
         checkOlderRename.value;
         checkRefused.value;
+        checkRefusedEnding.value;
         checkLong.value;
         checkOutOfRange.value;
     } { poll.stop };
