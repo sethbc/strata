@@ -567,6 +567,33 @@ test("SETUP shows the count's offset when an unfollowed reset left one", functio
   assert_equal(offset_row(), nil, "stopped: the next start counts from the clock, so no row")
 end)
 
+-- #921 review: a jump nobody announced (here the beat set back, as a new
+-- clock source does) is kept by the first clock that notices it, not by the
+-- handler: SETUP's offset row shows from the next frame all the same
+test("SETUP shows the count's offset after a jump a clock keeps", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local function offset_row()
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text:find("^count offset") then return entry.text end
+    end
+  end
+  show_page("SETUP")
+  enc(2, 60)  -- the status lines
+  S.patterns[1][1] = 15
+  pattern_clock_start()
+  context.clock.run_for(1.3)
+  next_frame(context)
+  assert_equal(offset_row(), nil, "no offset: no row")
+  context.clock.set_beat(clock.get_beats() - 3)  -- no transport start: no handler runs
+  context.clock.run_for(0.3)                      -- a clock wakes and keeps the count
+  assert_true(S.lib.sequencer.count_offset() ~= 0, "a clock kept the count")
+  next_frame(context)
+  assert_equal(offset_row(), string.format("count offset: %+.2f beats", S.lib.sequencer.count_offset()),
+    "shown without a key or a handler's redraw")
+  pattern_clock_stop()
+end)
+
 test("K3 on save scenes and load scenes says what it did on SETUP's hint row (#463)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

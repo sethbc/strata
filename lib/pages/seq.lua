@@ -65,7 +65,11 @@ return function(S)
     -- they fit, else the short ones (bars as "b", the reset's "at bar"
     -- dropped), the outputs' names cut to the room left
     status_x = 0, status_y = 55, status_right = 128, status_level = 10,
-    chain_none = "chain [none]", reset_long = "[reset at bar]", reset_short = "[reset]"}
+    chain_none = "chain [none]", reset_long = "[reset at bar]", reset_short = "[reset]",
+    -- the chain's short forms with no scene (#921 review): "[chain -]" with
+    -- none to link, "[S- <n>b]" before its first link, so a reset and
+    -- "[targets off]" beside them stay whole (127 and 118 px)
+    chain_none_short = "[chain -]", no_slot_short = "S-"}
 
   -- The edit view (design 8.6): "v<voice> step <n>" at 0,line_y and a strip
   -- of the voice's steps (cells strip_cell px, strip_spacing apart from
@@ -192,19 +196,32 @@ return function(S)
   end
 
   -- The chain's mark (#921): "[S<slot> <n> bars]" ("1 bar"; short
-  -- "[S<slot> <n>b]"), "[chain <n> bars]" before its first link, "chain
-  -- [none]" with no playable scene in its range (SCENES' "seq on [none]"
-  -- form); nil while the chain has no place (off, or the patterns stop)
+  -- "[S<slot> <n>b]"), "[chain <n> bars]" before its first link (short
+  -- "[S- <n>b]"), "chain [none]" with no playable scene in its range
+  -- (SCENES' "seq on [none]" form; short "[chain -]"); nil while the chain
+  -- has no place (off, or the patterns stop)
   local function chain_mark(short)
     local sequencer = S.lib.sequencer
     local slot, bars = sequencer.chain_place()
     if not bars then return nil end
     if not slot and #S.lib.scenes.playable_slots(params:get("seq_chain_from"), params:get("seq_chain_scenes")) == 0 then
-      return SEQ_PAGE.chain_none
+      return short and SEQ_PAGE.chain_none_short or SEQ_PAGE.chain_none
     end
-    local name = slot and ("S" .. slot) or "chain"
-    if short then return "[" .. name .. " " .. bars .. "b]" end
-    return "[" .. name .. " " .. bars .. (bars == 1 and " bar]" or " bars]")
+    if short then return "[" .. (slot and ("S" .. slot) or SEQ_PAGE.no_slot_short) .. " " .. bars .. "b]" end
+    return "[" .. (slot and ("S" .. slot) or "chain") .. " " .. bars .. (bars == 1 and " bar]" or " bars]")
+  end
+
+  -- text cut to room px (fit_text), any space at the cut dropped and, when
+  -- the cut leaves one letter of a word, that letter too (#921 review): a
+  -- cut name ends at a word or a fragment of two letters or more, or is ""
+  function M.cut_name(text, room)
+    local cut = fit_text(text, room)
+    if cut == text then return text end
+    local trimmed = cut:gsub("%s+$", "")
+    if trimmed ~= cut or text:sub(#cut + 1, #cut + 1) == " " then return trimmed end
+    local fragment = cut:match("(%S+)$")
+    if fragment and #fragment == 1 then return (cut:sub(1, -2):gsub("%s+$", "")) end
+    return cut
   end
 
   -- The status line's text (#921), or nil while none of its three holds:
@@ -227,7 +244,7 @@ return function(S)
         if short and screen.text_extents(names) > room then
           -- the first name cut, and how many more there are
           local more = #failed > 1 and (" +" .. (#failed - 1)) or ""
-          names = fit_text(failed[1], room - screen.text_extents(more)):gsub("%s+$", "") .. more
+          names = M.cut_name(failed[1], room - screen.text_extents(more)) .. more
         end
         parts[#parts + 1] = "[" .. names .. " off]"
       end
@@ -1218,6 +1235,26 @@ return function(S)
       failing_output("targets")
       show_cursor(NUM_VOICES, PATTERN_LENGTH)()
       quietly(pattern_toggle)
+      params:set("seq_division_reset", 1)
+    end},
+    -- the widest real combinations of the chain's other marks (#921 review):
+    -- no scene to link, and the chain switched on before its first link
+    {name = "chain with no scene, reset and a failed output", setup = function()
+      S.patterns[1][1] = MAX_STEP_LEVEL
+      failing_output("targets")
+      show_cursor(NUM_VOICES, PATTERN_LENGTH)()
+      params:set("seq_chain", 1)
+      quietly(pattern_toggle)
+      params:set("seq_division_reset", 1)
+    end},
+    {name = "chain before its first link, reset and a failed output", setup = function(context)
+      chain_on_s16()
+      params:set("seq_chain", 0)
+      failing_output("targets")
+      show_cursor(NUM_VOICES, PATTERN_LENGTH)()
+      quietly(pattern_toggle)
+      context.clock.run_for(0.3)
+      params:set("seq_chain", 1)
       params:set("seq_division_reset", 1)
     end},
     -- the pattern view's widest ALT hint: K2:edit K3:clr E3:bpm

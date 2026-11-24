@@ -925,6 +925,9 @@ return function(S)
     local first_sixteenth = math.ceil(due / sixteenth - SEQ.beat_tolerance) * sixteenth
     play.offset = state.anchor + (state.tick + 1) * sixteenth - first_sixteenth
     play.generation = play.generation + 1
+    -- SETUP shows the offset (#921), whoever kept the count: the handler or
+    -- the first clock that noticed a jump nobody announced
+    request_redraw()
   end
 
   -- Whether target, a beat of the sequencer's count, has come
@@ -1794,7 +1797,6 @@ return function(S)
       request_redraw()
     else
       play.keep_count()
-      request_redraw()  -- SETUP's count offset (#921)
     end
     if transport.previous_start then transport.previous_start() end
   end
