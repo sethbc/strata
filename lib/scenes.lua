@@ -394,9 +394,10 @@ return function(S)
 
   -- Stop one of them: retired while its wake may be posted, canceled
   -- farther from it. One whose coroutine has gone already (a test's lost
-  -- clock) is only forgotten: no resume of it can come
+  -- clock) is neither, by the helper's own rule (#962): no resume of it
+  -- can come
   local function stop_clock(handle)
-    if S.lib.clocks.alive(handle) then S.lib.clocks.stop(handle) end
+    S.lib.clocks.stop(handle)
   end
 
   -- The one way a transition ends (#253), `how` it ends:
