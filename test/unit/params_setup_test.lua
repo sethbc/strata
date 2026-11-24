@@ -836,8 +836,11 @@ end)
 -- actions of its own PSET). Returns the voices' stored fields (values, type,
 -- source), each per-voice param's value, and the engine calls of the read,
 -- sorted, but scatter's one setScatter (its own hook sends it after a silent
--- read: lib/scatter.lua). The arp's random draw (an order of random) is
--- seeded the same before each read
+-- read: lib/scatter.lua) and the scale's setScale and scaleNote (#965: sent
+-- after every silent read, the controller's ruling), which are compared
+-- instead as what the engine holds after the read (scale, per voice, from
+-- every call since the load). The arp's random draw (an order of random)
+-- is seeded the same before each read
 local function read_once(name, silent, change)
   local context = load_strata({ data_subdir = "pset_silent_" .. name .. (silent and "_silent" or "_actions") })
   finish_startup(context)
@@ -851,10 +854,10 @@ local function read_once(name, silent, change)
   change(S)
   params:write(path, "changed")
   params:read(session)
-  context.clear_engine_calls()
+  local from = #context.engine_calls
   math.randomseed(951)
   params:read(path, silent)
-  local result = { stored = {}, params = {}, calls = {} }
+  local result = { stored = {}, params = {}, calls = {}, scale = {} }
   for voice_idx = 1, 7 do
     local voice = S.voices[voice_idx]
     result.stored["v" .. voice_idx .. " type"] = voice.name
@@ -864,8 +867,13 @@ local function read_once(name, silent, change)
       result.params["v" .. voice_idx .. "_" .. key] = params:get("v" .. voice_idx .. "_" .. key)
     end
   end
-  for _, call in ipairs(context.engine_calls) do
-    if call.name ~= "setScatter" then
+  for index, call in ipairs(context.engine_calls) do
+    local scale_note = call.name == "setGrainParam" and call.args[2] == "scaleNote"
+    if scale_note then
+      result.scale["scaleNote " .. call.args[1]] = string.format("%.9g", call.args[3])
+    elseif call.name == "setScale" then
+      result.scale.setScale = call.args[1] .. " " .. call.args[2]
+    elseif call.name ~= "setScatter" and index > from then
       local parts = { call.name }
       for _, arg in ipairs(call.args) do
         parts[#parts + 1] = type(arg) == "number" and string.format("%.9g", arg) or tostring(arg)
@@ -891,6 +899,9 @@ local function assert_same_reads(silent, actions, what)
   for _, call in ipairs(silent.calls) do counts[call] = (counts[call] or 0) - 1 end
   for call, count in pairs(counts) do
     if count ~= 0 then differ[#differ + 1] = call .. " (" .. (count > 0 and "actions +" or "silent +") .. math.abs(count) .. ")" end
+  end
+  for key, value in pairs(actions.scale) do
+    if silent.scale[key] ~= value then differ[#differ + 1] = key .. ": " .. tostring(silent.scale[key]) .. " after the silent read" end
   end
   table.sort(differ)
   assert_equal(table.concat(differ, "\n"), "", what .. ": the running voices are sent what a read with actions sends them")
@@ -1006,6 +1017,241 @@ test("the voice params' PSET hook is the last and touches no param at a read wit
   hook.read = own_read
   assert_equal(touched, 0, "a read with actions: the hook gets and sets no param")
   assert_near(S.voices[1].values.grain_size, params:get("v1_grain_size"), 1e-9, "the read's own action stored it")
+end)
+
+-- #965 (decided 2026-11-23): after a silent PSET read the engine follows
+-- every param, voice or not. The engine as calls leave it: per command and
+-- its index arguments (a voice and a param name, an effect, a tone), the
+-- last call's other arguments
+local ENGINE_INDEX_ARGS = { setGrainParam = 2, setVoiceParam = 2, setBypass = 1, setTuningTone = 1, setModSource = 2,
+  setModAmpAmt = 2, setModFreqAmt = 2, setModSpeed = 1, setGrainSource = 1, setVoiceType = 1, voiceOn = 1,
+  voiceOff = 1 }
+local function engine_holds(calls)
+  local held = {}
+  for _, call in ipairs(calls) do
+    local key, rest = { call.name }, {}
+    for index, arg in ipairs(call.args) do
+      local text = type(arg) == "number" and string.format("%.9g", arg) or tostring(arg)
+      if index <= (ENGINE_INDEX_ARGS[call.name] or 0) then key[#key + 1] = text else rest[#rest + 1] = text end
+    end
+    held[table.concat(key, " ")] = table.concat(rest, " ")
+  end
+  return held
+end
+
+-- One PSET read of the session with change() applied, silent or with
+-- actions, from the session (no voice running unless before() starts one):
+-- what the engine holds after it, from every call since the script loaded
+-- (held), and the read's own calls (read)
+local function engine_read(name, silent, change, before)
+  local context = load_strata({ data_subdir = "pset_engine_" .. name .. (silent and "_silent" or "_actions") })
+  finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  if before then before(S) end
+  local session, path = context.data_dir .. "session.pset", context.data_dir .. "changed.pset"
+  params:write(session, "session")
+  change(S)
+  params:write(path, "changed")
+  params:read(session)
+  local from = #context.engine_calls
+  params:read(path, silent)
+  local read = {}
+  for index = from + 1, #context.engine_calls do read[#read + 1] = context.engine_calls[index] end
+  return { held = engine_holds(context.engine_calls), read = read }, S, context
+end
+
+-- The calls' names, sorted, joined with spaces
+local function call_names(calls)
+  local names = {}
+  for _, call in ipairs(calls) do names[#names + 1] = call.name end
+  table.sort(names)
+  return table.concat(names, " ")
+end
+
+-- What the engine holds after both reads, command by command; leave: the
+-- commands left out (scatter's setScatter: its own hook sends it after a
+-- silent read, lib/scatter.lua)
+local function assert_engine_holds_same(silent, actions, what, leave)
+  local differ = {}
+  for key, value in pairs(actions.held) do
+    if not (leave and leave[key]) and silent.held[key] ~= value then
+      differ[#differ + 1] = key .. ": " .. tostring(silent.held[key]) .. " after the silent read, " .. value .. " after the other"
+    end
+  end
+  for key, value in pairs(silent.held) do
+    if not (leave and leave[key]) and actions.held[key] == nil then differ[#differ + 1] = key .. ": only the silent read sent " .. value end
+  end
+  table.sort(differ)
+  assert_equal(table.concat(differ, "\n"), "", what .. ": the engine holds what a read with actions leaves")
+end
+
+test("after a silent PSET read the engine holds what a read with actions leaves (#965)", function()
+  local function change()
+    params:set("filter_freq", 800); params:set("delay_feedback", 0.6); params:set("reverb_size", 0.5)
+    params:set("shimmer_delay", 0.3); params:set("drift_amount", 0.05); params:set("scale", 3)
+  end
+  local actions = engine_read("all", false, change)
+  local silent = engine_read("all", true, change)
+  for _, command in ipairs({ "setFilter", "setDelay", "setReverb", "setShimmer", "setMasterDrift", "setScale" }) do
+    assert_true(actions.held[command] ~= nil, "a read with actions sends " .. command)
+  end
+  assert_engine_holds_same(silent, actions, "the filter, the delay, the reverb, shimmer, the drift and the scale",
+    { setScatter = true })
+end)
+
+-- The scale keeps no record of what the engine holds (the controller's
+-- ruling on #965: one message is cheaper than a second record), so it is
+-- sent after every silent read, with each running voice's scaleNote, as
+-- scatter's hook sends its one setScatter
+test("a silent read of a PSET equal to the state sends only scatter's setScatter and the scale's setScale (#965)", function()
+  local context = load_strata({ data_subdir = "pset_engine_equal" }); finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "equal.pset"
+  -- sent values (the engine's record holds them) beside defaults never sent
+  params:set("filter_freq", 800); params:set("reverb_size", 0.5); params:set("delay_bypass", 1)
+  params:set("shimmer_delay", 0.3); params:set("scale", 3); params:set("master_density", 1.5)
+  params:write(path, "equal")
+  for voice_idx = 1, 7 do
+    if S.voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(call_names(context.engine_calls), "setScale setScatter", "a silent read of the state as it is")
+  -- a running voice also gets its scaleNote, as a root change sends it
+  toggle_voice(2)
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(call_names(context.engine_calls), "setGrainParam setScale setScatter", "with voice 2 running")
+  local note = context.engine_calls[#context.engine_calls]
+  assert_equal(note.args[1] .. " " .. note.args[2], "1 scaleNote", "its scaleNote")
+  assert_true(S.voices[2].active, "the voice still runs")
+end)
+
+-- #987 (known, not this package's): turning delay sync off sends under
+-- delay_time, so the record the hook compares keeps delay_sync at 1 and
+-- the next silent read sends one setDelay it did not need (with the values
+-- the engine has). #987's fix removes this allowance
+test("a silent read of an equal PSET after delay sync was turned off sends one setDelay more (known #987)", function()
+  local context = load_strata({ data_subdir = "pset_engine_sync_off" }); finish_startup(context)
+  util.make_dir(context.data_dir)
+  local S = local_value("S")
+  local path = context.data_dir .. "equal.pset"
+  for voice_idx = 1, 7 do
+    if S.voices[voice_idx].active then toggle_voice(voice_idx) end
+  end
+  params:set("delay_sync", 1); params:set("delay_sync", 0)
+  params:write(path, "equal")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(call_names(context.engine_calls), "setDelay setScale setScatter", "#987's one setDelay more")
+  local delay
+  for _, call in ipairs(context.engine_calls) do if call.name == "setDelay" then delay = call end end
+  assert_near(delay.args[1], params:get("delay_time"), 1e-9, "with the time the delay plays")
+  context.clear_engine_calls()
+  params:read(path, true)
+  assert_equal(call_names(context.engine_calls), "setScale setScatter", "once: the send records delay_sync")
+end)
+
+test("a silent read sends a command of several params once (#965)", function()
+  local function change()
+    params:set("filter_type", 2); params:set("filter_freq", 800); params:set("filter_res", 0.7)
+    params:set("filter_mix", 0.6)
+    params:set("delay_time", 0.5); params:set("delay_feedback", 0.6); params:set("delay_mix", 0.3)
+    params:set("delay_pingpong", 0.4)
+    params:set("reverb_mix", 0.2); params:set("reverb_size", 0.5); params:set("reverb_damp", 0.3)
+    params:set("delay_to_reverb", 0.4)
+    params:set("shimmer_interval", 2); params:set("shimmer_delay", 0.3); params:set("shimmer_reverb", 0.2)
+  end
+  local actions = engine_read("once", false, change)
+  local silent = engine_read("once", true, change)
+  local counts = {}
+  for _, call in ipairs(silent.read) do counts[call.name] = (counts[call.name] or 0) + 1 end
+  for _, command in ipairs({ "setFilter", "setDelay", "setReverb", "setShimmer" }) do
+    assert_equal(counts[command], 1, command .. " is sent once")
+    assert_equal(silent.held[command], actions.held[command], command .. " with every value the read changed")
+  end
+end)
+
+-- A bypassed effect, a frozen delay (lib/fx_hold.lua's hook, #883) and the
+-- filter's restore mix keep their own rules: the sends go through each
+-- param's own sender
+test("a silent read that bypasses a frozen delay releases the freeze, then bypasses it (#965, #883)", function()
+  local context = load_strata({ data_subdir = "pset_engine_bypass" }); finish_startup(context)
+  local S = local_value("S")
+  util.make_dir(context.data_dir)
+  local path = context.data_dir .. "bypassed.pset"
+  params:set("delay_bypass", 1)
+  params:write(path, "bypassed")
+  params:set("delay_bypass", 0)
+  params:set("delay_freeze", 1)
+  assert_true(S.lib.fx_hold.frozen("delay"), "the delay is frozen before the read")
+  context.clear_engine_calls()
+  params:read(path, true)
+  local delay_calls = {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "setDelayFreeze" or call.name == "setBypass" or call.name == "setDelay" then
+      delay_calls[#delay_calls + 1] = call.name .. " " .. table.concat(call.args, " ")
+    end
+  end
+  assert_equal(table.concat(delay_calls, ", "), "setDelayFreeze 0, setBypass 0 1",
+    "the freeze released first, then the bypass, each once")
+  assert_true(S.lib.voice_mix.bypassed("delay"), "bypassed")
+  assert_true(not S.lib.fx_hold.frozen("delay"), "and not frozen")
+  context.clear_engine_calls()
+  params:set("delay_bypass", 0)
+  assert_equal(call_names(context.engine_calls), "setBypass", "the lift sends the bypass alone, unfrozen")
+end)
+
+test("a silent read that raises the filter's mix makes it the restore mix, as a read with actions does (#965)", function()
+  for _, silent in ipairs({ false, true }) do
+    local what = silent and "silent" or "with actions"
+    local context = load_strata({ data_subdir = "pset_engine_restore_" .. what:gsub(" ", "_") })
+    finish_startup(context)
+    local S = local_value("S")
+    util.make_dir(context.data_dir)
+    local path = context.data_dir .. "mix.pset"
+    params:set("filter_mix", 0.7)
+    params:write(path, "mix")
+    params:set("filter_mix", 0.2)
+    S.lib.params_setup.toggle_filter_mix()
+    assert_near(S.fx_last_mix.filter, 0.2, 1e-9, what .. ": K3 kept 0.2 as the restore mix")
+    params:read(path, silent)
+    assert_near(params:get("filter_mix"), 0.7, 1e-9, what .. ": the PSET's mix")
+    assert_near(S.fx_last_mix.filter, 0.7, 1e-9, what .. ": the read's rise is the restore mix")
+    params:set("filter_mix", 0.5)
+    assert_near(S.fx_last_mix.filter, 0.7, 1e-9, what .. ": a turn down from the read's mix keeps it")
+  end
+end)
+
+-- The hook acts only on a silent read: a read with actions runs each
+-- changed param's action once and sends each command its actions send
+test("a read with actions runs no action twice, the FX and the scale's included (#965)", function()
+  local context = load_strata({ data_subdir = "pset_engine_once" }); finish_startup(context)
+  util.make_dir(context.data_dir)
+  local session, path = context.data_dir .. "session.pset", context.data_dir .. "changed.pset"
+  params:write(session, "session")
+  local changed = { filter_freq = 800, delay_feedback = 0.6, reverb_size = 0.5, drift_amount = 0.05, scale = 3,
+    delay_bypass = 1, shimmer_delay = 0.3 }
+  for id, value in pairs(changed) do params:set(id, value) end
+  params:write(path, "changed")
+  params:read(session)
+  local runs = {}
+  for _, param in ipairs(params.params) do
+    local id = param.id and tostring(param.id)
+    if id and param.action then
+      local action = param.action
+      param.action = function(...) runs[id] = (runs[id] or 0) + 1; return action(...) end
+    end
+  end
+  context.clear_engine_calls()
+  params:read(path)
+  for id in pairs(changed) do assert_equal(runs[id], 1, id .. "'s action runs once") end
+  for id, count in pairs(runs) do assert_true(count == 1, id .. " ran " .. count .. " times") end
+  assert_equal(call_names(context.engine_calls),
+    "setBypass setDelay setFilter setMasterDrift setReverb setScale setShimmer",
+    "each changed param's own send, once")
 end)
 
 -- 3.4's PSET hooks (S.register_pset_hook, design §0.1): the master record

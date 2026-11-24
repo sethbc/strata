@@ -453,12 +453,12 @@ test("a PSET without the tuning lines comes back in twelve equal steps, its quan
   assert_true(tuned ~= nil and context.engine_calls[tuned].args[1] == 12, "setTuning(12, 1200) is sent")
   local note = note_of(params:get("v1_freq"))
   assert_near(note, 69, 1e-6, "voice 1's freq is the saved whole note again (" .. note .. ")")
-  -- a silent read sets both silently and sends nothing
+  -- a silent read sets both silently, and its hook sends the default (#965)
   use("24 equal")
   context.clear_engine_calls()
   params:read(path, true)
   assert_equal(params:get("tuning_tones"), tuning().TUNING.default_text, "a silent read sets the default text")
-  assert_equal(#sent_tuning(context), 0, "and sends nothing")
+  assert_equal(#sent_tuning(context), 13, "and sends it, as a read with actions does (#965)")
 end)
 
 -- Fix round 1 (#125 with the tuning): a PSET without the tuning lines,
@@ -524,11 +524,10 @@ test("a PSET with its tuning lines, or read over twelve equal steps, sets no fre
 end)
 
 -- #842: a silent read sets tuning_name and tuning_tones without their
--- actions; the read hook brings the module to the text the read left
--- (sending nothing, as the read is silent), so the name shown is the
--- tuning in force, and a later choice of that tuning reaches the engine,
--- whose tuning the silent read left as it was
-test("a silent PSET read brings the tuning to the read's text, and choosing it then sends it (#842)", function()
+-- actions; the read hook brings the module to the text the read left, so
+-- the name shown is the tuning in force, and (#965) sends it, so a later
+-- choice of that tuning sends nothing
+test("a silent PSET read brings the tuning to the read's text and sends it (#842, #965)", function()
   local context = load_strata({ data_subdir = "tuning_silent_read" }); finish_startup(context)
   util.make_dir(context.data_dir)
   use("19 equal")
@@ -541,14 +540,13 @@ test("a silent PSET read brings the tuning to the read's text, and choosing it t
   assert_equal(params:get("tuning_name"), "19 equal", "the read's name")
   assert_equal(tuning().count(), 19, "and the module's tuning is the read's")
   assert_near(tuning().tones()[2], 1200 / 19, 1e-3, "its tones")
-  assert_equal(#sent_tuning(context), 0, "a silent read sends nothing")
-  use("19 equal")
   local sent = sent_tuning(context)
   assert_true(#sent == 20 and sent[1].name == "setTuning" and sent[1].args[1] == 19,
-    "choosing 19 equal then sends it: setTuning(19, 1200) and its tones (" .. #sent .. " sends)")
+    "the silent read sends it: setTuning(19, 1200) and its tones (" .. #sent .. " sends, #965)")
+  assert_true(tuning().engine_has_tuning(), "the engine has it")
   context.clear_engine_calls()
   use("19 equal")
-  assert_equal(#sent_tuning(context), 0, "choosing it again, the engine's tuning, sends nothing")
+  assert_equal(#sent_tuning(context), 0, "choosing it then, the engine's tuning, sends nothing")
   -- a read that is not silent applies the text through its action, once
   use("ji normal")
   context.clear_engine_calls()
@@ -556,18 +554,52 @@ test("a silent PSET read brings the tuning to the read's text, and choosing it t
   sent = sent_tuning(context)
   assert_true(#sent == 20 and sent[1].args[1] == 19, "a read sends the tuning once (" .. #sent .. " sends)")
   -- a silent read of 19 equal over ji normal, then a read of it that is
-  -- not silent: the text is unchanged (norns runs no action), but the
-  -- engine still has ji normal, so the read sends 19 equal (review fix)
+  -- not silent: the silent one sent it (#965), so the read, whose text is
+  -- unchanged, sends nothing
   use("ji normal")
   params:read(path, true)
   context.clear_engine_calls()
   params:read(path)
-  sent = sent_tuning(context)
-  assert_true(#sent == 20 and sent[1].name == "setTuning" and sent[1].args[1] == 19,
-    "a read after a silent one sends the tuning the engine lacks (" .. #sent .. " sends)")
-  context.clear_engine_calls()
-  params:read(path)
-  assert_equal(#sent_tuning(context), 0, "and a read when the engine has it sends nothing")
+  assert_equal(#sent_tuning(context), 0, "a read after a silent one sends nothing: the engine has the tuning")
+end)
+
+-- #965 (the review's probe: 50 calls after a read with actions, 7 after a
+-- silent one): a silent read of a PSET in another tuning sends the engine
+-- the tuning, and resends a running chord voice's intervals in it, as a
+-- read with actions does
+test("a silent read of a PSET with another tuning sends the tuning (#965)", function()
+  local function read(silent)
+    local context = load_strata({ data_subdir = "tuning_silent_sends_" .. tostring(silent) })
+    finish_startup(context)
+    local S = local_value("S")
+    util.make_dir(context.data_dir)
+    if not S.voices[1].active then toggle_voice(1) end
+    params:set("v1_intervals", S.lib.variation.VARIATION.set_index.chord)
+    local session, path = context.data_dir .. "session.pset", context.data_dir .. "nineteen.pset"
+    params:write(session, "session")
+    use("19 equal")
+    params:write(path, "nineteen")
+    params:read(session)
+    context.clear_engine_calls()
+    params:read(path, silent)
+    local sent, intervals = {}, {}
+    for _, call in ipairs(sent_tuning(context)) do sent[#sent + 1] = call.name .. " " .. table.concat(call.args, " ") end
+    for _, call in ipairs(context.engine_calls) do
+      if call.name == "setGrainParam" and tostring(call.args[2]):match("^interval") then
+        intervals[call.args[2]] = call.args[3]
+      end
+    end
+    return table.concat(sent, "\n"), intervals
+  end
+  local actions_sent, actions_intervals = read(false)
+  local silent_sent, silent_intervals = read(true)
+  assert_true(tuning().engine_has_tuning(), "the engine has the read's tuning")
+  assert_equal(tuning().count(), 19, "19 equal")
+  assert_equal(silent_sent, actions_sent, "the tuning sent as a read with actions sends it")
+  assert_true(next(actions_intervals) ~= nil, "a read with actions resends the chord's intervals")
+  for name, value in pairs(actions_intervals) do
+    assert_near(silent_intervals[name] or -1, value, 1e-9, "the chord's " .. name .. " in the read's tuning")
+  end
 end)
 
 test("the start sends no tuning and makes the tunings folder", function()
@@ -577,7 +609,7 @@ test("the start sends no tuning and makes the tunings folder", function()
 end)
 
 -- 3.9 (#915): the invariant `tuning`, the param's text equal to the tuning
--- in force (engine_text may lag, by design: a silent read's)
+-- in force (engine_text lags only inside a read, until the hook sends, #965)
 local function tuning_broken()
   for _, line in ipairs(h.check_invariants()) do
     if line:sub(1, #"tuning: ") == "tuning: " then return line end
@@ -601,26 +633,21 @@ end)
 ---------------------------------------------------------------------------
 -- The table `tuning` (3.9, #915; docs/notes/lua/tuning.md): whether the
 -- engine has the tuning in force, by every way a text reaches tuning_tones.
--- Both states are on ji normal (12 tones); `engine lags` after a silent
--- read of a 19 equal PSET. Each row's check counts the setTuning and
--- setTuningTone sends and the tones in force
+-- The state is on ji normal (12 tones). Since #965 a silent read sends what
+-- it takes, so no event leaves the engine lagging: `engine lags` is no
+-- state of the table (the entry's prose says so). Each row's check counts
+-- the setTuning and setTuningTone sends and the tones in force
 ---------------------------------------------------------------------------
 
 local TUNING_TABLE = {five = "1200 0 240 480 720 960", refused = "abc", other = "24 equal", choice = "12 equal"}
 
-local function tuning_enter(lagging)
-  return function(context)
-    util.make_dir(context.data_dir)
-    use(TUNING_TABLE.other)
-    context.other_pset = context.data_dir .. "other.pset"
-    params:write(context.other_pset, "other")
-    use("19 equal")
-    local nineteen = context.data_dir .. "nineteen.pset"
-    params:write(nineteen, "nineteen")
-    use("ji normal")
-    if lagging then params:read(nineteen, true) end
-    context.clear_engine_calls()
-  end
+local function tuning_enter(context)
+  util.make_dir(context.data_dir)
+  use(TUNING_TABLE.other)
+  context.other_pset = context.data_dir .. "other.pset"
+  params:write(context.other_pset, "other")
+  use("ji normal")
+  context.clear_engine_calls()
 end
 
 -- A PSET of the session as it is now (the text in force), read back
@@ -646,8 +673,7 @@ h.transition_table({
   name = "tuning",
   notes = {"docs/notes/lua/tuning.md", "tuning"},
   states = {
-    ["engine has it"] = tuning_enter(false),
-    ["engine lags"] = tuning_enter(true),
+    ["engine has it"] = tuning_enter,
   },
   events = {
     ["a text that reads"] = function() params:set("tuning_tones", TUNING_TABLE.five) end,
@@ -663,20 +689,12 @@ h.transition_table({
   rows = {
     {"engine has it", "a text that reads", "engine has it", check = tuned(6, 5)},
     {"engine has it", "a refused text", "engine has it", check = tuned(0, 12)},
-    {"engine has it", "a silent read of another text", "engine lags", check = tuned(0, 24)},
+    {"engine has it", "a silent read of another text", "engine has it", check = tuned(25, 24)},
     {"engine has it", "a silent read of the same text", "engine has it", check = tuned(0, 12)},
     {"engine has it", "a read of another text", "engine has it", check = tuned(25, 24)},
     {"engine has it", "a read of the same text", "engine has it", check = tuned(0, 12)},
     {"engine has it", "choosing the tuning in force", "engine has it", check = tuned(0, 12)},
     {"engine has it", "choosing another tuning", "engine has it", check = tuned(13, 12)},
-    {"engine lags", "a text that reads", "engine has it", check = tuned(6, 5)},
-    {"engine lags", "a refused text", "engine lags", check = tuned(0, 19)},
-    {"engine lags", "a silent read of another text", "engine lags", check = tuned(0, 24)},
-    {"engine lags", "a silent read of the same text", "engine lags", check = tuned(0, 19)},
-    {"engine lags", "a read of another text", "engine has it", check = tuned(25, 24)},
-    {"engine lags", "a read of the same text", "engine has it", check = tuned(20, 19)},
-    {"engine lags", "choosing the tuning in force", "engine has it", check = tuned(20, 19)},
-    {"engine lags", "choosing another tuning", "engine has it", check = tuned(13, 12)},
   },
   impossible = {},
 })
