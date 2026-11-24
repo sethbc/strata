@@ -3663,17 +3663,8 @@ test("state-and-voices.md names every registry", function()
 end)
 
 
--- The registered invariants that have no Machines entry yet (design
--- section 1, docs/notes/lua/state-and-voices.md, Registering an
--- invariant), one line a module. A package that enters a machine removes
--- its names here; a name is never added: an invariant registered from now
--- on gets its entry in the commit that registers it. The list only shrinks
-local UNTABLED_INVARIANTS = {
-}
-
 -- The Machines entries of notes files ({{path, text}}) checked against the
--- registered invariants (a list of names) and the untabled list: the
--- problems, sorted. An entry is a `### <machine>` heading inside the
+-- registered invariants (a list of names): the problems, sorted. An entry is a `### <machine>` heading inside the
 -- file's `## Machines` section, which is the section right after "Must not
 -- break"; it has a `- **State:**`, a `- **Invariant:**` and a `- **Test:**`
 -- line (a `- **Two facts:**` line is optional), and its first table, if it
@@ -3681,11 +3672,10 @@ local UNTABLED_INVARIANTS = {
 -- reads the first three). The Invariant line names its invariants in
 -- backticks at its start (`a`, or `a`, `b`, or `a` and `b`, then any text),
 -- or says "none" and why. Every registered invariant is named by one entry
--- (never two) or listed as untabled, never both; a listed or entered name
--- is a registered one
+-- (never two), and an entered name is a registered one
 local MACHINE_TABLE_HEADER = "| State | Event | Next | Effect |"
-local function machines_problems(files, registered, untabled)
-  local problems, entered, known, listed = {}, {}, {}, {}
+local function machines_problems(files, registered)
+  local problems, entered, known = {}, {}, {}
   for _, name in ipairs(registered) do known[name] = true end
   local function problem(text) table.insert(problems, text) end
   for _, file in ipairs(files) do
@@ -3745,13 +3735,8 @@ local function machines_problems(files, registered, untabled)
     end
     close_entry()
   end
-  for _, name in ipairs(untabled) do
-    listed[name] = true
-    if not known[name] then problem("UNTABLED_INVARIANTS lists `" .. name .. "`, which no module registers") end
-    if entered[name] then problem("`" .. name .. "` has its entry in " .. entered[name] .. ": remove it from UNTABLED_INVARIANTS") end
-  end
   for _, name in ipairs(registered) do
-    if not entered[name] and not listed[name] then
+    if not entered[name] then
       problem("`" .. name .. "` has no Machines entry (an `- **Invariant:**` line under docs/notes/lua/)")
     end
   end
@@ -3759,7 +3744,7 @@ local function machines_problems(files, registered, untabled)
   return problems
 end
 
-test("every registered invariant has a Machines entry, and no name listed as untabled has one", function()
+test("every registered invariant has a Machines entry", function()
   load_strata()
   local registered = {}
   -- the registry, not the source: lib/arp.lua passes its name as ARP.name
@@ -3769,18 +3754,18 @@ test("every registered invariant has a Machines entry, and no name listed as unt
   for _, path in ipairs(markdown_files("docs/notes/lua")) do
     table.insert(files, {path = path, text = read_repo_file(path)})
   end
-  local problems = machines_problems(files, registered, UNTABLED_INVARIANTS)
+  local problems = machines_problems(files, registered)
   assert_true(#problems == 0, table.concat(problems, "\n"))
   -- the convention is written where a worker entering a machine reads it
   local notes = read_repo_file("docs/notes/lua/state-and-voices.md")
   local paragraph = notes:match("\n%- %*%*Registering an invariant%*%*.-\n%- %*%*Registering a cleanup step%*%*") or ""
   for _, part in ipairs({"## Machines", "### <name>", "- **State:**", "- **Invariant:** `<name>`",
-    "- **Two facts:**", "- **Test:**", MACHINE_TABLE_HEADER, "UNTABLED_INVARIANTS"}) do
+    "- **Two facts:**", "- **Test:**", MACHINE_TABLE_HEADER}) do
     assert_true(paragraph:find(part, 1, true), "Registering an invariant gives the entry's " .. part)
   end
 end)
 
-test("the Machines check fails an invariant with no entry, a listed name with one and a malformed entry", function()
+test("the Machines check fails an invariant with no entry and a malformed entry", function()
   local function entry(name, invariant, table_header)
     return table.concat({"### " .. name, "- **State:** `S.x`.", "- **Invariant:** " .. invariant,
       "- **Test:** `test/unit/x_test.lua`: \"x\".", "", table_header or MACHINE_TABLE_HEADER, "|---|---|---|---|"}, "\n")
@@ -3788,34 +3773,42 @@ test("the Machines check fails an invariant with no entry, a listed name with on
   local function notes(...)
     return {path = "docs/notes/lua/x.md", text = table.concat({"## Must not break", "- a rule", "## Machines", ...}, "\n\n")}
   end
-  local function check(files, registered, untabled)
-    return table.concat(machines_problems(files, registered, untabled), "\n")
+  local function check(files, registered)
+    return table.concat(machines_problems(files, registered), "\n")
   end
-  -- 0b's case: an entry, and the name not listed
-  assert_equal(check({notes(entry("clocks", "`clocks`"))}, {"clocks"}, {}), "", "an entered invariant passes")
-  assert_equal(check({notes(entry("a and b", "`a` and `b` (3.9)"), entry("c", "none: a two-state flag"))}, {"a", "b"}, {}), "",
+  assert_equal(check({notes(entry("clocks", "`clocks`"))}, {"clocks"}), "", "an entered invariant passes")
+  assert_equal(check({notes(entry("a and b", "`a` and `b` (3.9)"), entry("c", "none: a two-state flag"))}, {"a", "b"}), "",
     "two names on one line, and none")
-  assert_equal(check({notes()}, {"clocks"}, {"clocks"}), "", "a listed invariant passes")
-  assert_true(check({notes()}, {"clocks"}, {}):find("`clocks` has no Machines entry", 1, true), "neither an entry nor listed")
-  assert_true(check({notes(entry("clocks", "`clocks`"))}, {"clocks"}, {"clocks"}):find("remove it from UNTABLED_INVARIANTS", 1, true),
-    "listed and entered")
-  assert_true(check({notes()}, {}, {"gone"}):find("lists `gone`", 1, true), "a listed name no module registers")
-  assert_true(check({notes(entry("x", "`typo`"))}, {}, {}):find("enters `typo`", 1, true), "an entered name no module registers")
-  assert_true(check({notes(entry("x", "the clock"))}, {}, {}):find("names no invariant", 1, true), "an Invariant line without a name")
-  assert_true(check({notes(entry("x", "`x`", "| From | Event | To |"))}, {"x"}, {}):find("x's table opens", 1, true), "the table's columns")
+  assert_true(check({notes()}, {"clocks"}):find("`clocks` has no Machines entry", 1, true), "an invariant with no entry")
+  assert_true(check({notes(entry("x", "`typo`"))}, {}):find("enters `typo`", 1, true), "an entered name no module registers")
+  assert_true(check({notes(entry("x", "the clock"))}, {}):find("names no invariant", 1, true), "an Invariant line without a name")
+  assert_true(check({notes(entry("x", "`x`", "| From | Event | To |"))}, {"x"}):find("x's table opens", 1, true), "the table's columns")
   local stray = {path = "docs/notes/lua/y.md", text = "## Must not break\n\n## Owns\n\n- **Invariant:** `x`\n"}
-  assert_true(check({stray}, {"x"}, {}):find("outside a Machines entry", 1, true), "an Invariant line outside the section")
+  assert_true(check({stray}, {"x"}):find("outside a Machines entry", 1, true), "an Invariant line outside the section")
   local late = {path = "docs/notes/lua/z.md", text = "## Must not break\n\n## Owns\n\n## Machines\n\n" .. entry("x", "`x`")}
-  assert_true(check({late}, {"x"}, {}):find("not the one right after Must not break", 1, true), "Machines after another section")
+  assert_true(check({late}, {"x"}):find("not the one right after Must not break", 1, true), "Machines after another section")
   local short = {path = "docs/notes/lua/w.md", text = "## Must not break\n\n## Machines\n\n### x\n- **Invariant:** `x`\n"}
-  local found = check({short}, {"x"}, {})
+  local found = check({short}, {"x"})
   assert_true(found:find("no `- **State:**` line", 1, true) and found:find("no `- **Test:**` line", 1, true), "an entry's lines")
   -- each invariant is entered once: a second entry, in the same file or another, fails
-  assert_true(check({notes(entry("x", "`x`"), entry("y", "`x`"))}, {"x"}, {}):find("`x` is entered twice", 1, true),
+  assert_true(check({notes(entry("x", "`x`"), entry("y", "`x`"))}, {"x"}):find("`x` is entered twice", 1, true),
     "a name entered twice in one file")
   local other = {path = "docs/notes/lua/v.md", text = "## Must not break\n\n## Machines\n\n" .. entry("z", "`a` and `x`")}
-  assert_true(check({notes(entry("x", "`x`")), other}, {"a", "x"}, {}):find("`x` is entered twice", 1, true),
+  assert_true(check({notes(entry("x", "`x`")), other}, {"a", "x"}):find("`x` is entered twice", 1, true),
     "a name entered twice in two files")
+end)
+
+-- 3.9's state machines made explicit (6e): every registered invariant
+-- has its Machines entry, so the list of the untabled is gone and the
+-- Machines check stands alone. The name is built from two parts so this
+-- test does not find itself
+test("no registered invariant is untabled: the Machines check takes no list of them", function()
+  local name = "UNTABLED" .. "_INVARIANTS"
+  for _, path in ipairs({"test/unit/docs_test.lua", "docs/notes/lua/state-and-voices.md", "AGENTS.md"}) do
+    assert_true(not read_repo_file(path):find(name, 1, true), path .. " still names " .. name)
+  end
+  assert_true(not read_repo_file("test/unit/docs_test.lua"):find("machines_problems%(files, registered, untabled%)"),
+    "machines_problems takes the notes and the registered names only")
 end)
 
 -- The longest a notes file under docs/notes/lua may be, in words as `wc -w`
