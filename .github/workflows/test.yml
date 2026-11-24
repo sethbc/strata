@@ -39,7 +39,8 @@ jobs:
   # Lua 5.3, 10 min 47 s on LuaJIT), twice an engine shard's 3.5 to 5.5.
   # On a 32-core machine at 3.8's package x5 the suite took 7.5 to 8 minutes
   # in one process and 2.3 to 2.4 in 4, and no count of processes takes it
-  # under its slowest file (ui_layout_test.lua, about 2 minutes there). CI
+  # under its slowest file (then ui_layout_test.lua, about 2 minutes there;
+  # since #1001 split it, structure_test.lua, about 90 s alone). CI
   # ran the one-process suite in 1.25 (Lua 5.3) to 1.6 (LuaJIT) times that
   # machine's time (docs/checks.md, The Lua jobs and their times)
   lua-suite:
@@ -50,9 +51,9 @@ jobs:
     # on a cache hit and 218 s on a miss. 12 covers the slowest suite
     # measured (471 s, run 45320574628) after that setup, on a hit (about
     # 624 s) and on a miss (about 689 s): docs/checks.md, Installs.
-    # The shards weigh the same; shard 1's time is ui_layout_test.lua's
-    # alone, so splitting that file (another change) shortens it, and no
-    # UNIT_FILE_SECONDS change does. The default is 360
+    # The shards weigh the same; until #1001 split it, shard 1's time was
+    # ui_layout_test.lua's alone (240 s by itself on a 32-core machine),
+    # the 471 s among them. The default is 360
     timeout-minutes: 12
     runs-on: ubuntu-24.04
     strategy:
@@ -67,7 +68,8 @@ jobs:
         # on LuaJIT on the 4-core runners (runs on 852231b9, 1aec87dc and
         # 8dafeba0, the last canceled at the job's limit with every test
         # passing). The aim stays no Lua job over 5 minutes; a third shard
-        # gains little, since shard 1 holds ui_layout_test.lua
+        # gains little, since no shard runs faster than its slowest file
+        # (structure_test.lua since #1001 split ui_layout_test.lua)
         shard: ["1/2", "2/2"]
     steps:
       # Pinned by commit (a tag can move). To move it: `gh api repos/actions/checkout/releases/latest`

@@ -1,8 +1,11 @@
 -- test/unit/ui_layout_test.lua
 -- The screen layout on every page: header, hint row, nothing overlapping
--- or off-screen (assert_screen_layout in test/helpers.lua), for every page
--- record with every voice, source, ALT state and flash, and each record's
--- layout_states. Also the page renders' JSON dump (test/render_pages.lua).
+-- or off-screen (assert_screen_layout in test/helpers.lua). The check of
+-- every page record with every voice, source, ALT state and flash, and each
+-- record's layout_states, runs in the part files ui_layout_<part>_test.lua
+-- (test/layout_parts.lua, #1001); this file checks that they draw every case
+-- once, and keeps the older every-page checks and the page renders' JSON
+-- dump (test/render_pages.lua).
 -- Run alone: lua test/run.lua ui_layout
 
 return function(h)
@@ -12,95 +15,104 @@ local text_span, PAGE_TITLES, HINT_ROW_Y, TEXT_HEIGHT = h.text_span, h.PAGE_TITL
 local show_page, assert_screen_layout, next_frame, count_screen_draws = h.show_page, h.assert_screen_layout, h.next_frame, h.count_screen_draws
 local tap = h.tap
 
--- The sources every page is drawn with (v<i>_source options)
-local LAYOUT_SOURCES = { { name = "synth", option = 1 }, { name = "buf 1", option = 2 }, { name = "input", option = 10 } }
-local LAYOUT_FLASHES = { "no flash", "header flash", "hints flash" }
+local parts = require("layout_parts")
+-- The sources and flashes every page is drawn with (test/layout_parts.lua)
+local LAYOUT_SOURCES, LAYOUT_FLASHES = parts.SOURCES, parts.FLASHES
 
--- Start the flash `kind` names (LAYOUT_FLASHES): a header flash long enough
--- to need cutting, the longest hints flash a page raises
-local function start_layout_flash(S, kind)
-  S.lib.ui_flash.cancel_all()
-  if kind == "header flash" then
-    header_flash("v1 grain density 12.5 Hz, a header flash long enough to be cut")
-  elseif kind == "hints flash" then
-    S.lib.ui_flash.start("hints", "K3 again: overwrite S16")  -- the longest planned
-  end
-end
+local function started_script() return parts.started_script(h) end
 
--- Draw every page record's layout_states, each on a fresh script from
--- `load()` (which returns its context), with ALT up and down, and check
--- the layout. Returns the number of states drawn
-local function check_layout_states(load)
-  load()
-  local entries = {}
-  for index, record in ipairs(local_value("S").registry.pages) do
-    entries[index] = { name = record.name, count = #(record.layout_states or {}) }
-  end
-  local drawn = 0
-  for index, entry in ipairs(entries) do
-    for state_index = 1, entry.count do
-      for _, alt in ipairs({ false, true }) do
-        local context = load()
-        show_page(index)
-        local state = local_value("S").registry.pages[index].layout_states[state_index]
-        assert_true(type(state.setup) == "function", entry.name .. " layout state " .. state_index .. " has a setup")
-        state.setup(context)
-        key(1, alt and 1 or 0)
-        redraw()
-        assert_screen_layout(context, string.format("%s state %s%s", entry.name,
-          tostring(state.name or state_index), alt and " with ALT" or ""))
-      end
-      drawn = drawn + 1
-    end
-  end
-  return drawn
-end
-
-local function started_script()
-  local context = load_strata(); finish_startup(context)
-  return context
-end
-
-test("every page lays out with every voice, source, ALT state and flash", function()
-  local context = started_script()
-  local S = local_value("S")
-  local _, set_selected = find_upvalue("selected_voice")
-  local voices = local_value("voices")
-  for page = 1, #PAGE_TITLES do
-    for voice_idx = 1, #voices do
-      set_selected(voice_idx)
-      for _, source in ipairs(LAYOUT_SOURCES) do
-        params:set("v" .. voice_idx .. "_source", source.option)
-        for _, alt in ipairs({ false, true }) do
-          key(1, alt and 1 or 0)
-          for _, flash in ipairs(LAYOUT_FLASHES) do
-            show_page(page)
-            start_layout_flash(S, flash)
-            redraw()
-            assert_screen_layout(context, string.format("%s, voice %d, %s%s, %s", PAGE_TITLES[page], voice_idx,
-              source.name, alt and ", ALT" or "", flash))
-          end
-        end
-      end
-    end
-  end
-  key(1, 0)
-  S.lib.ui_flash.cancel_all()
-  -- then each record's own states (none until the Wave 2 pages add them)
-  local baseline = check_layout_states(started_script)
+-- A state a record lists is drawn, with ALT up and down, each on a fresh
+-- script: a probe on FX, against FX's own states (the part files draw
+-- every record's, test/layout_parts.lua)
+test("a page record's layout state is drawn with ALT up and down, each on a fresh script", function()
+  started_script()
+  local FX = local_value("S").constants.UI_PAGES.index.FX
+  local baseline = parts.check_layout_states(h, started_script, { FX })
   local fx_own = 0
-  -- a state a record lists is drawn: a probe on FX
   local probed = 0
-  local drawn = check_layout_states(function()
+  local drawn = parts.check_layout_states(h, function()
     local probe_context = started_script()
-    local FX = local_value("S").constants.UI_PAGES.index.FX
     fx_own = #(local_value("S").registry.pages[FX].layout_states or {})
     local_value("S").registry.pages[FX].layout_states = {
       { name = "probe", setup = function() probed = probed + 1; params:set("filter_mix", 0) end } }
     return probe_context
-  end)
+  end, { FX })
   assert_equal(drawn, baseline - fx_own + 1, "the probe state is drawn beside the other records' own")
   assert_equal(probed, 2, "with ALT up and down, each on a fresh script")
+end)
+
+-- #1001: the layout check is split by page across the unit files
+-- ui_layout_<part>_test.lua (test/layout_parts.lua), so a run's processes
+-- share it. Run with the draws counted, not made, those files together draw
+-- what one test's loops drew: every page by every voice, source, ALT state
+-- and flash, and each record's layout states with ALT up and down, each
+-- exactly once
+test("the ui_layout part files draw every page by every voice, source, ALT state and flash, and each layout state, once (#1001)", function()
+  started_script()
+  local records = local_value("S").registry.pages
+  local voice_count = #local_value("voices")
+  assert_equal(#records, #PAGE_TITLES, "a page record for each page title")
+  local expected, expected_count = {}, 0
+  for page = 1, #PAGE_TITLES do
+    for voice_idx = 1, voice_count do
+      for source = 1, #LAYOUT_SOURCES do
+        for _, alt in ipairs({ false, true }) do
+          for flash = 1, #LAYOUT_FLASHES do
+            expected[string.format("%s, voice %d, %s%s, %s", PAGE_TITLES[page], voice_idx,
+              LAYOUT_SOURCES[source].name, alt and ", ALT" or "", LAYOUT_FLASHES[flash])] = true
+            expected_count = expected_count + 1
+          end
+        end
+      end
+    end
+    for state_index = 1, #(records[page].layout_states or {}) do
+      for _, alt in ipairs({ false, true }) do
+        expected[string.format("%s state %d%s", records[page].name, state_index, alt and " with ALT" or "")] = true
+        expected_count = expected_count + 1
+      end
+    end
+  end
+  assert_true(expected_count > #PAGE_TITLES * voice_count * #LAYOUT_SOURCES * 2 * #LAYOUT_FLASHES,
+    "the pages list layout states")
+  local drawn, extra, total = {}, {}, 0
+  local function count(where)
+    total = total + 1
+    if expected[where] then drawn[where] = (drawn[where] or 0) + 1 else extra[#extra + 1] = where end
+  end
+  local real_case, real_state = parts.draw_case, parts.draw_state
+  parts.draw_case = function(_, _, _, case)
+    count(string.format("%s, voice %d, %s%s, %s", PAGE_TITLES[case.page], case.voice, case.source.name,
+      case.alt and ", ALT" or "", case.flash))
+  end
+  parts.draw_state = function(_, _, entry, state_index, alt)
+    count(string.format("%s state %d%s", entry.name, state_index, alt and " with ALT" or ""))
+  end
+  local files = {}
+  for _, name in ipairs(h.unit_files(h.test_dir .. "/unit")) do
+    if name:match("^ui_layout_.+_test%.lua$") then files[#files + 1] = name end
+  end
+  local ok, problem = pcall(function()
+    for _, name in ipairs(files) do
+      local bodies = {}
+      dofile(h.test_dir .. "/unit/" .. name)(setmetatable({ test = function(_, body) bodies[#bodies + 1] = body end },
+        { __index = h }))
+      assert_true(#bodies > 0, name .. " registers a test")
+      for _, body in ipairs(bodies) do body() end
+    end
+  end)
+  parts.draw_case, parts.draw_state = real_case, real_state
+  assert_true(ok, tostring(problem))
+  assert_true(#files >= 2, #files .. " part files")
+  table.sort(extra)
+  assert_equal(table.concat(extra, "; "), "", "the part files draw no case today's loops did not")
+  local missing, twice = {}, {}
+  for where in pairs(expected) do
+    if not drawn[where] then missing[#missing + 1] = where elseif drawn[where] > 1 then twice[#twice + 1] = where end
+  end
+  table.sort(missing); table.sort(twice)
+  assert_equal(#missing, 0, "cases no part file draws: " .. table.concat(missing, "; ", 1, math.min(#missing, 5)))
+  assert_equal(#twice, 0, "cases drawn twice: " .. table.concat(twice, "; ", 1, math.min(#twice, 5)))
+  assert_equal(total, expected_count, "the part files draw as many cases as today's loops")
 end)
 
 -- A JSON value's text is well formed: the next value from `pos`, and the
