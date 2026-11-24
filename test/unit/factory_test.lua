@@ -12,7 +12,7 @@ local test, assert_true, assert_equal = h.test, h.assert_true, h.assert_equal
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local write_text, file_text, data_root, shell_quote = h.write_text, h.file_text, h.data_root, h.shell_quote
 local assert_near, scramble_state = h.assert_near, h.scramble_state
-local show_page = h.show_page
+local show_page, next_frame, hint_text = h.show_page, h.next_frame, h.hint_text
 local function note_freq(note) return 440 * 2 ^ ((note - 69) / 12) end
 
 local FIXTURE = h.repo_root .. "/test/fixtures/factory/"
@@ -890,6 +890,46 @@ test("a second load while one runs is refused", function()
   key(3, 1); key(3, 0)
   assert_equal(S.factory_clock, clock_id, "one clock")
   assert_equal(S.lib.ui_flash.text("hints"), "loading", "the list flashes loading")
+  run_load(context)
+  factory().close_list()
+end)
+
+-- #897: the armed prompt is the list's own hint row, as SCENES' overwrite
+-- prompt is since #255, so a flash that comes meanwhile never hides that
+-- the next K3 loads; it lapses by itself after the 2 s (the list animates)
+test("the factory list draws its own prompt while armed, whatever flashes", function()
+  local context, S = session()
+  local path = context.data_dir .. "strata/scenes.data"
+  S.lib.scenes.save(1)
+  os.execute("mkdir -p '" .. path .. ".part/inside'")             -- the next write fails
+  S.lib.scenes.save(2)
+  assert_true(S.scene_file.unsaved, "a scene of this session is not on disk")
+  show_page("SETUP")
+  factory().open_list()
+  next_frame(context)
+  local idle_hints = hint_text(context)
+  assert_equal(idle_hints, "K2:back E2:set K3:load", "the list's own keys")
+  key(3, 1); key(3, 0)
+  local armed_at = util.time()
+  assert_true(not factory().loading(), "the first K3 only asks")
+  next_frame(context)
+  assert_equal(hint_text(context), "K3 again: drop unsaved", "the prompt")
+  S.lib.ui_flash.start("hints", "B1 load failed", 5)              -- a flash for every page
+  next_frame(context)
+  assert_equal(hint_text(context), "K3 again: drop unsaved", "the prompt stays over the flash")
+  context.clock.run_for(armed_at + 1.8 - util.time())
+  next_frame(context)
+  assert_equal(hint_text(context), "K3 again: drop unsaved", "for the 2 s the second K3 has")
+  context.clock.run_for(armed_at + 2.1 - util.time())
+  next_frame(context)
+  assert_equal(hint_text(context), "B1 load failed", "lapsed by itself: the flash shows")
+  context.clock.run_for(3)
+  next_frame(context)
+  assert_equal(hint_text(context), idle_hints, "then the list's keys")
+  key(3, 1); key(3, 0)
+  S.lib.ui_flash.start("hints", "B1 load failed", 5)
+  key(3, 1); key(3, 0)
+  assert_true(factory().loading(), "the second K3 under the prompt loads, a flash or not")
   run_load(context)
   factory().close_list()
 end)

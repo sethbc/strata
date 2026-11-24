@@ -438,6 +438,42 @@ test("E3 on SCENES' sequencer field echoes to a MIDI-mapped controller (#538)", 
   assert_equal(cc_echoes(controller, 43), "127,0", "the controller hears both")
 end)
 
+-- #893: on, with no scene in slots 1..length that can play (empty or
+-- failing its check), the sequencer holds a slot and recalls nothing, so
+-- its own field says so ([none]); a scene it can play takes the mark away
+test("SCENES says when the scene sequencer has no playable scene", function()
+  local context, S = started_on_scenes()
+  local function seq_text()
+    redraw()
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.text:find("^seq ") then return entry.text end
+    end
+  end
+  assert_equal(seq_text(), "seq off", "off says only off, with nothing to play")
+  params:set("scene_sequencer_enabled", 1)
+  context.clock.run_for(1)
+  assert_true(S.scene_sequencer_enabled, "the sequencer runs")
+  assert_equal(seq_text(), "seq on [none]", "on with every slot empty")
+  capture_scene(5)                                                -- past the length, 4
+  assert_equal(seq_text(), "seq on [none]", "a scene past the sequence's end plays no part")
+  params:set("scene_sequence_length", 5)
+  assert_equal(seq_text(), "seq on", "a length that takes it in")
+  -- a scene that fails its check, in a new table (validity is cached by table)
+  local invalid = {}
+  for field, value in pairs(S.scenes[5].data) do invalid[field] = value end
+  invalid.tempo = "fast"
+  S.scenes[5].data = invalid
+  assert_equal(seq_text(), "seq on [none]", "an invalid scene cannot play")
+  capture_scene(2)
+  assert_equal(seq_text(), "seq on", "a scene it can play")
+  S.lib.pages_scenes.move_cursor(18)
+  params:set("scene_sequence_length", 1)
+  assert_equal(seq_text(), "seq on [none]", "with the cursor on the field")
+  assert_screen_layout(context, "SCENES with the sequencer on and nothing to play")
+  params:set("scene_sequencer_enabled", 0)
+  assert_equal(seq_text(), "seq off", "off again")
+end)
+
 -- 3.4 (design §9.4): sixteen slots in two banks of eight, with names
 
 -- The slot numbers SCENES draws above the fields, in drawing order
