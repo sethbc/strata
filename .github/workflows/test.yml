@@ -269,7 +269,7 @@ jobs:
   # areas, under each shard's 570 s; mix, variation, grains, structure and performance take about
   # 272 s, effects, voices and outrings 291 s, lifecycle, files, positions and notes 253 s, record,
   # waveform, onsets, delay and shimmer 221 s, memory and rings 197 s, and modulation, freeze,
-  # envelopes and tuning 185 s. In that run every shard passed.
+  # envelopes and tuning 184 s. In that run every shard passed.
   # memory runs first in its shard (areaOrder), so CI's memory figures are the area's alone.
   # Since #652 the areas no longer depend on each other's order, so the grouping is a
   # choice for the times alone; files and structure share no shard only because this

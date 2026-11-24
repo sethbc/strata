@@ -728,9 +728,10 @@ server.sync;
 // in sclang (holdHead, outrings.scd's method, #998): the filter that
 // stands in for the default OSC dispatcher keeps the first /c_set of that
 // bus and lets it go only when the hold ends, so the read gives up at its
-// 1 s whatever the machine's speed. Counted before the hold ends (the held
-// reply would free a responder still waiting for it): no /c_set responder
-// of that bus is left registered
+// timeout whatever the machine's speed (the check's 0.1 s through
+// headReadSeconds_, put back after). Counted before the hold ends (the
+// held reply would free a responder still waiting for it): no /c_set
+// responder of that bus is left registered, and no timer of the read
 holdHead = { arg index, body;
     var dispatcher = OSCFunc.defaultDispatcher, held, filter, keeper;
     // a responder of its own keeps the dispatcher registered while the
@@ -753,14 +754,39 @@ headResponders = { arg index;
         each.isKindOf(OSCFunc) and: { each.path == '/c_set' } and: { each.argTemplate == [index] } })
 };
 readings = [headResponders.(inputRing[2].index)];
+engine.tryPerform(\headReadSeconds_, 0.1);
 holdHead.(inputRing[2].index, {
-    readings = readings ++ [engine.areaCall(\ringHeadFrame, inputRing[2]), headResponders.(inputRing[2].index)];
+    var readAt = Main.elapsedTime;
+    readings = readings ++ [engine.areaCall(\ringHeadFrame, inputRing[2])];
+    readAt = Main.elapsedTime - readAt;
+    readings = readings ++ [headResponders.(inputRing[2].index), state[\headTimers] !? { arg timers; timers.size }, readAt];
 });
+engine.tryPerform(\headReadSeconds_, nil);
 server.sync;
-readings = readings ++ [headResponders.(inputRing[2].index)];
-check.((readings[0] == 0) and: { readings[1].isNil } and: { readings[2] == 0 } and: { readings[3] == 0 },
-    "freeze: a ring head read whose reply is held past its 1 s gives up and frees its responder (#1014: /c_set responders on the bus before %, the read's answer %, responders once it gave up %, after the hold %)".format(
-        readings[0], readings[1], readings[2], readings[3]));
+readings = readings ++ [headResponders.(inputRing[2].index), engine.tryPerform(\headReadSeconds)];
+// (the read gave up at the check's timeout: a loose bound, 0.6 s, well
+// clear of the scheduling and well short of the 1 s default)
+check.((readings[0] == 0) and: { readings[1].isNil } and: { readings[2] == 0 } and: { readings[3] == 0 } and: { readings[4] < 0.6 }
+    and: { readings[5] == 0 } and: { readings[6] == 1 },
+    "freeze: a ring head read whose reply is held past its timeout gives up and frees its responder and its timer (#1014: /c_set responders on the bus before %, the read's answer %, responders once it gave up %, timers %, given up after % s (the check's timeout 0.1), responders after the hold %, the timeout put back to % s)".format(
+        readings[0], readings[1], readings[2], readings[3], readings[4].round(0.001), readings[5], readings[6]));
+// A read answered: its timer is stopped at the reply, never left to run
+// out its time. The reply is held until the read is in flight (its timer
+// in \headTimers, waiting), then let go when the hold ends; the read
+// answers at once
+{
+    var timers, answer, done = false;
+    holdHead.(inputRing[2].index, {
+        fork({ answer = engine.areaCall(\ringHeadFrame, inputRing[2]); done = true }, SystemClock);
+        h.waitFor({ (state[\headTimers] ? []).notEmpty }, 0.5);
+        timers = (state[\headTimers] ? []).asArray;
+    });
+    h.waitFor({ done }, 2);
+    timers = [timers.size, timers.collect(_.isPlaying), answer.notNil, done, state[\headTimers] !? { arg each; each.size }];
+    check.((timers[0] == 1) and: { timers[1] == [false] } and: { timers[2] } and: { timers[3] } and: { timers[4] == 0 },
+        "freeze: a ring head read answered stops its timer at the reply (timers in flight %, waiting after the reply %, answered %, done %, timers left %)".format(
+            *timers));
+}.value;
 
 // ---- Spectral writers (a high engine) ----
 root = h.tempDir +/+ "freeze-high/";
@@ -1064,7 +1090,7 @@ check.(other.synths[other.copyWriterKeys[2]].isNil and: { writerNodes.value.coun
 // its synth holds no ring of its own, so it is no frozen synth voice (the
 // one answer #887 changes), and neither is a synth freeze moved to a slot
 {
-    var run = otherCommand, rows = List.new(14), expected, first = other.voiceSourceFirst, answers, record;
+    var run = otherCommand, rows = List.new(14), expected, first = other.voiceSourceFirst, answers, record, staleNote;
     var start = { arg voice, source, mode;
         run.(\setGrainSource, voice, source);
         run.(\setGrainParam, voice, \freezeMode, mode);
@@ -1091,6 +1117,21 @@ check.(other.synths[other.copyWriterKeys[2]].isNil and: { writerNodes.value.coun
     record.(\holdSlot, 3);
     moveStopped.(3, 0);
     record.(\staleSlotOnSynth, 3);
+    // #887's effect: that voice started with no freeze resent (still frozen
+    // on its slot, now on its synth) and given an extra note: the note is a
+    // voice synth of its type (noteKindFor's \voice), never a stream of a
+    // ring no writer holds (\stream, a \strataGrainRing)
+    run.(\setNotePool, 1);
+    run.(\voiceOn, 3, 220.0, 0.2, 0.0, 0.1, 10.0, 1.0);
+    run.(\noteOn, 3, 1, 60.0, 220.0, 1.0, 1.0);
+    staleNote = [other.areaState[\freeze][\frozen][3], other.areaState[\freeze][\source][3], other.grainSource[3],
+        other.noteRecord(3, 1)[\kind], other.noteRecord(3, 1)[\synth] !? { arg synth; synth.defName.asSymbol }];
+    run.(\noteOff, 3, 1, 1);
+    run.(\voiceOff, 3);
+    run.(\setNotePool, 0);
+    check.((staleNote.keep(3) == [true, 1, 0]) and: { staleNote[3] == \voice } and: { staleNote[4] == other.voiceDefFor(3) },
+        "freeze: an extra note on a voice frozen on its slot and moved to its synth while stopped starts as a voice synth of its type, not a stream (#887: [frozen, frozen source, source, kind, def] %, its type's def %)".format(
+            staleNote, other.voiceDefFor(3)));
     start.(4, other.inputSource, 0.0);
     run.(\setGrainParam, 4, \freeze, 1.0);
     record.(\copyPending, 4);
