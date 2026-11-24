@@ -210,6 +210,11 @@ return function(S)
 
   function M.clock_id() return draw.clock and draw.clock.id end
 
+  -- Whether the start step has run and the cleanup step has not begun (it
+  -- clears the flag before it lets any port go): a holder's release seen
+  -- with this false is cleanup's (MIDI out's settled hook, #1010)
+  function M.started() return state.started end
+
   -- Whether this module holds the port (a remote grid's or arc's, or one
   -- midigrid's device is on): MIDI out sends nothing there. A kind holds
   -- its port only while the port's owner is still its own, so from the
@@ -596,7 +601,8 @@ return function(S)
   end)
 
   -- The cleanup step: the clock ended, CC 4 = 0 to each device, everything
-  -- detached and released
+  -- detached and released, before MIDI out's step (#1010: the release pays
+  -- what MIDI out owes a device on a held port)
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_remote, function()
     state.started = false
     if draw.clock then
