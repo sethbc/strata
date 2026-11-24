@@ -1767,6 +1767,7 @@ local UNIT_FILE_SECONDS = {
   ["ui_pages_test.lua"] = 1,
   ["ui_slice_editor_test.lua"] = 2,
   ["ui_test.lua"] = 1,
+  ["ui_walk_test.lua"] = 1,
   ["ui_zones_test.lua"] = 1,
   ["variation_test.lua"] = 2,
   ["voice_mix_test.lua"] = 1,
