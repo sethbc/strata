@@ -530,23 +530,40 @@ test.("record: a synced take's delay runs from the command's send, not from when
             error.round(1), engine.bufferFrames[4]));
 });
 // Review focus 1: with sclang free the wait is about 0, so the take starts
-// delay after the send, as before #565. One block, plus 2 frames for sent's
-// float32 rounding (up to 31 us at 1000 s)
+// delay after the send, as before #565. Two things are judged apart
+// (#1017): the decision, the take's startAt (read once the command is
+// handled) against the check's own elapsed time at the send plus delay,
+// under a loose backstop only (decisionBackstop, 50 ms: the scheduling
+// between the check's send and the engine's read of its clocks; measured
+// 0.02 to 0.06 ms, ten 3.13 runs at once in Docker and two 3.14.1 runs at
+// once); and the start itself on the server's clock: a timecode
+// timestamped at that startAt reads 0 on the take's first frame, to 2
+// frames (3.13 read 1 in every run, 3.14.1 0; one block late is 64
+// frames, the check server's block). Before #1017 the timecode was
+// timestamped from the check routine's own clock, and a check thread held
+// by the OS between its send and that read took the take for late
 test.("record: an idle engine's synced take starts delay after its send", {
-    var delay = 0.5, frame = 2000, value, error, id = server.nextNodeID;
+    var delay = 0.5, frame = 2000, value, error, id = server.nextNodeID, decisionBackstop = 0.05;
+    var counted, sentAt, take, startAt, decided, steps = 0;
     reset.(4);
+    counted = state[\recordCounts][4];
+    sentAt = Main.elapsedTime;
     NetAddr.localAddr.sendMsg('/command/recordBuffer', 4, 0.3, 1.0, 0.0, 0, 0.0, 0, delay, Date.getDate.rawSeconds % 1000);
-    server.sendBundle(delay + (Main.elapsedTime - thisThread.seconds),
-        ['/s_new', \strataCheckTimecode, id, 2, inputSynth.nodeID, \out, engine.inputBus.index]);
-    0.05.wait;
+    // (1 ms steps, 2 s at most: the command handled, its take made)
+    while { (state[\recordCounts][4] == counted) and: { steps < 2000 } } { 0.001.wait; steps = steps + 1 };
+    take = state[\takes][4];
+    startAt = take !? { take[\startAt] };
+    decided = startAt !? { startAt - (sentAt + delay) };
+    startAt !? { server.sendBundle(startAt - thisThread.seconds,
+        ['/s_new', \strataCheckTimecode, id, 2, inputSynth.nodeID, \out, engine.inputBus.index]) };
     h.awaitTake(4, nil, delay + 5);
     server.sendBundle(nil, ['/n_free', id]);
     server.sync;
     value = h.bufferSample(engine.buffersL[4], frame);
     error = (value - (frame / sampleRate)).abs * sampleRate;
-    check.(engine.bufferFrames[4] == (0.3 * sampleRate).round.asInteger and: { error <= (blockSize + 2) },
-        "record: an idle engine's synced take starts delay after its send (off by % frames, % frames kept)".format(
-            error.round(1), engine.bufferFrames[4]));
+    check.(decided.notNil and: { decided.abs < decisionBackstop } and: { engine.bufferFrames[4] == (0.3 * sampleRate).round.asInteger } and: { error <= 2 },
+        "record: an idle engine's synced take starts delay after its send (#1017; the take's start % ms from the send plus delay (under % ms); on the server off by % frames from its timestamp, % frames kept)".format(
+            decided !? { arg each; (each * 1000).round(0.001) }, decisionBackstop * 1000, error.round(1), engine.bufferFrames[4]));
 });
 // #981: a synced take is sent paused with a timestamped /n_run 1. A run the
 // server takes late, in the callback that makes the node, is performed
