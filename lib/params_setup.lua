@@ -989,14 +989,17 @@ return function(S)
   -- param whose value, as modulated, is not what the engine has joins its
   -- sender's group; each group's values are recorded as sent and the
   -- sender runs once (send_param_to_engine of its first id: a command of
-  -- several params reads the others through engine_param_value), in param
+  -- several params reads the others through engine_param_value;
+  -- S.lib.engine_sync.record_as_sent, which drops a waiting value too), in param
   -- order, after fx_hold's release of a freeze the read left bypassed. The
   -- filter's restore mix follows as filter_mix's action has it. The scale
   -- keeps no record of what the engine has (the controller's ruling: one
   -- message is cheaper than a second record), so it is sent every time, as
   -- the scale's and the root's actions send it: setScale, each running
-  -- voice's scaleNote and each running chord's intervals. The tuning's own
-  -- hook sends the tuning (lib/tuning.lua)
+  -- voice's scaleNote and each running chord's intervals, once a read (the
+  -- tuning's hook, which sends the tuning, leaves the chords here; a voice
+  -- whose interval set the read changed gets its list from voice_params'
+  -- action instead; S.lib.arp's send-if-changed is its own local)
   S.register_pset_hook({name = "engine_params", read = function(path_base, number, pset_path, silent)
     if not silent then return end
     local sync, groups = S.lib.engine_sync, {}
@@ -1016,7 +1019,7 @@ return function(S)
       end
     end
     for _, group in ipairs(groups) do
-      for _, changed in ipairs(group) do S.engine_param_values[changed.id] = changed.value end
+      for _, changed in ipairs(group) do sync.record_as_sent(changed.id, changed.value) end
       send_param_to_engine(group[1].id, params:get(group[1].id))
     end
     if params:get("filter_mix") ~= filter_mix_before then filter_mix_moved(params:get("filter_mix")) end
@@ -1024,7 +1027,8 @@ return function(S)
     variation.send_scale()
     for voice_idx = 1, NUM_VOICES do
       variation.send_scale_note(voice_idx)
-      if S.voices[voice_idx].values.intervals == variation.VARIATION.set_index.chord then
+      local intervals = S.voices[voice_idx].values.intervals
+      if intervals == variation.VARIATION.set_index.chord and params:get("v" .. voice_idx .. "_intervals") == intervals then
         variation.send_intervals(voice_idx)
       end
     end

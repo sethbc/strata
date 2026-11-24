@@ -1040,15 +1040,14 @@ local function engine_holds(calls)
 end
 
 -- One PSET read of the session with change() applied, silent or with
--- actions, from the session (no voice running unless before() starts one):
+-- actions, from the session (voices 1 and 2 run, as at the default start):
 -- what the engine holds after it, from every call since the script loaded
 -- (held), and the read's own calls (read)
-local function engine_read(name, silent, change, before)
+local function engine_read(name, silent, change)
   local context = load_strata({ data_subdir = "pset_engine_" .. name .. (silent and "_silent" or "_actions") })
   finish_startup(context)
   local S = local_value("S")
   util.make_dir(context.data_dir)
-  if before then before(S) end
   local session, path = context.data_dir .. "session.pset", context.data_dir .. "changed.pset"
   params:write(session, "session")
   change(S)
@@ -1127,6 +1126,18 @@ test("a silent read of a PSET equal to the state sends only scatter's setScatter
   local note = context.engine_calls[#context.engine_calls]
   assert_equal(note.args[1] .. " " .. note.args[2], "1 scaleNote", "its scaleNote")
   assert_true(S.voices[2].active, "the voice still runs")
+  -- a running chord voice's intervals, computed from the scale, once (fix
+  -- round 1: S.lib.arp's send-if-changed is local to lib/arp.lua, so the
+  -- scale's sends resend the list once a silent read, never twice)
+  params:set("v2_intervals", S.lib.variation.VARIATION.set_index.chord)
+  params:write(path, "equal")
+  context.clear_engine_calls()
+  params:read(path, true)
+  local intervals = 0
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainParam" and tostring(call.args[2]):match("^interval") then intervals = intervals + 1 end
+  end
+  assert_equal(intervals, S.lib.variation.VARIATION.max_intervals + 1, "the chord's list once: each interval and the count")
 end)
 
 -- #987 (known, not this package's): turning delay sync off sends under
@@ -1172,6 +1183,38 @@ test("a silent read sends a command of several params once (#965)", function()
     assert_equal(counts[command], 1, command .. " is sent once")
     assert_equal(silent.held[command], actions.held[command], command .. " with every value the read changed")
   end
+end)
+
+-- Fix round 1 of #965: a value waiting in the send budget (a macro's move,
+-- morph or a gesture writes inside deferrable) for a param the PSET sets is
+-- dropped by the read, as each action's send drops it in a read with
+-- actions, so the flush never puts it back over the PSET's value
+test("a value waiting in the budget for a param a silent read sets never flushes over the read (#965)", function()
+  local function read(silent)
+    local context = load_strata({ data_subdir = "pset_engine_waiting_" .. tostring(silent) })
+    finish_startup(context)
+    local S = local_value("S")
+    local sync = S.lib.engine_sync
+    util.make_dir(context.data_dir)
+    local path = context.data_dir .. "filter.pset"
+    params:set("filter_freq", 800); params:set("filter_res", 0.7)
+    params:write(path, "filter")
+    params:set("filter_freq", 5000); params:set("filter_res", 0.5)
+    sync.count_sends(S.constants.ENGINE_BUDGET.messages_per_window)  -- the window is full
+    sync.deferrable(function() send_param_to_engine("filter_res", 0.9) end)  -- as a macro's move
+    assert_equal(sync.budget_state().pending, 1, "the move waits")
+    params:read(path, silent)
+    context.clock.run_for(0.3)
+    local filters = context.calls_named("setFilter")
+    return filters[#filters].args, sync, S
+  end
+  local actions = read(false)
+  local silent, sync = read(true)
+  assert_near(actions[2], 0.7, 1e-9, "after a read with actions the engine has the PSET's res")
+  assert_near(silent[2], 0.7, 1e-9, "and after a silent read")
+  assert_near(silent[1], 800, 1e-9, "with the PSET's freq")
+  assert_near(sync.expected_value("filter_res"), 0.7, 1e-9, "the record is the PSET's res")
+  assert_equal(sync.budget_state().pending, 0, "nothing waits")
 end)
 
 -- A bypassed effect, a frozen delay (lib/fx_hold.lua's hook, #883) and the
