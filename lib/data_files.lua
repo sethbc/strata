@@ -301,9 +301,10 @@ return function(S)
   -- What is known of each data file this session (3.9, #895, plan ruling
   -- 8: every data file is read and written here, so its problem is kept
   -- here and no reader changes), by path: load_problem, nil, "unreadable"
-  -- (the last read could not parse it) or "damaged" (it parsed, and its
-  -- reader set it aside: refused whole, or, voices.data, its damaged
-  -- presets kept, #848); backup, the name it was set aside under (nil:
+  -- (the last read could not parse it) or "set aside" (it parsed, and its
+  -- reader set it aside, for a cause this module does not know: another
+  -- version, a refused shape, or voices.data's damaged presets kept, #848;
+  -- so no cause is named); backup, the name it was set aside under (nil:
   -- still in place); write_problem, nil or "not saved" (the last write
   -- failed); written, whether a write that worked came after the last read
   -- (a set_aside then keeps a file on purpose, as the scenes before a PSET
@@ -346,7 +347,7 @@ return function(S)
   -- The files with a problem, in the order each was first read, written or
   -- set aside (the start steps read most of them first): a list of
   -- {file = <path>, problem = "not saved" (the last write failed),
-  -- "unreadable" (the last read could not parse it) or "damaged" (it
+  -- "unreadable" (the last read could not parse it) or "set aside" (it
   -- parsed and its reader set it aside), backup = <the name it was set
   -- aside under>, or nil while it is in place}. A copy; SETUP draws a row
   -- for each (lib/pages/setup.lua). Never scenes.data or buffers.data in
@@ -462,12 +463,13 @@ return function(S)
   -- in place). A file set aside after its read (its reader could not use
   -- it) is kept (problems()), under its backup's name or in place when it
   -- could not be moved: unreadable when the read could not parse it,
-  -- damaged when it parsed; one this session wrote since (a write that
-  -- worked) is kept on purpose and is no problem
+  -- "set aside" when it parsed (its reader's cause is not passed); one
+  -- this session wrote since (a write that worked) is kept on purpose and
+  -- is no problem
   local function note_set_aside(path, backup)
     local record = record_of(path)
     if not record or record.written then return end
-    record.load_problem = record.load_problem == "unreadable" and "unreadable" or "damaged"
+    record.load_problem = record.load_problem == "unreadable" and "unreadable" or "set aside"
     record.backup = backup
   end
 
