@@ -41,11 +41,10 @@ return function(S)
     -- arpeggiator is on, #845): selected, and not
     unused_levels = {selected = 10, other = 2},
     -- a row whose param a step lock holds (#882, a base override:
-    -- S.lib.engine_sync.is_overridden): the tag after the label, at full
-    -- level; the value drawn is still the stored one
+    -- S.lib.engine_sync.is_overridden): the tag after the label, at the
+    -- row's level; the value drawn is still the stored one
     step_lock_tag = "[S]",
     step_lock_gap = 3,       -- between the label and the tag
-    step_lock_level = 15,
   }
   local LAYOUT = M.LAYOUT
 
@@ -195,11 +194,10 @@ return function(S)
     screen.text(row.label)
     local label_right = LAYOUT.field_x + screen.text_extents(row.label)
     if step_locked(row) then
-      screen.level(LAYOUT.step_lock_level)
+      -- at the row's level, as its label: the cursor's row stays the brightest
       screen.move(label_right + LAYOUT.step_lock_gap, y)
       screen.text(LAYOUT.step_lock_tag)
       label_right = label_right + LAYOUT.step_lock_gap + screen.text_extents(LAYOUT.step_lock_tag)
-      screen.level(level)
     end
     local room = LAYOUT.value_right - label_right - LAYOUT.value_gap
     -- a pending type choice (3.8) is drawn dim until it applies
@@ -476,6 +474,19 @@ return function(S)
     params:set(prefix .. "source", source_option("buf 1"))
     for _, key in ipairs({"buf_pos", "buf_rate", "grain_size", "grain_pitch"}) do
       S.lib.engine_sync.set_base_override(prefix .. key, params:get(prefix .. key))
+    end
+    M.place_cursor(M.row_of(prefix .. "buf_pos"))
+  end})
+  -- each held buffer-voice row at its widest value beside [S] (measured
+  -- over each range: "0.02", "0.25", "0.02 s", "0.25 x"), the cursor on
+  -- buffer position, the longest label: the tightest rows a lock holds
+  local WIDEST_LOCKED = {buf_pos = 0.015, buf_rate = 0.25, grain_size = 0.02, grain_pitch = 0.25}
+  table.insert(layout_states, {name = "step locks at their widest values", setup = function()
+    local prefix = "v" .. S.selected_voice .. "_"
+    params:set(prefix .. "source", source_option("buf 1"))
+    for _, key in ipairs({"buf_pos", "buf_rate", "grain_size", "grain_pitch"}) do
+      params:set(prefix .. key, WIDEST_LOCKED[key])
+      S.lib.engine_sync.set_base_override(prefix .. key, WIDEST_LOCKED[key])
     end
     M.place_cursor(M.row_of(prefix .. "buf_pos"))
   end})

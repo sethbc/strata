@@ -1374,9 +1374,11 @@ test("VOICE marks a row while a step lock holds its param, and the mark goes whe
   local _, size_value = drawn_row(context, name("v1_grain_size"))
   assert_equal(trimmed(size_value.text), trimmed(params:string("v1_grain_size")), "the row still shows the stored value")
   local _, pitch_value = drawn_row(context, name("v1_grain_pitch"))
-  assert_equal(size.level, S.lib.pages_voice.LAYOUT.step_lock_level, "the tag at its own level")
+  -- the tag at its row's level, so the cursor's row stays the brightest
+  assert_equal(size.level, 15, "the tag on the cursor's row: the cursor's level")
+  assert_equal(pitch.level, 4, "the tag off the cursor: the row's level, 4")
   assert_equal(size_value.level, 15, "the selected row's value stays bright")
-  assert_equal(pitch_value.level, 4, "another row's value keeps its level, not the tag's")
+  assert_equal(pitch_value.level, 4, "another row's value keeps its level")
   pages.screen_dirty = false
   context.clock.advance_until(S.pattern_clocks[1])  -- step 2, plain: the locks end
   assert_true(pages.screen_dirty, "the locks' end asks the screen to redraw")
@@ -1393,6 +1395,32 @@ test("VOICE marks a row while a step lock holds its param, and the mark goes whe
   pattern_clock_stop()
   size, pitch = marks()
   assert_true(not size and not pitch, "the stop ends every lock and its mark")
+  -- a replaced pattern ends them (S.lib.sequencer.replace_pattern)
+  pattern_clock_start()
+  size, pitch = marks()
+  assert_true(size and pitch, "playing again: marked")
+  pages.screen_dirty = false
+  seq.replace_pattern(1, {15})
+  assert_true(pages.screen_dirty, "the replacement's end of the locks asks the screen to redraw")
+  size, pitch = marks()
+  assert_true(not size and not pitch, "a replaced pattern ends every lock and its mark")
+  pattern_clock_stop()
+  -- a length that leaves the locked step out ends them
+  clear_pattern(1)
+  seq.set_step_attr(1, 1, "size", nil); seq.set_step_attr(1, 1, "pitch", nil)
+  S.patterns[1][5] = 15
+  seq.set_step_attr(1, 5, "size", 0.3)
+  pattern_clock_start()
+  for _ = 1, 4 do context.clock.advance_until(S.pattern_clocks[1]) end
+  assert_equal(seq.sounding_step(1), 5, "step 5 played")
+  size = marks()
+  assert_true(size, "step 5's size lock: marked")
+  pages.screen_dirty = false
+  params:set("v1_seq_length", 4)
+  assert_true(pages.screen_dirty, "the shorter length's end of the lock asks the screen to redraw")
+  size = marks()
+  assert_true(not size, "a length below the locked step ends the lock and its mark")
+  pattern_clock_stop()
 end)
 
 
@@ -1401,6 +1429,7 @@ end)
 test("VOICE's step lock layout states draw the tag on every held row they show", function()
   local cases = {
     ["step locks on a buffer voice"] = { "v1_buf_pos", "v1_buf_rate" },
+    ["step locks at their widest values"] = { "v1_buf_pos", "v1_buf_rate" },
     ["a step's note on a synth voice"] = { "v1_freq" },
   }
   for state_name, ids in pairs(cases) do
@@ -1414,8 +1443,9 @@ test("VOICE's step lock layout states draw the tag on every held row they show",
     redraw()
     for _, id in ipairs(ids) do
       assert_true(S.lib.engine_sync.is_overridden(id), state_name .. ": " .. id .. " held")
-      local entry = drawn_row(context, params:lookup_param(id).name)
-      assert_true(entry, state_name .. ": " .. id .. "'s row drawn")
+      local entry, value = drawn_row(context, params:lookup_param(id).name)
+      assert_true(entry and value, state_name .. ": " .. id .. "'s row drawn")
+      assert_equal(value.text, trimmed(params:string(id)), state_name .. ": " .. id .. "'s value fits whole beside the tag")
       local tagged = false
       for _, other in ipairs(texts_on_row(context, entry.y)) do
         if other.text == S.lib.pages_voice.LAYOUT.step_lock_tag then tagged = true end
