@@ -66,10 +66,12 @@ function Model:voice_source(source)
   return source >= self.voice_first and source < self.voice_first + self.voice_count
 end
 
--- frozenSynthVoice: a frozen voice on its synth source
+-- frozenSynthVoice (3.9, #887: a synth kind and not stale): a voice frozen
+-- on its synth source and still on it. One frozen on a slot or the input
+-- and moved to its synth while stopped holds no ring
 function Model:frozen_synth_voice(voice)
   local state = self.voices[voice]
-  return state.source == 0 and state.frozen
+  return state.frozen and state.frozen_source == 0 and state.source == 0
 end
 
 -- What the voice's next extra note is: noteKindFor's branches in its order
@@ -226,7 +228,7 @@ Model.commands.setGrainParam = function(self, voice, name, value)
   if value > 0.5 then
     state.frozen, state.frozen_source = true, state.source
   elseif state.frozen then
-    local synth_voice = state.source == 0
+    local synth_voice = self:frozen_synth_voice(voice)  -- unfreezeWithControl's
     state.frozen = false
     if synth_voice then self:restart(voice, true) end
   end

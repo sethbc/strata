@@ -478,6 +478,33 @@ test("the notes model's held buffer and input notes follow a moved root", functi
   assert_equal(#model.errors, 0, "nothing refused")
 end)
 
+-- 3.9 (#887): the model follows the engine's frozenSynthVoice: a synth
+-- kind and not stale. A voice frozen on a slot and moved to its synth
+-- while stopped, then started with no freeze resent (Lua always resends
+-- it first, so the walk never gets here), holds no ring: its extra note
+-- is a voice synth, never a stream
+test("the notes model takes a voice frozen on a slot and moved to its synth for no frozen synth voice", function()
+  load_strata()
+  local S = local_value("S")
+  local model = require("notes_model").new(S.constants, S.lib.notes.NOTES)
+  local calls = {}
+  local function call(name, ...) calls[#calls + 1] = { name = name, args = { ... } } end
+  call("setNotePool", 4)
+  call("setGrainSource", 0, 1); call("voiceOn", 0); call("setGrainParam", 0, "freeze", 1)
+  call("voiceOff", 0); call("setGrainSource", 0, 0); call("voiceOn", 0)
+  call("noteOn", 0, 1, 64, 329.6, 1, 1)
+  model:feed(calls)
+  assert_true(not model:frozen_synth_voice(0), "frozen on a slot, now on its synth: no frozen synth voice")
+  assert_equal(model.voices[0].extra[1].kind, "voice", "its extra note is a voice synth")
+  call("setGrainParam", 0, "freeze", 0)
+  -- and a synth freeze still is one: the stream rule holds
+  call("setGrainParam", 0, "freeze", 1); call("noteOn", 0, 2, 67, 392, 1, 1)
+  model:feed(calls)
+  assert_true(model:frozen_synth_voice(0), "frozen on its synth: a frozen synth voice")
+  assert_equal(model.voices[0].extra[2].kind, "stream", "its new note is a stream")
+  assert_equal(#model.errors, 0, "nothing refused")
+end)
+
 -- An op's cuts: "never" for the ops that cut no playing note, "frozen" for
 -- the one that may cut only a frozen synth voice's: the model's blind spot
 -- (ruling 59). Kept on the op itself (`cuts`), so a renamed op keeps it;

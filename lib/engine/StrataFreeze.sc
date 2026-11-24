@@ -70,6 +70,8 @@
     // \writerStarts: per voice, while the /n_go of the ring writer
     // replaceRingWriter made last has not come, (watch: its responder, run:
     // whether it was made running), else nil (watchWriterStart, #1000).
+    // \headTimers: the timeouts of the head reads waiting for the server
+    // (ringHeadFrame, one Routine each, out once its read ends, #1014).
     // \ended: per voice, the freezes the engine ended on its own
     // (abandonCopy), counted from 1 as the freezeEnded poll reports them.
     allocFreezeState {
@@ -86,6 +88,7 @@
         state[\inputReaders] = IdentityDictionary.new;
         state[\ended] = Array.fill(numVoices, 0);
         state[\writerStarts] = Array.newClear(numVoices);
+        state[\headTimers] = IdentitySet.new;
         // Inside a frozen input copy history is 0: a history change is kept
         // (it applies again on unfreeze) but not sent while the voice is
         // frozen on the input. The grains area's handler does the rest.
@@ -695,20 +698,32 @@
 
     // A ring writer's frame now (on its phase bus: the input writer's, or a
     // read voice's output ring writer's), inside a routine; nil if the
-    // server does not answer within 1 s. The reply's responder is its own
-    // (Bus.get's could not be freed), a one-shot of the bus's /c_set, and
-    // is freed on both paths, the reply and the timeout (#1014), so a server
-    // that never answers leaves none behind
+    // server does not answer within headReadSeconds. The reply's responder
+    // is its own (Bus.get's could not be freed), a one-shot of the bus's
+    // /c_set, and its timeout a Routine on SystemClock, kept in
+    // \headTimers while the read waits; both are freed on both paths, the
+    // reply and the timeout (#1014), so a server that never answers leaves
+    // no responder behind and an answer leaves no timer running
     ringHeadFrame { arg bus;
-        var condition = Condition(false), value, server = context.server, reply;
+        var condition = Condition(false), value, server = context.server, reply, timer;
+        var timers = areaState[\freeze][\headTimers];
         reply = OSCFunc({ arg msg; value = msg[2]; condition.test = true; condition.signal },
             '/c_set', server.addr, argTemplate: [bus.index]).oneShot;
+        timer = Routine({ this.headReadSeconds.wait; condition.test = true; condition.signal });
+        timers.add(timer);
         server.listSendMsg([\c_get, bus.index]);
-        SystemClock.sched(1, { condition.test = true; condition.signal; nil });
+        timer.play(SystemClock);
         condition.wait;
+        timer.stop;
+        timers.remove(timer);
         reply.free;
         ^value
     }
+
+    // How long a head read waits for the server (s): 1; the engine check
+    // sets a shorter one (areaState[\freeze][\headReadSeconds]; nil: 1)
+    headReadSeconds { ^areaState[\freeze][\headReadSeconds] ? 1 }
+    headReadSeconds_ { arg seconds; areaState[\freeze][\headReadSeconds] = seconds }
 
     // Copy the 4 s of the frozen source's ring (the input ring, or a voice
     // source's output ring, 3.8) ending ringReadMargin + history (the
