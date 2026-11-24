@@ -3333,7 +3333,7 @@ end)
 
 -- Voice 1 alone set: its length and every one of its steps 1..length at 15
 local function voice_1_only(S, length)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for step = 1, 16 do S.patterns[voice_idx][step] = 0 end
   end
   for step = 1, length do S.patterns[1][step] = 15 end
@@ -5293,7 +5293,7 @@ test("a start with the chain on can be undone: the live patterns are back (#922)
   seq.set_step_attr(1, 2, "prob", 50)
   capture_scene(1)
   -- the live patterns, made by hand, with their own lengths and settings
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for step = 1, 16 do S.patterns[voice_idx][step] = (voice_idx * 3 + step) % 16 end
   end
   seq.set_step_attr(1, 2, "prob", nil)
@@ -5303,7 +5303,7 @@ test("a start with the chain on can be undone: the live patterns are back (#922)
   params:set("v2_seq_misstep", 20); params:set("v3_seq_division", 2)
   local live_patterns, live_steps = h.deep_copy(S.patterns), h.deep_copy(S.pattern_steps)
   local live_settings = {}
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for _, key in ipairs({"seq_length", "seq_division", "seq_direction", "seq_misstep"}) do
       local id = "v" .. voice_idx .. "_" .. key
       live_settings[id] = params:get(id)
@@ -5321,14 +5321,14 @@ test("a start with the chain on can be undone: the live patterns are back (#922)
   assert_equal(seq.step_attr(3, 5, "ratchet"), nil, "and its steps")
   assert_equal(params:get("v1_seq_length"), 4, "and its lengths")
   assert_true(not mutation.undo_for(MAIN_PAGE, "voice", 2), "the start's hold replaces MAIN's")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     assert_true(mutation.undo_for(SEQ_PAGE, "pattern", voice_idx), "held on SEQ for voice " .. voice_idx)
   end
   -- a quick ALT+K2 on SEQ puts back what the start replaced
   h.show_page("SEQ")
   key(1, 1); key(2, 1); key(2, 0); key(1, 0)
   assert_equal(S.undo, nil, "the undo is used")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for step = 1, 16 do
       assert_equal(S.patterns[voice_idx][step], live_patterns[voice_idx][step],
         "voice " .. voice_idx .. " step " .. step .. "'s level is back")
@@ -5337,7 +5337,7 @@ test("a start with the chain on can be undone: the live patterns are back (#922)
   assert_equal(seq.step_attr(1, 2, "prob"), nil, "the scene's chance is gone")
   assert_equal(seq.step_attr(3, 5, "ratchet"), 2, "the hand-set ratchet is back")
   assert_equal(table.concat(seq.step_attr(6, 9, "notes"), " "), "2 -1", "and the chord")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for step = 1, 16 do
       local live = live_steps[voice_idx] and live_steps[voice_idx][step]
       local now = S.pattern_steps[voice_idx][step]

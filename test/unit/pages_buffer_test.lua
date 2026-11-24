@@ -165,7 +165,7 @@ end)
 test("K3 records into the slot under the cursor whatever the voices use", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   local buffers = local_value("buffers")
-  for voice = 1, 7 do assert_equal(params:get("v" .. voice .. "_source"), 1, "voice " .. voice .. " on its synth") end
+  for voice = 1, local_value("S").constants.NUM_VOICES do assert_equal(params:get("v" .. voice .. "_source"), 1, "voice " .. voice .. " on its synth") end
   enc(2, 2)
   context.clear_engine_calls()
   tap(3)
@@ -354,7 +354,7 @@ test("slots sit 7 px apart, three at a time, with a scroll marker", function()
   slots, rows = shown_slots()
   assert_equal(slot_row_text(context, rows[8]), "8 - REC", "REC while recording")
   -- every voice on the cursor slot: the voices are cut to fit, the row stays inside its column
-  for voice = 1, 7 do params:set("v" .. voice .. "_source", 9) end   -- buf 8
+  for voice = 1, local_value("S").constants.NUM_VOICES do params:set("v" .. voice .. "_source", 9) end   -- buf 8
   redraw()
   assert_true(slot_row_text(context, rows[8]):find("v1", 1, true), "the first voices show")
   assert_screen_layout(context, "BUFFER with every voice on the cursor slot")
@@ -934,7 +934,7 @@ test("BUFFER page layout holds for every voice, source, buffer state and cursor"
   end
   for _, state in ipairs({ "empty", "loaded", "recording" }) do
     set_buffers(state)
-    for voice_idx = 1, 7 do
+    for voice_idx = 1, local_value("S").constants.NUM_VOICES do
       set_selected(voice_idx)
       for source = 1, 10 do
         params:set("v" .. voice_idx .. "_source", source)
@@ -1090,7 +1090,7 @@ test("the cursor row lists the voices in full when they fit, and keeps the name'
   assert_equal(slot_row_text(context, rows[3]), "3 x v2 v6 2.5s", "the cursor row shows v2 v6")
   -- a long name with every voice on the slot: the voices shorten, the name keeps its room
   load_buffer(3, "/tmp/a_long_name_for_the_slot.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(3, 2, 16))
-  for voice = 1, 7 do params:set("v" .. voice .. "_source", 4) end
+  for voice = 1, local_value("S").constants.NUM_VOICES do params:set("v" .. voice .. "_source", 4) end
   redraw()
   local name, voices
   for _, entry in ipairs(texts_on_row(context, rows[3])) do

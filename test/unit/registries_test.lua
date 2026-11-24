@@ -331,7 +331,7 @@ end)
 local function lfo_labels(registered)
   local labels = { "none", "density", "drift", "filt freq", "filt res", "filt mix", "dly time", "dly fdbk",
     "dly mix", "rev mix", "rev size", "rev damp", "dly>rev", "shim dly", "shim rev" }
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, h.voice_count() do
     for _, suffix in ipairs({ "main", "size", "dens", "pitch", "spread", "pos", "rate", "scan" }) do
       table.insert(labels, "v" .. voice_idx .. " " .. suffix)
     end
@@ -592,14 +592,14 @@ test("a scene without the registered fields loads with every registered default"
   assert_near(scene.data.voices[2].values.probe, 0.6, 1e-9, "captured")
   assert_near(scene.data.probe_level, 0.9, 1e-9, "the scene field captured")
   -- no registered voice keys, no registered globals
-  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.probe, scene.data.voices[voice_idx].values.probe_switch = nil, nil end
+  for voice_idx = 1, S.constants.NUM_VOICES do scene.data.voices[voice_idx].values.probe, scene.data.voices[voice_idx].values.probe_switch = nil, nil end
   scene.data.probe_level = nil
   os.execute("mkdir -p '" .. context.data_dir .. "strata'")
   tab.save({ version = S.constants.SCENE_DATA_VERSION, scenes = { [2] = scene } }, context.data_dir .. "strata/scenes.data")
   context = load_with(register, { data_subdir = "v2_to_v3" })
   S = local_value("S")
   assert_true(S.scenes[2].populated, "the file loads")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     local extras = S.scenes[2].data.voices[voice_idx].values
     assert_equal(extras.probe, 0, "voice " .. voice_idx .. " probe default")
     assert_equal(extras.probe_switch, 0, "voice " .. voice_idx .. " probe_switch default")
@@ -692,16 +692,16 @@ test("randomize, mutations and the fader pages never touch registered params", f
   local context = load_with(function(S) S.register_voice_params(probe_record()) end)
   finish_startup(context)
   local S = local_value("S")
-  for voice_idx = 1, 7 do params:set("v" .. voice_idx .. "_probe", 0.37) end
+  for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_probe", 0.37) end
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   math.randomseed(5)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     params:set("v" .. voice_idx .. "_source", voice_idx % 3 == 0 and 2 or 1)
     randomize_voice(voice_idx)
   end
   for _ = 1, 20 do gentle_mutate() end
   for _ = 1, 20 do drift_update() end
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     assert_near(params:get("v" .. voice_idx .. "_probe"), 0.37, 1e-9, "voice " .. voice_idx .. " untouched")
     assert_equal(params:get("v" .. voice_idx .. "_probe_switch"), 0)
     for _, param_id in ipairs(fader_param_ids(voice_idx)) do

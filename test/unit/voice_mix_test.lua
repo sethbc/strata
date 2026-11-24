@@ -352,7 +352,7 @@ end)
 
 test("the voice sends show in percent and send the same value (#387)", function()
   local context = load_strata(); finish_startup(context)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     for _, key in ipairs({"delay_send", "reverb_send"}) do
       local id = "v" .. voice_idx .. "_" .. key
       assert_equal(params:string(id), "100 %", id .. " at 1.0")
@@ -437,7 +437,7 @@ test("a solo silences every voice that is not soloed", function()
   assert_equal(sent[1], 1); assert_equal(sent[3], 1)
   assert_equal(sent[2], nil, "the soloed voice was not silenced")
   assert_equal(sent[4], nil, "voice 4 was muted already")
-  for voice_idx = 5, 7 do assert_equal(sent[voice_idx], 1, "stopped voice " .. voice_idx .. " too (#640)") end
+  for voice_idx = 5, S.constants.NUM_VOICES do assert_equal(sent[voice_idx], 1, "stopped voice " .. voice_idx .. " too (#640)") end
   assert_equal(sent.count, 5)
   context.clear_engine_calls()
   params:set("v4_solo", 1)  -- voice 4 is muted and soloed: still silenced
@@ -564,14 +564,14 @@ test("randomize, mutations and the fader pages never touch mute or solo", functi
   local S = run_voices_1_to_4(context)
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   math.randomseed(5)
-  for voice_idx = 1, 7 do randomize_voice(voice_idx) end
+  for voice_idx = 1, S.constants.NUM_VOICES do randomize_voice(voice_idx) end
   for _ = 1, 20 do gentle_mutate() end
   for _ = 1, 20 do drift_update() end
   -- VOICE's section randomize draws exist, and none is mute or solo
   local record
   for _, each in ipairs(S.registry.voice_params) do if each.name == "voice_mix" then record = each end end
   assert_equal(record.randomize.mute, nil); assert_equal(record.randomize.solo, nil)
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     assert_equal(params:get("v" .. voice_idx .. "_mute"), 0); assert_equal(params:get("v" .. voice_idx .. "_solo"), 0)
     for _, param_id in ipairs(fader_param_ids(voice_idx)) do
       assert_true(not param_id:find("_mute", 1, true) and not param_id:find("_solo", 1, true), param_id)

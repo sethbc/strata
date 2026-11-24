@@ -57,7 +57,7 @@ test("SEQ draws seven rows of sixteen cells at their levels", function()
   local empty = cell(context, 2, 7)
   assert_equal(empty.filled, false, "an empty step is an outline"); assert_equal(empty.level, 1)
   local cells = 0
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for step = 1, 16 do
       if cell(context, voice_idx, step) then cells = cells + 1 end
     end
@@ -106,7 +106,7 @@ test("E3 sets the step level from 0 to 15 and K3 toggles it at 15", function()
   tap(3); assert_equal(S.patterns[3][5], 15, "K3 turns it on at 15")
   enc(3, -6); assert_equal(S.patterns[3][5], 9)
   tap(3); assert_equal(S.patterns[3][5], 0, "K3 turns a set step off")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     for step = 1, 16 do
       if not (voice_idx == 3 and step == 5) then
         assert_equal(S.patterns[voice_idx][step], 0, "only the cursor's step changes")
@@ -321,7 +321,7 @@ test("SEQ's ALT+K2 randomizes the selected voice's pattern on release; ALT+K3 cl
   local on = 0
   for step = 1, 16 do if S.patterns[3][step] > 0 then on = on + 1 end end
   assert_true(on > 0, "the release randomized")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     if voice_idx ~= 3 then
       for step = 1, 16 do assert_equal(S.patterns[voice_idx][step], 0, "other voices stay") end
     end

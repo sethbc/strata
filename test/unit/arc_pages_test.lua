@@ -131,7 +131,7 @@ test("every continuous arc ring sweeps its param's range in a full turn, followi
   assert_equal(local_value("UI_PAGES").ARC_TICKS_PER_SWEEP, 1024, "a full turn of the arc's 1024 ticks per revolution")
   -- MAIN: density, every voice's main param, grain size and density
   sweep("MAIN", 1, "master_density", "MAIN ring 1")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     set_selected(voice_idx)
     sweep("MAIN", 2, main_param_id(voice_idx), "MAIN ring 2, voice " .. voice_idx)
     sweep("MAIN", 3, "v" .. voice_idx .. "_grain_size", "MAIN ring 3, voice " .. voice_idx)

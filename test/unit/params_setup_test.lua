@@ -14,7 +14,7 @@ local engine_state_for_voice, FX_PARAM_IDS = h.engine_state_for_voice, h.FX_PARA
 test("every voice param has a menu param, ordered by param_order", function()
   load_strata()
   local voices, types = local_value("voices"), local_value("S").lib.types
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local voice = voices[voice_idx]
     local record = types.of(voice_idx)
     local previous = 0
@@ -39,7 +39,7 @@ end)
 test("grain_env is gone; the grain cloud param: options, default, scenes, never mutated or randomized", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     assert_equal(params.lookup["v" .. voice_idx .. "_grain_env"], nil, "voice " .. voice_idx .. " has no grain_env")
     assert_equal(S.voices[voice_idx].values.grain_env, nil, "and holds none")
     local param = params:lookup_param("v" .. voice_idx .. "_grain_cloud")
@@ -53,7 +53,7 @@ test("grain_env is gone; the grain cloud param: options, default, scenes, never 
   assert_equal(table.concat(names, ","), "density,overlap")
   params:set("v1_grain_cloud", 1)
   -- the scene key's default is its param's, and it is discrete
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     local _, by_key = S.lib.params_setup.voice_scene_keys(voice_idx)
     assert_equal(by_key.grain_env, nil, "voice " .. voice_idx .. ": no grain_env scene key")
     assert_equal(by_key.grain_cloud.default, 1, "voice " .. voice_idx .. " grain_cloud scene default: density")
@@ -63,7 +63,7 @@ test("grain_env is gone; the grain cloud param: options, default, scenes, never 
   params:set("v2_grain_cloud", 2)
   capture_scene(3)
   local scene = local_value("scenes")[3]
-  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.grain_cloud = nil end
+  for voice_idx = 1, S.constants.NUM_VOICES do scene.data.voices[voice_idx].values.grain_cloud = nil end
   fill_scene(scene)
   assert_equal(scene.data.voices[2].values.grain_cloud, 1, "a missing cloud fills to density")
   assert_true(validate_scene(scene), "the filled scene validates")
@@ -73,15 +73,15 @@ test("grain_env is gone; the grain cloud param: options, default, scenes, never 
   assert_true(not validate_scene(scene), "cloud index 0 is rejected")
   scene.data.voices[2].values.grain_cloud = 1
   -- mutation and randomize leave the cloud alone
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     if not S.voices[voice_idx].active then toggle_voice(voice_idx) end
     params:set("v" .. voice_idx .. "_grain_cloud", 2)
   end
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   math.randomseed(5)
   for _ = 1, 50 do gentle_mutate() end
-  for voice_idx = 1, 7 do randomize_voice(voice_idx) end
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do randomize_voice(voice_idx) end
+  for voice_idx = 1, S.constants.NUM_VOICES do
     assert_equal(params:get("v" .. voice_idx .. "_grain_cloud"), 2, "voice " .. voice_idx .. " cloud unchanged")
   end
 end)
@@ -89,7 +89,7 @@ end)
 test("grain mode param: options, default, sync, scenes, never mutated, randomized or crossfaded", function()
   local context = load_strata(); finish_startup(context)
   local voices = local_value("voices")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local param = params:lookup_param("v" .. voice_idx .. "_grain_mode")
     assert_equal(param.t, params.tOPTION, "voice " .. voice_idx .. " grain_mode is an option")
     assert_equal(param.count, 2, "two grain modes")
@@ -114,7 +114,7 @@ test("grain mode param: options, default, sync, scenes, never mutated, randomize
   end
   recall_scene(1, 0); assert_equal(params:get("v1_grain_mode"), 2, "scene recall restores the mode")
   local scene = local_value("scenes")[1]
-  for voice_idx = 1, 7 do scene.data.voices[voice_idx].values.grain_mode = nil end
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do scene.data.voices[voice_idx].values.grain_mode = nil end
   fill_scene(scene)
   assert_equal(scene.data.voices[1].values.grain_mode, 1, "missing mode migrates to continuous")
   assert_true(validate_scene(scene), "migrated scene validates")
@@ -123,15 +123,15 @@ test("grain mode param: options, default, sync, scenes, never mutated, randomize
   scene.data.voices[1].values.grain_mode = 1.5
   assert_true(not validate_scene(scene), "a fractional mode index is rejected")
   -- mutation and randomize leave the mode alone
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     if not voices[voice_idx].active then toggle_voice(voice_idx) end
     params:set("v" .. voice_idx .. "_grain_mode", 2)
   end
   params:set("mutation_probability", 1); params:set("mutation_amount", 1)
   math.randomseed(9)
   for _ = 1, 50 do gentle_mutate() end
-  for voice_idx = 1, 7 do randomize_voice(voice_idx) end
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do randomize_voice(voice_idx) end
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     assert_equal(params:get("v" .. voice_idx .. "_grain_mode"), 2, "voice " .. voice_idx .. " mode unchanged")
   end
 end)
@@ -329,7 +329,7 @@ test("source and buffer params: options, defaults, voices table, labels", functi
   assert_equal(table.concat(names, ","), "synth,buf 1,buf 2,buf 3,buf 4,buf 5,buf 6,buf 7,buf 8,input," .. table.concat(voice_names, ","))
   params:set("v1_source", 1)
   local expected = { buf_pos = 0, buf_rate = 1, buf_scan = 0 }
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local prefix = "v" .. voice_idx .. "_"
     local source = params:lookup_param(prefix .. "source")
     assert_equal(source.t, params.tOPTION, "source is an option")
@@ -407,7 +407,7 @@ local VOICE_PARAM_SPECS = {
 test("every voice param has its own spec: range, warp and step", function()
   load_strata()
   local voices = local_value("voices")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     for _, key in ipairs(voices[voice_idx].param_order) do
       local want = VOICE_PARAM_SPECS[key]
       assert_true(want ~= nil, "the table holds " .. key)
@@ -425,7 +425,7 @@ end)
 test("a voice's params follow param_order between its heading and its granular separator", function()
   load_strata()
   local voices = local_value("voices")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     local prefix = "v" .. voice_idx .. "_"
     local first, last
     for index, param in ipairs(params.params) do
@@ -858,7 +858,7 @@ local function read_once(name, silent, change)
   math.randomseed(951)
   params:read(path, silent)
   local result = { stored = {}, params = {}, calls = {}, scale = {} }
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     local voice = S.voices[voice_idx]
     result.stored["v" .. voice_idx .. " type"] = voice.name
     result.stored["v" .. voice_idx .. " source"] = voice.source
@@ -1121,7 +1121,7 @@ test("a silent read of a PSET equal to the state sends only scatter's setScatter
   params:set("filter_freq", 800); params:set("reverb_size", 0.5); params:set("delay_bypass", 1)
   params:set("shimmer_delay", 0.3); params:set("scale", 3); params:set("master_density", 1.5)
   params:write(path, "equal")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     if S.voices[voice_idx].active then toggle_voice(voice_idx) end
   end
   context.clear_engine_calls()
@@ -1229,7 +1229,7 @@ test("a silent read of an equal PSET after delay sync was turned off sends only 
   util.make_dir(context.data_dir)
   local S = local_value("S")
   local path = context.data_dir .. "equal.pset"
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, S.constants.NUM_VOICES do
     if S.voices[voice_idx].active then toggle_voice(voice_idx) end
   end
   params:set("delay_sync", 1); params:set("delay_sync", 0)

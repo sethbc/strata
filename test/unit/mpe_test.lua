@@ -319,8 +319,8 @@ end)
 test("the zone params: defaults, and a low never passes its high", function()
   local _ = setup()
   assert_equal(params:string("v1_zone"), "lower"); assert_equal(params:string("v2_zone"), "upper")
-  for voice = 3, 7 do assert_equal(params:string("v" .. voice .. "_zone"), "off") end
-  for voice = 1, 7 do
+  for voice = 3, local_value("S").constants.NUM_VOICES do assert_equal(params:string("v" .. voice .. "_zone"), "off") end
+  for voice = 1, local_value("S").constants.NUM_VOICES do
     assert_equal(params:get("v" .. voice .. "_zone_low"), 0); assert_equal(params:get("v" .. voice .. "_zone_high"), 127)
   end
   params:set("v1_zone_high", 40); params:set("v1_zone_low", 60)

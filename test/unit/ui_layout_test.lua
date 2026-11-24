@@ -266,7 +266,7 @@ test("every page's header, hints and text stay apart and inside 128x64 (M7)", fu
   context.arc.plug(1)
   local voices = local_value("voices")
   local _, set_selected = find_upvalue("selected_voice")
-  for voice_idx = 1, 7 do
+  for voice_idx = 1, local_value("S").constants.NUM_VOICES do
     set_selected(voice_idx)
     if not voices[voice_idx].active then toggle_voice(voice_idx) end
     if not local_value("locked")[voice_idx] then toggle_lock(voice_idx) end

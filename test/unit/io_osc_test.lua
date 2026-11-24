@@ -150,14 +150,14 @@ end)
 
 test("feedback sends at most 32 a tick, newest values, none lost", function()
   local context = feeding()
-  for v = 1, 7 do
+  for v = 1, local_value("S").constants.NUM_VOICES do
     context.osc.receive("/strata/watch", {"v" .. v .. "_freq"}, SENDER)
     context.osc.receive("/strata/watch", {"v" .. v .. "_pan"}, SENDER)
   end
   for m = 1, 16 do params:set("macro_" .. m, 0.2 + m / 100) end
-  for v = 1, 7 do params:set("v" .. v .. "_amp", 0.3 + v / 100); params:set("v" .. v .. "_mute", 1) end
+  for v = 1, local_value("S").constants.NUM_VOICES do params:set("v" .. v .. "_amp", 0.3 + v / 100); params:set("v" .. v .. "_mute", 1) end
   params:set("v1_freq", 300); params:set("v1_freq", 310)
-  for v = 2, 7 do params:set("v" .. v .. "_freq", 200 + v) end
+  for v = 2, local_value("S").constants.NUM_VOICES do params:set("v" .. v .. "_freq", 200 + v) end
   local changed = 16 + 14 + 7
   clear(context)
   -- the clock sleeps 1/15 s between ticks: the first tick falls inside this step
@@ -271,7 +271,7 @@ test("watch adds a param and hello sends everything watched", function()
   assert_equal(#sent_path(context, "/param/v1_freq"), 1)
   for _, id in ipairs(S.lib.io_osc.OSC.watch) do assert_equal(#sent_path(context, "/param/" .. id), 1, id) end
   assert_equal(#sent_path(context, "/strata/scene"), 1)
-  for v = 1, 7 do assert_equal(#sent_path(context, "/strata/voice/" .. v .. "/running"), 1) end
+  for v = 1, S.constants.NUM_VOICES do assert_equal(#sent_path(context, "/strata/voice/" .. v .. "/running"), 1) end
   assert_equal(#sent_path(context, "/strata/patterns"), 1)
 end)
 
@@ -367,7 +367,7 @@ test("every address in the layout description is a param or one of Strata's addr
   local _, S = started()
   local layout = dofile("tools/touchosc/lib/layout.lua")
   local known = {["/strata/scene"] = true, ["/strata/patterns"] = true}
-  for v = 1, 7 do known["/strata/voice/" .. v .. "/run"] = true; known["/strata/voice/" .. v .. "/retrigger"] = true end
+  for v = 1, S.constants.NUM_VOICES do known["/strata/voice/" .. v .. "/run"] = true; known["/strata/voice/" .. v .. "/retrigger"] = true end
   for _, id in ipairs(layout.params) do assert_true(params.lookup[id] ~= nil, id .. " is a param") end
   for _, path in ipairs(layout.addresses) do assert_true(known[path], path .. " is a Strata address") end
   local seen = {}
