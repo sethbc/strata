@@ -146,7 +146,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.setFastOffset(voice, noteSlot, destination, offset)` | `"iiif"` | Set the Lua-computed offset (-2..2 half ranges, clamped) on voice 0-6's note slot (0 in 3.4; 0..`fastModNoteSlots` - 1) and fast destination 0-4, lagged 50 ms. Creates no node |
 | `engine.setFastEnv(route, source, voice, destination, depth, attack, decay, sustain, release, curve, loop)` | `"iiiiffffffi"` | Route 0-15, fired by voice 0-6's hits, on voice 0-6's fast destination 0-4: depth -2..2, attack, decay and release 0.001-10 s, sustain 0-1, curve -8..8, loop 0/1 |
 | `engine.stopFastEnv(route)` | `"i"` | Release route 0-15's node (20 ms). No-op without one |
-| `engine.noteOn(voice, slot, note, freq, rate, velocity)` | `"iiffff"` | Start voice 0-6's note slot 0-7 (0 its own note, 1-7 extra): note 0-127, freq 8-20000 Hz, rate 0.25-4, velocity 0-1 |
+| `engine.noteOn(voice, slot, note, freq, rate, velocity)` | `"iiffff"` | Start voice 0-6's note slot 0-7 (0 its own note, 1-7 extra): note -24..151, freq 8-20000 Hz, rate 0.25-4, velocity 0-1 |
 | `engine.noteOff(voice, slot, cut)` | `"iii"` | End voice 0-6's slot 0-7: cut 0 releases, 1 cuts (50 ms) |
 | `engine.noteExpression(voice, slot, bend, amp, position, size, main)` | `"iifffff"` | Voice 0-6's slot 0-7 expression: bend ratio 0.0625-16, amp 0-2, position, size and main -1..1 half ranges. Creates no node |
 | `engine.setNotePool(size)` | `"i"` | The extra notes all voices share, 0-16 (`notePoolMax`) |

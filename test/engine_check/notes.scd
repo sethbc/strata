@@ -26,6 +26,7 @@ var checkFrozenNotes, checkSpectralNotes;
 var wireMessages, sentCount, startValue, checkParkThroughFreeze, checkSilentRestarts, checkOwnNoteOnAccent;
 var withheldNote, checkFailedStartRoom, checkFreedLeaveWatchers, checkRestartPitches, checkExtraNoteGate;
 var checkNoteRegion, checkRootNote, checkLiveWithoutSynth, checkHeldNoteRoot, checkStreamNoteRoot;
+var checkNoteRange;
 
 // A slot's record (nil while the area keeps none), and its state, its
 // synth and its cutting synth
@@ -388,6 +389,57 @@ checkStreamNoteRoot = {
     h.stopAllVoices;
 };
 
+// 3.9 (#1002): a note outside 0-127 keeps its rate. noteOn's note carries
+// the pitch Lua played, clipped to -24 to 151 (every root, 0-127, widened
+// by the rate's 24 semitones each way), so the rate the engine derives from
+// it (absoluteNoteRate) is note_values' rate. Each pitch, 132 against root
+// 110 and -5 against root 10, through both derivations: a held note at a
+// moved root (notesFollowRoot: the issue's example, 132 held on the input,
+// then the voice switched to a slot whose key is 110; and -5 held on a
+// buffer, then root 10), and a ring-stream note leaving its frozen voice
+// for a buffer at the voice's root (leaveStream). 3.563595 and 0.420448 are
+// Lua's; from a note clipped to 0-127 the engine gave 2.669680 and 0.561231
+checkNoteRange = {
+    var input = 1, buffer = 2, stream = [3, 4], high = 132, low = -5, problems = List.new;
+    var expected = { arg pitch, root; (2 ** ((pitch - root) / 12)).clip(0.25, 4) };
+    // the slot's kept rate and its synth's bufRate, against Lua's rate
+    var agrees = { arg what, voice, rate;
+        var kept = slotRecord.(voice, 1) !? { arg record; record[\rate] }, played = controlOf.(slotSynth.(voice, 1), \bufRate);
+        if ((near.(kept, rate, 0.000001) and: { near.(played, rate) }).not) {
+            problems.add("% kept % and played %, not %".format(what, kept, played, rate))
+        };
+    };
+    command.(\setNotePool, 8);
+    if (engine.bufferFrames[0] == 0) { command.(\loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0) };
+    // held notes at a moved root (notesFollowRoot)
+    startInputVoice.(input);
+    playNote.(input, 1, 4.0, 1.0, 2000.0, high.asFloat);
+    command.(\setGrainSource, input, 1);
+    command.(\setGrainParam, input, \rootNote, 110.0);
+    startBufferVoice.(buffer);
+    playNote.(buffer, 1, 0.25, 1.0, 20.0, low.asFloat);
+    command.(\setGrainParam, buffer, \rootNote, 10.0);
+    server.sync; 0.05.wait;
+    agrees.("132 held on the input, switched to key 110", input, 3.563595);
+    agrees.("-5 held on a buffer at root 10", buffer, 0.420448);
+    // ring-stream notes leaving their frozen voices at the voice's root (leaveStream)
+    [[stream[0], high, 110.0], [stream[1], low, 10.0]].do({ arg entry;
+        command.(\setGrainParam, entry[0], \rootNote, entry[2]);
+        startSynthVoice.(entry[0]);
+        command.(\setGrainParam, entry[0], \freeze, 1.0); server.sync;
+        playNote.(entry[0], 1, if (entry[1] > 0) { 4.0 } { 0.25 }, 1.0, if (entry[1] > 0) { 2000.0 } { 20.0 }, entry[1].asFloat);
+        server.sync;
+        command.(\setGrainSource, entry[0], 1);
+    });
+    server.sync; 0.05.wait;
+    agrees.("a stream note of 132 leaving at root 110", stream[0], expected.(high, 110));
+    agrees.("a stream note of -5 leaving at root 10", stream[1], expected.(low, 10));
+    check.(problems.isEmpty and: { near.(expected.(high, 110), 3.563595) } and: { near.(expected.(low, 10), 0.420448) },
+        "notes: a note outside 0-127 keeps Lua's rate at a moved root and leaving a stream (#1002; problems %)".format(problems.asArray));
+    ([input, buffer] ++ stream).do({ arg voice; command.(\setGrainParam, voice, \rootNote, 60.0) });
+    h.stopAllVoices;
+};
+
 // Each command, with valid arguments, to a running voice with the pool
 // empty: the server's node count is the same after each, and the extra
 // note, which the empty pool has no room for, is refused with one line
@@ -427,8 +479,11 @@ checkRecorded = {
     var calls = [
         [[\noteOn, 6, 7, 127.0, 20000.0, 4.0, 1.0], [6, 7, 127.0, 20000.0, 4.0, 1.0]],
         [[\noteOn, 0, 0, 0.0, 8.0, 0.25, 0.0], [0, 0, 0.0, 8.0, 0.25, 0.0]],
-        [[\noteOn, 3, 4, 128.0, 7.0, 0.2, 1.5], [3, 4, 127.0, 8.0, 0.25, 1.0]],
-        [[\noteOn, 3, 4, -1.0, 20001.0, 4.1, -0.5], [3, 4, 0.0, 20000.0, 4.0, 0.0]],
+        // 3.9 (#1002): the note is clipped to -24 to 151, not 0-127
+        [[\noteOn, 5, 2, 151.0, 2000.0, 4.0, 1.0], [5, 2, 151.0, 2000.0, 4.0, 1.0]],
+        [[\noteOn, 5, 2, -24.0, 20.0, 0.25, 1.0], [5, 2, -24.0, 20.0, 0.25, 1.0]],
+        [[\noteOn, 3, 4, 152.0, 7.0, 0.2, 1.5], [3, 4, 151.0, 8.0, 0.25, 1.0]],
+        [[\noteOn, 3, 4, -25.0, 20001.0, 4.1, -0.5], [3, 4, -24.0, 20000.0, 4.0, 0.0]],
         [[\noteOff, 0, 0, 0], [0, 0, 0]],
         [[\noteOff, 6, 7, 1], [6, 7, 1]],
         [[\noteExpression, 6, 7, 16.0, 2.0, 1.0, -1.0, 1.0], [6, 7, 16.0, 2.0, 1.0, -1.0, 1.0]],
@@ -1842,6 +1897,7 @@ if (area.isNil or: { state.isNil }) {
     checkRootNote.value;
     checkHeldNoteRoot.value;
     checkStreamNoteRoot.value;
+    checkNoteRange.value;
     // failed starts
     checkFailedStartRoom.value;
     checkFreedLeaveWatchers.value;

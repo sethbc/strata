@@ -562,10 +562,10 @@ local NOTES_WALK_OPS = {
 -- compare names each; the walks must meet each one, "allowed_<name>" in
 -- reached, so the fault's fix removes it). None is open: 3.9's #958 (a
 -- held buffer or input note at its old root's rate) is fixed, the engine
--- deriving each held note's rate again at a rootNote; its edge, #1002 (a
--- pitch outside 0-127, whose rate the engine derives from the clamped
--- note), needs a pitch outside 0-127 at a root outside 24-103, and the
--- walk draws neither: its roots are 60 or slot 1's key (47 + random(26):
+-- deriving each held note's rate again at a rootNote, and so is its edge,
+-- #1002 (a pitch outside 0-127: noteOn's note now carries it, clipped only
+-- where the rate clips too, notes_test.lua), which the walk does not draw
+-- either way: its roots are 60 or slot 1's key (47 + random(26):
 -- 48-73), and its pitches the MIDI keys 48-73 in twelve equal steps (no
 -- tuning is set) and the patterns' chords around each voice's own pitch,
 -- which may be fractional (36.5 to 78 over the four seeds, read by a
