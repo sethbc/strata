@@ -27,10 +27,9 @@ Model.__index = Model
 -- The engine's command ranges (AGENTS.md's command table): what it clips
 -- to, so a value Lua sends outside them is a value the engine changed
 local ENGINE = {
-  rate = { 0.003, 50 }, depth = { 0, 1 }, offset = { -2, 2 }, shapes = 8,
+  rate = { 0.003, 50 }, depth = { 0, 1 }, offset = { -2, 2 },
   env_depth = { -2, 2 }, sustain = { 0, 1 }, curve = { -8, 8 },
   scatter_depth = { 0, 1 }, scatter_rate = { 0.01, 1 },
-  note_slot = 0,             -- setFastOffset's slot: Lua's matrix uses 0 only (MATRIX.note_slot)
   ulp = 1e-9,                -- a relative difference no tolerance is: two values the same but for rounding
 }
 Model.ENGINE = ENGINE
@@ -39,21 +38,26 @@ Model.ENGINE = ENGINE
 -- hit on a voice): a start, a retrigger, an extra note's start
 local HITS = { voiceOn = true, retrigger = true, noteOn = true }
 
--- constants: S.constants (NUM_LFOS, NUM_VOICES, NUM_FAST_DESTINATIONS,
--- ENVELOPES.routes and its times)
-function Model.new(constants)
+-- constants: S.constants (NUM_VOICES, ENVELOPES' times); engine: the
+-- engine's own numbers, h.engine_spec (read from its source by the stub):
+-- its LFOs, shapes, fast destinations, note slots a channel takes
+-- (fastModNoteSlots) and envelope routes, which bound its guards
+function Model.new(constants, engine)
   assert(type(constants) == "table" and type(constants.ENVELOPES) == "table", "Model.new: constants is S.constants")
+  assert(type(engine) == "table" and type(engine.fast_mod_note_slots) == "number"
+    and type(engine.num_fast_lfo_shapes) == "number", "Model.new: engine is h.engine_spec")
   local model = setmetatable({
-    lfo_count = constants.NUM_LFOS, voice_count = constants.NUM_VOICES,
-    destinations = constants.NUM_FAST_DESTINATIONS, route_count = constants.ENVELOPES.routes,
+    lfo_count = engine.num_fast_lfos, voice_count = constants.NUM_VOICES, shapes = engine.num_fast_lfo_shapes,
+    destinations = engine.num_fast_destinations, route_count = engine.num_env_routes,
+    note_slots = engine.fast_mod_note_slots,
     times = { constants.ENVELOPES.time_min, constants.ENVELOPES.time_max },
-    lfos = {}, offsets = {}, routes = {}, scatter = nil, hits = {}, ended = {}, read = 0, errors = {}, allowed = {},
+    lfos = {}, offsets = {}, routes = {}, scatter = nil, hits = {}, ended = {}, ended_runs = {}, read = 0, errors = {}, allowed = {},
     counts = { lfo_started = 0, lfo_stopped = 0, lfo_replaced = 0, lfo_moved = 0, lfo_synced = 0, offsets_sent = 0,
       routes_set = 0, routes_moved = 0, routes_stopped = 0, scatter_sent = 0, hits = 0, envelopes_ended = 0 },
   }, Model)
   for voice = 0, constants.NUM_VOICES - 1 do
     model.offsets[voice] = {}
-    for destination = 0, constants.NUM_FAST_DESTINATIONS - 1 do model.offsets[voice][destination] = 0 end
+    for destination = 0, engine.num_fast_destinations - 1 do model.offsets[voice][destination] = 0 end
   end
   return model
 end
@@ -102,7 +106,7 @@ local RECEIVERS = {}
 function RECEIVERS.setFastLfo(self, args)
   local lfo, voice, destination, shape = args[1], args[2], args[3], args[4]
   if not self:guarded("setFastLfo", { { "lfo", lfo, self.lfo_count - 1 }, { "voice", voice, self.voice_count - 1 },
-    { "destination", destination, self.destinations - 1 }, { "shape", shape, ENGINE.shapes - 1 } },
+    { "destination", destination, self.destinations - 1 }, { "shape", shape, self.shapes - 1 } },
     { { "rate", args[5] }, { "depth", args[6] }, { "offset", args[7] } }) then return end
   local node = { voice = voice, destination = destination, shape = shape,
     rate = self:clipped("setFastLfo", "rate", args[5], ENGINE.rate),
@@ -141,7 +145,7 @@ end
 
 function RECEIVERS.setFastOffset(self, args)
   local voice, slot, destination = args[1], args[2], args[3]
-  if not self:guarded("setFastOffset", { { "voice", voice, self.voice_count - 1 }, { "noteSlot", slot, ENGINE.note_slot },
+  if not self:guarded("setFastOffset", { { "voice", voice, self.voice_count - 1 }, { "noteSlot", slot, self.note_slots - 1 },
     { "destination", destination, self.destinations - 1 } }, { { "offset", args[4] } }) then return end
   -- the matrix sends its clamped sum, so a value past the range is Lua's fault
   self.offsets[voice][destination] = self:clipped("setFastOffset", "offset", args[4], ENGINE.offset)
@@ -243,26 +247,32 @@ function Model.anything_waiting(S)
   return (queue ~= nil and next(queue.due) ~= nil) or (budget ~= nil and #budget.order > 0)
 end
 
--- LFO n's rate as its params give it: the rate param (free) or its division
--- at the tempo (clocked), between the engine's bounds; an LFO whose rate or
--- depth follows another LFO plays Lua's modulated values (its inputs are
--- Lua's to evaluate), which the model takes as given
+-- LFO n's rate and depth as its params give them (design 3.4 §2.4): the
+-- rate param (free) or its division at the tempo (clocked), times 4 ^
+-- (amount x s), between the engine's bounds; the depth param times 1 +
+-- amount x s, between 0 and 100; s the shape value of the lower LFO its
+-- input names (0 for none: the source's value, Lua's as every source is,
+-- is 0 while it is off)
+local function input_value(S, n, input)
+  local option = params:get(lfo_id(n, input))
+  if option <= 1 then return 0 end
+  return S.lib.lfos.value(option - 1)
+end
+
 local function lfo_want(S, n)
   local LFO = S.lib.lfos.LFO
-  local modulated = (params:get(lfo_id(n, "rate_mod")) > 1 and params:get(lfo_id(n, "rate_mod_amt")) ~= 0)
-    or (params:get(lfo_id(n, "depth_mod")) > 1 and params:get(lfo_id(n, "depth_mod_amt")) ~= 0)
-  local rate, depth
-  if modulated then
-    rate, depth = S.lib.lfos.effective_rate(n), S.lib.lfos.effective_depth(n)
+  local rate
+  if params:get(lfo_id(n, "mode")) == 2 then
+    rate = 1 / (LFO.division_values[params:get(lfo_id(n, "division"))] * LFO.beats_per_division
+      * S.lib.params_setup.beat_seconds_now())
   else
-    if params:get(lfo_id(n, "mode")) == 2 then
-      rate = 1 / (LFO.division_values[params:get(lfo_id(n, "division"))] * LFO.beats_per_division
-        * S.lib.params_setup.beat_seconds_now())
-    else
-      rate = params:get(lfo_id(n, "rate"))
-    end
-    rate, depth = math.min(LFO.engine_max_hz, math.max(LFO.min_hz, rate)), params:get(lfo_id(n, "depth"))
+    rate = params:get(lfo_id(n, "rate"))
   end
+  rate = rate * 4 ^ (params:get(lfo_id(n, "rate_mod_amt")) / 100 * input_value(S, n, "rate_mod"))
+  rate = math.min(LFO.engine_max_hz, math.max(LFO.min_hz, rate))
+  local depth = params:get(lfo_id(n, "depth"))
+    * (1 + params:get(lfo_id(n, "depth_mod_amt")) / 100 * input_value(S, n, "depth_mod"))
+  depth = math.min(100, math.max(0, depth))
   return { shape = params:get(lfo_id(n, "shape")) - 1, rate = rate, depth = depth / 100,
     offset = math.min(ENGINE.offset[2], math.max(ENGINE.offset[1], 2 * params:get(lfo_id(n, "offset")) / 100)) }
 end
@@ -334,6 +344,30 @@ local function channel_sums(S)
     end
   end
   return sums
+end
+
+-- The params the sources in `moved` (a set of source keys) reach now: each
+-- playing routing's from one of them, and each playing home of an LFO
+-- among them (lfo<n>) whose param is not its own (a Lua home, a v<i>_main;
+-- a fast home is its node, a macro its own hand-over), resolved. A set of
+-- param ids: what a moved source may send in a step that has nothing else
+-- to do
+function Model.reached_ids(S, moved)
+  local ids = {}
+  for k = 1, S.constants.MATRIX_SLOTS do
+    local id = routing_plays(S, k)
+    if id and moved[S.matrix[k].source] then ids[id] = true end
+  end
+  for n = 1, S.constants.NUM_LFOS do
+    local key = S.lib.matrix.home(n)
+    if moved["lfo" .. n] and params:get(lfo_id(n)) == 1 and params:get(lfo_id(n, "depth")) > 0
+      and not S.lib.lfos.fast_destination(key) and not tostring(key):match("^macro_%d+$")
+      and S.lib.matrix.home_known(key) then
+      local id = resolve(key)
+      if id then ids[id] = true end
+    end
+  end
+  return ids
 end
 
 -- Route k as the params imply it: a playing routing from env<v> to a fast
@@ -482,16 +516,20 @@ function Model:compare_envelopes(S, problems, allow)
     elseif self.hits[voice] then
       local run = env("attack") + env("decay") + (env("sustain") > 0 and env("release") or 0)
       if not self.ended[voice] and now - self.hits[voice] >= run then
-        self.ended[voice] = true
+        self.ended[voice], self.ended_runs[voice] = true, run
         self.counts.envelopes_ended = self.counts.envelopes_ended + 1
       end
       if self.ended[voice] and S.lib.envelopes.value(voice) > 0 then
         -- Lua's own record of the hit, for the line only (upvalue of value)
         local lua_hit = (upvalue(S.lib.envelopes.value, "hits") or {})[voice]
-        self:differ(problems, allow, "ended_runs_again", string.format("voice %d's envelope ended and runs again (%g)"
-          .. " with no hit since (#969): hit at %.3f s (Lua's at %s), now %.3f s, a run of %.3f s now", voice,
-          S.lib.envelopes.value(voice), self.hits[voice], lua_hit and string.format("%.3f s", lua_hit.time) or "none",
-          now, run))
+        -- #969's case only: a time raised since the end was seen, so the run
+        -- now outlasts the time since the hit; any other level above 0 is
+        -- a problem whatever allow says
+        local raised = run > self.ended_runs[voice] and run > now - self.hits[voice]
+        self:differ(problems, raised and allow, "ended_runs_again", string.format("voice %d's envelope ended and runs again (%g)"
+          .. " with no hit since (%s): hit at %.3f s (Lua's at %s), now %.3f s, a run of %.3f s now (%.3f s when it ended)",
+          voice, S.lib.envelopes.value(voice), raised and "#969" or "no time raised: not #969", self.hits[voice],
+          lua_hit and string.format("%.3f s", lua_hit.time) or "none", now, run, self.ended_runs[voice]))
       end
     end
   end
