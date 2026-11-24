@@ -1,0 +1,3 @@
+### Fixed
+- A damaged `gestures.data`, `macros.data`, `matrix.data`, `sequences.data`, `samples.data`, `voices.data`, `io.data`, `grids.data`, `notes.data` or `factory.data`, or a PSET's damaged side file, now has its lines at the end of SETUP's list, as the scenes and buffers files already did: `gestures unreadable, kept` and `as gestures.data.bak` when it was moved aside, `gestures file unreadable` and `left in place` when it could not be moved, `gestures file not saved` when its last write failed. Before, only a console line said so, and the recordings, macros or routings were simply empty.
+- A grid of a size Strata has no layout for reads `no layout` beside its size on SETUP (`10x10 no layout`); before, it was dark and its keys did nothing, with no word why.

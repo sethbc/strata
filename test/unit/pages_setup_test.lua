@@ -793,6 +793,82 @@ test("SETUP's data file problems follow buffers:, as the design places them (#30
   assert_true(joined:find("buffers: 0 restored|scenes unreadable, kept|as scenes.data.bak|buffers file not saved",
     1, true), joined)
 end)
+
+-- 3.9 (#895): every data file's problem has a SETUP row, from
+-- S.lib.data_files.problems(); the scenes' and buffers' rows are their own
+-- (S.scene_file, S.buffer_file) and come first
+test("a damaged gestures.data has a SETUP row naming its backup", function()
+  local subdir = "setup-gestures-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  os.execute("mkdir -p '" .. dir .. "'")
+  write_text(dir .. "gestures.data", "return {")
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  local problems = S.lib.data_files.problems()
+  assert_equal(#problems, 1, "one file has a problem")
+  assert_equal(problems[1].file, dir .. "gestures.data")
+  assert_equal(problems[1].problem, "unreadable")
+  assert_equal(problems[1].backup, dir .. "gestures.data.bak")
+  assert_true(status_texts():find("buffers: 0 restored|gestures unreadable, kept|as gestures.data.bak", 1, true)
+    ~= nil, status_texts())
+  show_page("SETUP"); enc(2, 60); redraw()
+  assert_true(screen_shows(context, "gestures unreadable, kept"), "drawn at the end of the list")
+  assert_true(screen_shows(context, "as gestures.data.bak"), "its backup's name")
+  assert_screen_layout(context, "SETUP a damaged gestures.data")
+end)
+
+-- The three rules for a file that can be neither used nor set aside
+-- (docs/notes/lua/data-files.md, Each file's states): never written
+-- (macros.data), written by an explicit save (scenes.data: its own rows),
+-- written at the next change (grids.data). Each has its row; the next
+-- change's write ends the last one's, and nothing ends the first's
+test("an unusable file has a row under each of the three rules", function()
+  local subdir = "setup-three-rules-" .. math.random(1, 1e9)
+  local dir = h.data_root .. subdir .. "/strata/"
+  for _, file in ipairs({ "macros.data", "scenes.data", "grids.data" }) do
+    os.execute("mkdir -p '" .. dir .. file .. ".bak'")
+    for number = 2, 9 do os.execute("mkdir -p '" .. dir .. file .. ".bak." .. number .. "'") end
+    write_text(dir .. file, "return {")
+  end
+  local context = load_strata({ data_subdir = subdir }); finish_startup(context)
+  local S = local_value("S")
+  local texts = status_texts()
+  assert_true(texts:find("scenes file unreadable|not saved over", 1, true) ~= nil, "explicit save: " .. texts)
+  assert_true(texts:find("macros file unreadable|left in place", 1, true) ~= nil, "never written: " .. texts)
+  assert_true(texts:find("grids file unreadable|left in place", 1, true) ~= nil, "next change: " .. texts)
+  local _, scenes_rows = texts:gsub("scenes", "")
+  assert_equal(scenes_rows, 1, "the scenes keep their one row: " .. texts)
+  show_page("SETUP"); enc(2, 60); redraw()
+  assert_screen_layout(context, "SETUP an unusable file under each rule")
+  -- the next change writes grids.data over (its row goes); macros.data is never written
+  context.grid.plug(1, 16, 8)
+  assert_true(S.lib.grid_core.set_rotation(1, 1), "the rotation is saved")
+  assert_true(S.lib.macros.set_target(1, 1, "filter_freq", 0, 1), "a change macros.data would hold")
+  context.clock.run_for(1)
+  texts = status_texts()
+  assert_true(not texts:find("grids file", 1, true), "the next change wrote grids.data: " .. texts)
+  assert_true(texts:find("macros file unreadable|left in place", 1, true) ~= nil, "still in place: " .. texts)
+end)
+
+-- 3.9 (#931): a size with no layout is dark and dead; SETUP says so
+test("a grid of a size with no layout reads no layout on SETUP", function()
+  local context = load_strata(); finish_startup(context)
+  context.grid.plug(1, 10, 10)
+  context.grid.plug(2, 16, 16)
+  local texts = status_texts()
+  assert_true(texts:find("grid: 2 connected|10x10 no layout 16x16", 1, true) ~= nil, texts)
+  show_page("SETUP"); enc(2, 60); redraw()
+  assert_true(screen_shows(context, "10x10 no layout 16x16"), "drawn")
+  -- four grids, two of them with no layout: the sizes wrap onto a second row
+  context.grid.plug(3, 12, 6)
+  context.grid.plug(4, 8, 8)
+  texts = status_texts()
+  assert_true(texts:find("10x10 no layout 16x16|12x6 no layout 8x8", 1, true) ~= nil, texts)
+  assert_every_row_reachable(context, "four grids")
+  redraw()
+  assert_screen_layout(context, "SETUP grids with no layout")
+end)
+
 -- The values a controller got on cc, in order, comma-joined
 local function cc_echoes(controller, cc)
   local values = {}

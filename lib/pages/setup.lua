@@ -39,7 +39,18 @@ return function(S)
     -- and older, the same for a scenes file of an older Strata (a format
     -- below the floor); not saved, a write that failed
     file_texts = {kept = " unreadable, kept", unreadable = " file unreadable", ["not saved"] = " file not saved",
-      older_kept = " older, kept", older = " file older", kept_note = "as ", in_place_note = "not saved over"},
+      older_kept = " older, kept", older = " file older", kept_note = "as ", in_place_note = "not saved over",
+      -- 3.9 (#895): any other data file's note while it is still in place
+      -- (whether a later change writes over it is the file's own rule,
+      -- docs/notes/lua/data-files.md)
+      left_note = "left in place"},
+    -- the data files whose rows are their own (S.scene_file, S.buffer_file),
+    -- in Strata's data folder: S.lib.data_files.problems() rows skip them
+    own_rows = {"scenes.data", "buffers.data"},
+    data_suffix = "%.data$",  -- left off a file's name in its row's label
+    -- 3.9 (#931): after a connected grid's size with no layout
+    -- (S.lib.grid_core.layout_of)
+    no_layout = " no layout",
     -- a grid port's rotation field (kind "rotation", #323): its setting
     -- (S.lib.grid_core.rotation, 0-3) shown in degrees; the fields, one per
     -- port, are made at the first look (grid core sets S.MAX_GRID_PORTS)
@@ -104,17 +115,27 @@ return function(S)
   -- scrolls on over the status rows below it (#319)
   local setup_view = {tail = 0}
 
-  -- The connected grids' count and sizes, in port order
+  -- The connected grids' count and the sizes' rows: each size in port
+  -- order, followed by "no layout" when Strata has no layout for it (#931:
+  -- such a grid is dark and its keys do nothing), as many on a row as end
+  -- by x value_right
   local function connected_grids()
-    local count, sizes = 0, {}
+    local count, rows = 0, {}
     for port = 1, S.MAX_GRID_PORTS do
       local grid_port = S.grids[port]
       if grid_port and grid_port.device then
         count = count + 1
-        table.insert(sizes, grid_port.cols .. "x" .. grid_port.rows)
+        local size = grid_port.cols .. "x" .. grid_port.rows
+        if not S.lib.grid_core.layout_of(port) then size = size .. SETUP_PAGE.no_layout end
+        local joined = rows[#rows] and (rows[#rows] .. " " .. size)
+        if joined and screen.text_extents(joined) <= SETUP_PAGE.value_right then
+          rows[#rows] = joined
+        else
+          rows[#rows + 1] = size
+        end
       end
     end
-    return count, sizes
+    return count, rows
   end
 
   local function note_row(text)
@@ -153,6 +174,37 @@ return function(S)
     end
   end
 
+  -- 3.9 (#895): a row (and its note row) for every other data file with a
+  -- problem, as S.lib.data_files.problems() lists them (the live
+  -- gestures.data, a PSET's side file, grids.data, ...), in the order
+  -- found: "<name> unreadable, kept" and "as <backup>"; "<name> file
+  -- unreadable" and "left in place"; "<name> file not saved". The name is
+  -- the file's without ".data", cut to fit the row
+  local function add_other_file_rows(rows)
+    local texts, text = SETUP_PAGE.file_texts, S.lib.ui_text
+    local own = {}
+    for _, file in ipairs(SETUP_PAGE.own_rows) do own[S.lib.scenes.scene_data_dir .. file] = true end
+    for _, entry in ipairs(S.lib.data_files.problems()) do
+      if not own[entry.file] then
+        local name = entry.file:match("[^/]*$"):gsub(SETUP_PAGE.data_suffix, "")
+        local suffix, note
+        if entry.problem == "not saved" then
+          suffix = texts["not saved"]
+        elseif entry.backup then
+          suffix, note = texts.kept, texts.kept_note .. entry.backup:match("[^/]*$")
+        else
+          suffix, note = texts.unreadable, texts.left_note
+        end
+        local room = SETUP_PAGE.value_right - screen.text_extents(suffix)
+        local shown = text.fit_text(name, room):gsub("%s+$", "")  -- no space left at the cut
+        table.insert(rows, {selectable = false, text = shown .. suffix})
+        if note then
+          table.insert(rows, note_row(text.fit_text(note, SETUP_PAGE.value_right - SETUP_PAGE.note_indent)))
+        end
+      end
+    end
+  end
+
   -- A row (and its dim note row) per data file with a problem (#463): one
   -- that could not be read, kept under its backup's name or still in place
   -- (not saved over), or one whose last write failed. They end the list,
@@ -172,6 +224,7 @@ return function(S)
         table.insert(rows, {selectable = false, text = label .. texts[state.problem]})
       end
     end
+    add_other_file_rows(rows)
   end
 
   -- The grid ports' rotation fields, one per port, connected or not: a row
@@ -207,8 +260,8 @@ return function(S)
     if running_note then table.insert(rows, note_row(running_note)) end
     local grid_count, grid_sizes = connected_grids()
     table.insert(rows, {selectable = false, text = "grid: " .. grid_count .. " connected"})
-    if grid_count > 0 then
-      table.insert(rows, {selectable = false, text = table.concat(grid_sizes, " "), dim = true})
+    for _, sizes in ipairs(grid_sizes) do
+      table.insert(rows, {selectable = false, text = sizes, dim = true})
     end
     table.insert(rows, {selectable = false, text = "arc: " .. (S.arc_connected and "connected" or "none")})
     local buffers_missing = 0
@@ -542,6 +595,28 @@ return function(S)
         S.performance_start_setting = {performance = "high", buffer_seconds = 300}
         S.scene_file.problem, S.scene_file.backup = "unreadable", "/x/scenes.data.bak"
         S.buffer_file.problem = "not saved"
+        enc(2, 60)
+      end},
+      -- 3.9 (#895): the other data files' rows, through the reader, the
+      -- set-aside and the writer: a damaged gestures.data kept, a PSET's
+      -- side file with a long name in place, a write that failed
+      {name = "other data files' problems", setup = function()
+        local data_files, folder = S.lib.data_files, S.lib.scenes.scene_data_dir
+        util.make_dir(folder)
+        for _, file in ipairs({"gestures.data", "a very long preset name.sequences.data"}) do
+          local handle = io.open(folder .. file, "w")
+          handle:write("return {")
+          handle:close()
+          data_files.read(folder .. file)
+        end
+        data_files.set_aside(folder .. "gestures.data", ".bak")
+        data_files.write(folder .. "missing folder/matrix.data", {version = 1})
+        enc(2, 60)
+      end},
+      -- 3.9 (#931): four grids, two of sizes with no layout
+      {name = "grids with no layout", setup = function(context)
+        context.grid.plug(1, 10, 10); context.grid.plug(2, 16, 16)
+        context.grid.plug(3, 12, 6); context.grid.plug(4, 8, 8)
         enc(2, 60)
       end},
       {name = "a 16x8 turned upright, the rotation fields", setup = function(context)
