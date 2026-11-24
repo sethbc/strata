@@ -3011,6 +3011,11 @@ test("a forgotten restore's failure empties the slot as a tracked one's does (#9
   assert_true(buffers[4].restoring, "the last failure gives the restore back")
   assert_equal(buffers[4].path, corrupt)
   assert_equal(#buffers[4].pending_loads, 0, "its own load forgotten in flight")
+  -- a repeated report of a later load's failure is not the restore's
+  -- (load 1, init's first load of the slot): it changes nothing
+  context.polls.fire("bufferLoadFailed", load_failed_value(4, tracked + 1))
+  assert_true(buffers[4].restoring, "a repeated failure leaves the restore waiting")
+  assert_equal(buffers[4].path, corrupt); assert_equal(S.lib.buffers.status(4), "loading")
   context.clock.run_for(0.11)
   local path = context.data_dir .. "strata/buffers.data"
   local restore, opened = watch_writes("buffers.data")
@@ -3138,8 +3143,13 @@ test("a given-back check's rejection gives its failure the length its cancel lef
   load_buffer(1, "/tmp/bad.wav")                                     -- load 3
   context.polls.fire("bufferLoadFailed", load_failed_value(1, 3))
   assert_equal(buffers[1].checking_load, 2, "long1's check is given back")
+  local device = context.grid.plug(1, 16, 16)
+  S.lib.grid_core.set_page(1, S.constants.GRID_PAGES.sources)
+  local refreshes = device.refresh_count
   state_report(context, 1, 2, 0)                                     -- the rejection's re-report
   assert_equal(buffers[1].checking_load, 2, "which ends no check")
+  assert_equal(buffers[1].seconds, 0, "its seconds are kept")
+  assert_true(device.refresh_count > refreshes, "and the grid's buffer page redrawn with them")
   context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
   assert_equal(S.lib.buffers.status(1), "empty", "the prepared take had emptied the slot")
   assert_equal(buffers[1].path, nil); assert_equal(buffers[1].settled_empty, "take", "its take still adoptable")
