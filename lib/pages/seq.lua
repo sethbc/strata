@@ -57,14 +57,16 @@ return function(S)
     -- blank columns after step 16's cursor (to 104) and a space (4 px)
     -- before the G (from 116; #735: "fill" would touch it)
     fill_mark = "f", fill_x = 108, fill_level = 15,
-    -- 3.9 (#921): the status line at status_x, baseline status_y, between
-    -- the last row (its text on y 43-47) and the hint row (57-61), within
+    -- 3.9 (#921): the status line at status_x, baseline status_y (54: its
+    -- capitals on y 49-53, a descender to 55), between the last row (its
+    -- text on y 43-47) and the hint row (57-61), a blank row on each side
+    -- (48 and 56), within
     -- status_right: the chain's place, an armed division reset and the step
     -- outputs that failed since the last start, each in brackets, a space
     -- apart, left to right; nothing while none holds. The long forms while
     -- they fit, else the short ones (bars as "b", the reset's "at bar"
     -- dropped), the outputs' names cut to the room left
-    status_x = 0, status_y = 55, status_right = 128, status_level = 10,
+    status_x = 0, status_y = 54, status_right = 128, status_level = 10,
     chain_none = "chain [none]", reset_long = "[reset at bar]", reset_short = "[reset]",
     -- the chain's short forms with no scene (#921 review): "[chain -]" with
     -- none to link, "[S- <n>b]" before its first link, so a reset and

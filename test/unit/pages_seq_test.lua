@@ -1436,10 +1436,10 @@ test("SEQ's hint follows a start begun or taken back from a grid or the arc", fu
   assert_equal(hint_text(context), "K2:play K3:step E3:level", "the arc's take-back shows")
 end)
 
--- #921: the pattern view's status line, at y 55 between the last row and
+-- #921: the pattern view's status line, at y 54 between the last row and
 -- the hint row: the chain's place, an armed division reset and the step
 -- outputs that failed, left to right. Its text, or nil while none holds
-local STATUS_Y = 55
+local STATUS_Y = 54
 local function status_text(context)
   context.screen.clear(); redraw()
   local found
