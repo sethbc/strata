@@ -20,12 +20,21 @@ local function loaded()
   return context, S, S.lib.ui_zones
 end
 
--- The note tap is the MIDI module's (S.lib.midi_in.set_note_tap, package
--- 2b's): this double records what the editor sets, and a test plays notes
+-- The note tap is the MIDI module's (S.lib.midi_in.set_note_tap(owner, fn)
+-- and clear_note_tap(owner), package 2b's, owned since 3.9's #900): this
+-- double records what the editor sets and clears, and a test plays notes
 -- by calling it
 local function tap_double(S)
   local double = { sets = 0 }
-  S.lib.midi_in.set_note_tap = function(fn) double.sets = double.sets + 1; double.fn = fn end
+  S.lib.midi_in.set_note_tap = function(owner, fn)
+    double.sets = double.sets + 1; double.owner, double.fn = owner, fn
+    return true
+  end
+  S.lib.midi_in.clear_note_tap = function(owner)
+    if owner ~= double.owner then return false end
+    double.owner, double.fn = nil, nil
+    return true
+  end
   return double
 end
 
@@ -196,6 +205,56 @@ test("a learn ends after 10 s, at K2 and at cleanup, and the note tap is cleared
   assert_equal(double.fn, nil, "and clears the tap")
   assert_equal(#context.engine_calls, 0, "no engine command (norns has freed the engine, #461)")
   zones.close()
+end)
+
+-- 3.9 (#900): the tap has an owner, so the scale editor can neither take
+-- nor clear the learn's. The scale editor opened over the editor while a
+-- learn waits (its open asks for the tap and is refused), then closed (its
+-- clear names its own owner and does nothing): the learn's real tap takes
+-- the next MIDI note
+test("the zones learn's tap is not cleared by the scale editor", function()
+  local context, S, zones = loaded()
+  local midi_in = S.lib.midi_in
+  assert_true(zones.learn(3), "a learn waits")
+  S.lib.ui_scale_editor.open()
+  local after_open = midi_in.note_tap_owner and midi_in.note_tap_owner()
+  S.lib.ui_scale_editor.close()
+  context.midi.send(1, { type = "note_on", note = 64, vel = 100, ch = 1 })
+  assert_equal(params:get("v3_zone_low"), 64, "the learn takes the next note")
+  assert_equal(next(S.midi_state.held[1]), nil, "which plays nothing: no key is down")
+  assert_equal(after_open, zones.ZONES_EDITOR.tap_owner, "the scale editor's open took nothing")
+  zones.cancel_learn()
+end)
+
+-- 3.9 (#900): a MIDI reset (a channel mode change here) clears the tap and
+-- tells its owner: a waiting learn ends, with its notice and its clock
+test("a MIDI reset tells the zones learn, which ends", function()
+  local context, S, zones = loaded()
+  assert_true(zones.learn(2), "a learn waits")
+  params:set("midi_channel_mode", 2)
+  assert_equal(zones.learning(), nil, "the reset ended the learn")
+  assert_equal(S.zones_learn_clock, nil, "and its clock")
+  assert_equal(S.lib.ui_flash.text("header"), nil, "the notice goes")
+  assert_equal(S.lib.midi_in.note_tap_owner(), nil, "the tap is no one's")
+  context.midi.send(1, { type = "note_on", note = 64, vel = 100, ch = 1 })
+  assert_true(S.midi_state.held[S.selected_voice][1 * 128 + 64], "the next note plays: its key is down")
+end)
+
+-- 3.9 (#900): only the editor on top takes notes: under SEQ's step editor
+-- a waiting learn's tap takes none (the note plays), and uncovered it does
+test("a note while the step editor covers the zones editor is not learned", function()
+  local context, S, zones = loaded()
+  assert_true(zones.learn(3), "a learn waits")
+  assert_true(S.lib.pages_seq.open_step_editor(1, 1, 1), "the step editor opens over it")
+  context.midi.send(1, { type = "note_on", note = 64, vel = 100, ch = 1 })
+  assert_equal(params:get("v3_zone_low"), 0, "covered: the note is not learned")
+  assert_equal(zones.learning(), 3, "the learn still waits")
+  assert_true(S.midi_state.held[1][1 * 128 + 64], "the note plays on voice 1, as with no tap: its key is down")
+  context.midi.send(1, { type = "note_off", note = 64, vel = 0, ch = 1 })
+  S.lib.pages_seq.close_step_editor(1)
+  context.midi.send(1, { type = "note_on", note = 65, vel = 100, ch = 1 })
+  assert_equal(params:get("v3_zone_low"), 65, "uncovered: the learn takes the note")
+  zones.cancel_learn()
 end)
 
 -- #626, as MOD's learn: the timeout clock is retired, never canceled, once

@@ -14,7 +14,8 @@
 - In the running script `S.selected_voice` changes only in `select_voice_by`, which calls `midi_bend_follow_selection`, so an omni bend follows the selection. Callers reach it as `S.lib.ui_keys.select_voice_by` (`lib/ui/keys.lua`). The only other assignments in `lib/` are its initialization (`lib/voices.lua`) and the setups of the layout states of page records and voice-param records (`lib/freeze.lua`'s, `lib/notes.lua`'s, VOICE's, ...), which the layout tests and the page renders run, never the device; tests set it directly too. A scan holds the list of sites and how many assignments each holds, by file and function (`SELECTED_VOICE_SITES` in `test/unit/ui_detent_test.lua`, the count's one home, "S.selected_voice is assigned only by select_voice_by, at init and in layout states", #875): a new assignment outside them, or one more inside a listed function, fails it.
 - The `freq` controlspec has step 0, so notes keep their exact pitch: a key's pitch in the tuning (`S.lib.variation.midi_note`: `S.lib.tuning.pitch_of_key`, then `snap` on a quantized voice; exact equal temperament in twelve equal steps, 3.8).
 - A quantized voice's every note, own or extra, snaps to the scale (`S.lib.variation.midi_note`) before it is played; an unquantized voice's never does.
-- **The note tap is read once per note on**: `set_note_tap(fn)` may be called from inside `fn` (the zones editor's learn ends itself there), and a new tap or none takes effect from the next note. A consumed note never enters `note_voice`, so its note off does nothing. `reset_midi_input` and cleanup clear the tap; the layout hook never does (the learn changes the layout while its tap is set).
+- **The note tap is read once per note on**: `set_note_tap(owner, fn)` and `clear_note_tap(owner)` may be called from inside `fn` (the zones editor's learn ends itself there), and a new tap or none takes effect from the next note. A consumed note never enters `note_voice`, so its note off does nothing. `reset_midi_input` and cleanup clear the tap; the layout hook never does (the learn changes the layout while its tap is set).
+- **The note tap has one owner** (3.9, #900): `note_tap` and `note_tap_owner` are set together and cleared together. A set by another owner while one holds the tap is refused (`false`), and a clear by another owner does nothing, so the scale editor can neither take nor clear the zones learn's tap. `reset_midi_input` and cleanup clear it whoever holds it and then tell the owner, calling its `fn(nil)` once (contained, after the notes are released); the owner may set it again while told (the open scale editor does; a zones learn ends). An owner covered by another modal owner (SEQ's step editor) takes no note: each owner's `fn` reads `S.lib.ui_modal.top()`, so nothing is stored for it.
 - The selected vport's device is reconciled when the norns menu closes (`M.reconcile`, a `register_menu_close` hook). Only a change of device resets the held notes, never an ordinary menu visit: SYSTEM > DEVICES moves a device with `update_devices()` and calls neither `midi.add` nor `midi.remove`.
 - A panic (CC 123 or CC 120) stops every active voice that has a key down or is in `S.midi_state.started` (set when a note on finds the voice stopped and the play starts it, cleared when a MIDI note off or a panic stops it), in either note off mode, never one the norns, grid or a pattern started. A `grain_restart` hook registered in the start step clears the flag when a voice starts (its reason `"start"`; a running voice's source change, reason `"source"`, leaves it); `midi_note_on` sets it after the play's start, so a voice stopped and restarted from the norns, grid or a pattern is never the panic's. The `midi notes` invariant checks `started`'s keys.
 - **Program change in** (3.6, MIDI out's `midi_pc_in`, off by default): with it on, a program change 0 to `NUM_SCENES` - 1 on `midi_pc_channel`'s channel (its first option, `any`, every channel) calls `S.lib.io_midi_out.program_change_in(listening port, value)`, which recalls scene value + 1 as a scene key does (`docs/notes/lua/io/midi_out.md`). Its branch of `midi_event` sits before the MPE branch, so it recalls in every channel mode; any other program change, or any with `midi_pc_in` off, falls through to the branches as before (ignored, or to `S.lib.mpe.control` in the MPE modes, which ignores it).
@@ -54,24 +55,31 @@ A reset is `release_held_notes` (from `reset_midi_input`: a port or channel mode
 | `stop held back` | `a panic` | `no key` | a voice MIDI started stops, which clears the mark (one started elsewhere keeps it for the LFO step) |
 
 ### note tap
-- **State:** `note_tap` (a local: nil, or the function every note on goes to first), set with `M.set_note_tap(fn)` by its two owners, SETUP's zones editor's learn (`lib/ui/zones.lua`) and the scale editor (`lib/ui/scale_editor.lua`).
-- **Invariant:** none: a function or nil, both legal (`set_note_tap` refuses anything else).
-- **Test:** `test/unit/midi_in_test.lua`: "a note tap consumes the notes it takes, and their note offs"; `test/unit/ui_zones_test.lua`: "a learn ends after 10 s, at K2 and at cleanup, and the note tap is cleared".
+- **State:** `note_tap` (a local: nil, or the function every note on goes to first) and `note_tap_owner` (its owner's name, nil exactly while `note_tap` is; 3.9, #900), set with `M.set_note_tap(owner, fn)` and cleared with `M.clear_note_tap(owner)` by its two owners, SETUP's zones editor's learn (`lib/ui/zones.lua`, `ZONES_EDITOR.tap_owner`) and the scale editor (`lib/ui/scale_editor.lua`, `SCALE_EDITOR.tap_owner`), and read through `M.note_tap_owner()`. States: `none` and `set` (an owner, the holder, holds it).
+- **Invariant:** none registered: `set_note_tap` and every clear set and clear the two together (the table's test checks they agree in every state).
+- **Test:** `test/unit/midi_in_test.lua`: the `note tap` transition table (`h.transition_table`, this table), "a note tap consumes the notes it takes, and their note offs", "the note tap is set and cleared by its owner only", "a MIDI reset tells the tap's owner"; `test/unit/ui_zones_test.lua`: "the zones learn's tap is not cleared by the scale editor", "a MIDI reset tells the zones learn, which ends"; `test/unit/ui_scale_editor_test.lua`: "a note while the step editor covers the scale editor toggles no scale class", "a MIDI reset tells the scale editor, which takes its tap back at once".
 
-Its clearers are its owner (`set_note_tap(nil)`, the tap itself included, from the next note), `reset_midi_input` and cleanup; the last two tell no owner, so the scale editor sets its tap again at its next draw. The MPE layout hook keeps it.
+A set and a clear name an owner: in `set` the holder's set replaces its `fn`, another owner's set is refused and another owner's clear does nothing; in `none` any owner's set takes the tap and any clear does nothing. The two clears the owner did not make, a reset (`reset_midi_input`) and cleanup, tell the owner (its `fn(nil)`, after the tap is cleared): the open scale editor takes the tap back then, a zones learn ends. A covered owner (SEQ's step editor over it) keeps the tap and takes no note, its `fn` reading the modal stack: that is the owners', not a state of this table. The MPE layout hook keeps the tap. Impossible: `none` with `note on, taken` (with no tap `tapped` takes nothing).
 
 | State | Event | Next | Effect |
 |---|---|---|---|
 | `none` | `set` | `set` | every note on goes to the tap first |
-| `none` | `note on` | `none` | the note plays |
-| `none` | `a reset` | `none` | nothing |
+| `none` | `set by another owner` | `set` | taken: no owner held it |
+| `none` | `cleared by the holder` | `none` | nothing |
+| `none` | `cleared by another owner` | `none` | nothing |
+| `none` | `note on, not taken` | `none` | the note plays |
+| `none` | `a reset` | `none` | nothing to tell |
+| `none` | `the MPE layout hook` | `none` | nothing |
+| `none` | `cleanup` | `none` | nothing to tell |
+| `set` | `set` | `set` | the holder's new tap from the next note (a tap may set it while it runs) |
+| `set` | `set by another owner` | `set` | refused (`false`): the holder keeps it |
+| `set` | `cleared by the holder` | `none` | from the next note |
+| `set` | `cleared by another owner` | `set` | nothing (`false`) |
 | `set` | `note on, taken` | `set` | the note plays nothing and enters no list, so its off does nothing |
 | `set` | `note on, not taken` | `set` | the note plays |
-| `set` | `set` | `set` | the new tap from the next note (a tap may set it while it runs) |
-| `set` | `cleared` | `none` | from the next note |
-| `set` | `a reset` | `none` | cleared, its owner not told |
+| `set` | `a reset` | `none` | cleared, then the holder told (`fn(nil)`) |
 | `set` | `the MPE layout hook` | `set` | kept: the zones editor's learn changes the layout while it is set |
-| `set` | `cleanup` | `none` | cleared |
+| `set` | `cleanup` | `none` | cleared, then the holder told |
 
 ### listening port
 - **State:** `listening_port` (a local: the port `midi_event` listens on through `S.lib.io_ports.listen`, nil while the selected port is claimed or after cleanup), `S.midi_device` (the selected port's vport) and `attached_device` (the device last seen on it); the selected port is the `midi_device` param. States: `listening` (the selected port is free), `claimed` (another name owns it: not listened to, its notes never played) and `ended` (cleanup has run).
@@ -100,9 +108,9 @@ A claim releases every MIDI note and resets the master bend ranges, as a port ch
 
 `lib/midi_in.lua` (`S.lib.midi_in`):
 - `S.midi_device`, `S.midi_state`;
-- notes, chords, velocity, pitchbend, pressure, MPE's routing and expression, hot-plug through `S.lib.io_ports` (`attach_midi`, `midi_init`, the `on_change` and `on_claim` handlers, `midi_event`, `midi_note_on`, `midi_note_off_for`, `midi_pitchbend`, `midi_set_bend`, `midi_bend_follow_selection`, `reset_midi_input`, `midi_target_voice`, `midi_device_name`), `M.note_off_mode()` and `M.set_note_tap(fn)`;
+- notes, chords, velocity, pitchbend, pressure, MPE's routing and expression, hot-plug through `S.lib.io_ports` (`attach_midi`, `midi_init`, the `on_change` and `on_claim` handlers, `midi_event`, `midi_note_on`, `midi_note_off_for`, `midi_pitchbend`, `midi_set_bend`, `midi_bend_follow_selection`, `reset_midi_input`, `midi_target_voice`, `midi_device_name`), `M.note_off_mode()`, `M.set_note_tap(owner, fn)`, `M.clear_note_tap(owner)` and `M.note_tap_owner()`;
 - the MIDI constants, `S.lib.midi_in.MIDI`, which the MIDI params in `lib/params_setup.lua` read;
-- cleanup step 150: the MIDI handler detached (`S.lib.io_ports.unlisten`) and the note tap cleared; `lib/io/ports.lua`'s step 152 then puts back the `midi.add` and `midi.remove` it found (norns' SLEEP runs only `cleanup()`, #468).
+- cleanup step 150: the MIDI handler detached (`S.lib.io_ports.unlisten`) and the note tap cleared, its owner told; `lib/io/ports.lua`'s step 152 then puts back the `midi.add` and `midi.remove` it found (norns' SLEEP runs only `cleanup()`, #468).
 
 MIDI notes, velocity, pitchbend and pressure play the voices (3.0 design §5, 3.5 design §5). It calls `S.lib.notes` (`docs/notes/lua/notes.md`), `S.lib.mpe` (`docs/notes/lua/mpe.md`) and `S.lib.expression` (`docs/notes/lua/expression.md`).
 
@@ -180,11 +188,11 @@ Slices (3.7, design §3.5, package 2b): on a voice that takes slice notes (`S.li
 - `held`, `note_voice` and the plain pressures are emptied and `S.lib.mpe.reset()` runs (every channel's values, pending CC87 and RPN state forgotten, the master channels' bend ranges kept, #688); a panic empties `started` too.
 - With nothing held it sends nothing, so the layout hook, which may run several times in one PSET load and see a layout mid-change, is cheap and idempotent.
 
-`reset_midi_input()` (a port or channel mode change, the selected port's device gone or moved) re-centers every bent voice (`bend` 1 sent only to active voices whose bend was not 1), clears the note tap, then releases everything. The `midi_note_off` param's action is `reset_midi_input()` too. The layout hook (`S.lib.mpe.on_layout_change`, registered in the start step: a member count or zone change, ruling 14) releases everything only while `S.lib.mpe.active()` (the plain modes route nothing through the zones), and keeps the tap and the bends.
+`reset_midi_input()` (a port or channel mode change, the selected port's device gone or moved) re-centers every bent voice (`bend` 1 sent only to active voices whose bend was not 1), releases everything, then clears the note tap and tells its owner (3.9, #900). The `midi_note_off` param's action is `reset_midi_input()` too. The layout hook (`S.lib.mpe.on_layout_change`, registered in the start step: a member count or zone change, ruling 14) releases everything only while `S.lib.mpe.active()` (the plain modes route nothing through the zones), and keeps the tap and the bends.
 
 ## The note tap
 
-`M.set_note_tap(fn | nil)` (the zones editor's learn, SETUP's `mpe & zones`, design §9.3): while a tap is set every note on, in any mode, goes to `fn(note)` first, read once into a local and called through `S.lib.ui_frame.contained_call` (one that raises is reported once and takes nothing); `true` consumes the note (nothing plays, no key goes down, so its note off does nothing). `fn` may clear or replace the tap while it runs; the change applies from the next note on. Anything but a function or nil raises.
+`M.set_note_tap(owner, fn)` (the zones editor's learn, SETUP's `mpe & zones`, design §9.3, and the scale editor; an owner is a name, `ZONES_EDITOR.tap_owner` and `SCALE_EDITOR.tap_owner`, since 3.9's #900): while a tap is set every note on, in any mode, goes to `fn(note)` first, read once into a local and called through `S.lib.ui_frame.contained_call` (one that raises is reported once and takes nothing); `true` consumes the note (nothing plays, no key goes down, so its note off does nothing). It returns `true`, or `false` when another owner holds the tap (nothing changes); the owner's own set replaces its `fn`. `M.clear_note_tap(owner)` clears the owner's tap (`true`), and another owner's clear does nothing (`false`); `M.note_tap_owner()` names the owner, or nil. `fn` may clear or replace the tap while it runs; the change applies from the next note on. An owner that is not a non-empty string, or a `fn` that is not a function, raises. A clear the owner did not make (`reset_midi_input`, cleanup) calls the cleared `fn(nil)` once, through `contained_call` (key 2, `midi note tap's owner told`), after the tap is cleared, so the owner can take it back.
 
 ## Pitchbend
 

@@ -8,7 +8,7 @@
 -- 60 is C3). E2 the row, K3 the next column on a voice row, E3 the value
 -- under the cursor, K2 closes; ALT+K3 on a voice row learns its range: the
 -- next two notes played (through the MIDI module's note tap,
--- S.lib.midi_in.set_note_tap) are its lowest and highest, with a header
+-- S.lib.midi_in.set_note_tap, ZONES_EDITOR.tap_owner its owner) are its lowest and highest, with a header
 -- notice and a 10 s timeout, as MOD's learn has. Fields of this module's
 -- table: open, close, is_open, learn, cancel_learn, learning, note,
 -- ZONES_EDITOR. See docs/notes/lua/ui-core.md (The zones editor).
@@ -30,7 +30,7 @@ return function(S)
     visible = 6, first_y = 18, spacing = 7, zone_x = 20, low_right = 94, value_right = 124,
     levels = {selected = 15, row = 8, other = 4},
     columns = {"zone", "low", "high"}, column_params = {zone = "", low = "_low", high = "_high"},
-    note_range = {0, 127}, learn_text = "learn"}
+    note_range = {0, 127}, learn_text = "learn", tap_owner = "zones editor"}
   M.ZONES_EDITOR = ZONES_EDITOR
 
   -- The rows, top to bottom: the three settings, then one per voice
@@ -55,12 +55,19 @@ return function(S)
   local learn_clock = {handle = nil}
   S.zones_learn_clock = nil
   -- whether the editor's M.note is the MIDI module's note tap now (set
-  -- when a learn starts, cleared when it ends)
+  -- when a learn starts, cleared when it ends), under the owner
+  -- ZONES_EDITOR.tap_owner (3.9, #900)
   local tap_set = false
 
+  -- Take the tap (fn) or give it up (nil); a set another owner's tap
+  -- refuses leaves tap_set false
   local function set_tap(fn)
-    S.lib.midi_in.set_note_tap(fn)
-    tap_set = fn ~= nil
+    if fn then
+      tap_set = S.lib.midi_in.set_note_tap(ZONES_EDITOR.tap_owner, fn) ~= false
+    else
+      S.lib.midi_in.clear_note_tap(ZONES_EDITOR.tap_owner)
+      tap_set = false
+    end
   end
 
   local function whole_in(value, low, high)
@@ -96,10 +103,13 @@ return function(S)
   -- Learn voice's range while the editor is open: the next note is its
   -- lowest, the one after its highest (M.note, set as the MIDI module's note
   -- tap); learn_seconds without both, K2 (which closes the editor) or a new
-  -- learn ends it. Returns whether it waits
+  -- learn ends it, and so does a MIDI reset (the tap's owner told). A tap
+  -- another owner holds leaves nothing waiting. Returns whether it waits
   function M.learn(voice)
     if not editor.open or not whole_in(voice, 1, NUM_VOICES) then return false end
     M.cancel_learn()
+    set_tap(M.note)
+    if not tap_set then return false end
     learning = {voice = voice, which = "low"}
     local started = S.lib.clocks.run(function(handle)
       if not handle.sleep(ZONES_EDITOR.learn_seconds) then return end
@@ -109,7 +119,6 @@ return function(S)
       request_redraw()
     end)
     learn_clock.handle, S.zones_learn_clock = started, started.id
-    set_tap(M.note)
     request_redraw()
     return true
   end
@@ -125,11 +134,20 @@ return function(S)
   -- plays nothing. The first sets the voice's lowest note, the second its
   -- highest, the two swapped when the second is the lower, and learn ends.
   -- The lowest is set before the highest, so neither param's action moves
-  -- the other (lib/mpe.lua keeps low <= high)
+  -- the other (lib/mpe.lua keeps low <= high). 3.9 (#900): nil is the MIDI
+  -- module telling the owner it cleared the tap (a reset, cleanup): learn
+  -- ends. While another owner covers the editor (SEQ's step editor) it
+  -- takes no note, which plays as with no tap; uncovered, it takes them again
+  local owner
   function M.note(note)
+    if note == nil then
+      if learning then M.cancel_learn() end
+      return false
+    end
     if not learning or not whole_in(note, ZONES_EDITOR.note_range[1], ZONES_EDITOR.note_range[2]) then
       return false
     end
+    if S.lib.ui_modal.top() ~= owner then return false end
     local voice = learning.voice
     if learning.which == "low" then
       learning.which, learning.first = "high", note
@@ -152,10 +170,8 @@ return function(S)
   end)
 
   ---------------------------------------------------------------------------
-  -- The modal owner
+  -- The modal owner (declared above M.note, which reads it)
   ---------------------------------------------------------------------------
-
-  local owner
 
   local function draw_row(row, y, selected, value_right)
     local levels = ZONES_EDITOR.levels
