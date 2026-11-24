@@ -724,8 +724,17 @@ var checkCheckedLoadNumbers = { arg other, path60, damaged;
     var failedIndex = CronePollRegistry.getPollFromName(\bufferLoadFailed).index;
     var loads = other.bufferStateLoads, before, shown, atCommand, during, since, events, wanted, decode, slotEvents;
     // whether the default engine's idle slot names none of the loads a
-    // check wants, so leaving its value out hides none of the high engine's
-    var apart = { arg numbers; numbers.includes(decode.(engine.announcedBufferState(slot))[0]).not };
+    // check wants, so leaving its value out hides none of the high
+    // engine's; a clash fails with a line of its own naming it
+    var apart = { arg numbers, which;
+        var idle = decode.(engine.announcedBufferState(slot))[0], clear = numbers.includes(idle).not;
+        if (clear.not) {
+            check.(false, ("buffers: the % #983 check's window: the default engine's idle slot % names load number %, "
+                ++ "one the check wants (%), so leaving that slot's reports out would hide the high engine's: give one "
+                ++ "of the two slots another load count").format(which, slot, idle, numbers));
+        };
+        clear
+    };
     // [load number, seconds] of a bufferState value, as Lua decodes it
     decode = { arg value; var cell = (value / 1000).floor.asInteger; [cell div: 9, ((value - (cell * 1000)) * 100).round / 100] };
     // the slot's reports since `since`, in arrival order: [\state, load
@@ -759,8 +768,10 @@ var checkCheckedLoadNumbers = { arg other, path60, damaged;
     0.05.wait; server.sync;
     events = slotEvents.(since);
     wanted = [[\state, (before + 1) % loads, 0], [\state, (before + 1) % loads, 60]];
-    check.((decode.(atCommand ? 0) == [before % loads, shown]) and: { decode.(during ? 0) == [before % loads, shown] }
-        and: { events == wanted } and: { apart.([before % loads, (before + 1) % loads]) },
+    // (apart first, so a clash is named even when it hid a report)
+    check.(apart.([before % loads, (before + 1) % loads], "periodic report's")
+        and: { decode.(atCommand ? 0) == [before % loads, shown] } and: { decode.(during ? 0) == [before % loads, shown] }
+        and: { events == wanted },
         "buffers: a periodic report during a long load's check names the load before it, its 0 s and length name it (#983; at the command %, during the check %, reports %, wanted [%, %] then %)".format(
             atCommand !? decode, during !? decode, events, before % loads, shown, wanted));
     // a replace take, prepared at once (0 s), then a long file that cancels
@@ -774,7 +785,7 @@ var checkCheckedLoadNumbers = { arg other, path60, damaged;
     0.05.wait; server.sync;
     events = slotEvents.(since);
     wanted = [[\state, before % loads, 0], [\state, (before + 1) % loads, 0], [\failed, before + 1]];
-    check.((events == wanted) and: { apart.([before % loads, (before + 1) % loads]) },
+    check.(apart.([before % loads, (before + 1) % loads], "cancel's") and: { events == wanted },
         "buffers: a long load's cancel of a recording reports under the load before it, and its rejected check under its own number before its failure (#983; reports %, wanted %)".format(
             events, wanted));
     cmd.(\clearBuffer, slot); server.sync;
