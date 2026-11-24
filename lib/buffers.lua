@@ -839,6 +839,7 @@ return function(S)
       if buffer.seconds ~= seconds then
         buffer.seconds = seconds
         request_redraw()
+        if S.lib.grid_core.any_page(S.constants.GRID_PAGES.sources) or S.lib.grid_core.any_page(S.constants.GRID_PAGES.positions, 2) then grid_redraw() end
       end
       return
     end
@@ -949,12 +950,14 @@ return function(S)
     if found then
       failed = table.remove(pending, found)
       left = emptied and empty_buffer_state(false) or resolve_previous(slot, failed.previous)
-    elseif #pending == 0 and buffer.restoring then
+    elseif #pending == 0 and buffer.restoring and load_number == 1 then
       -- (#980's twin) a restore that tracks no load was given back by the
       -- failures of every later one, its own load pushed out of the list:
-      -- that load is the only one whose outcome is still to come, so this
-      -- is its failure, and it leaves what a tracked restore's leaves (a
-      -- restore loads into the empty slot of a fresh script)
+      -- that load (load 1, init's first of the slot) is the only one whose
+      -- outcome is still to come, so this is its failure (a repeated report
+      -- of a later one's names another number), and it leaves what a
+      -- tracked restore's leaves (a restore loads into the empty slot of a
+      -- fresh script). #1035: a plain load forgotten so is not undone
       failed, left = {path = buffer.path}, empty_buffer_state(false)
     else
       return
