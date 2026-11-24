@@ -267,24 +267,35 @@ return function(S)
     request_redraw()
   end
 
-  -- Hold matrix routing k (its source, destination and depth) around writes
-  -- (a learn's rewire, lib/matrix.lua), and the touched param_id's value
-  -- before the touch (the touch hooks' third argument; nil holds none), at
-  -- where. The depth is held as a param, so its edit ends the undo; the
-  -- touched param is not: the turn that learned goes on through the same
-  -- param, and the undo puts back the value from before it
-  function M.hold_routing(k, where, writes, param_id, before)
+  -- Hold matrix routing k (its source and destination), its depth param
+  -- depth_id and the touched param_id's value before the touch (the touch
+  -- hooks' third argument; nil holds none) around writes (a learn's rewire,
+  -- lib/matrix.lua), at where, when the writes changed the routing or its
+  -- depth (a learn that changes nothing leaves an earlier undo). Both
+  -- params are held as values, so an edit of either ends the undo, but the
+  -- turn that learned going on (note_param_edit: a turn of the touched
+  -- param, S.turning_param) and the undo puts back the value from before
+  -- it. Returns whether it holds
+  function M.hold_routing(k, where, writes, depth_id, param_id, before)
     check_where(where, "hold_routing")
     local matrix = S.lib.matrix
     local routing = matrix.routing(k)
-    if not routing or type(writes) ~= "function" then error("hold_routing: a routing and writes", 2) end
-    local depth_id = matrix.depth_id(k)
-    local values, ids = {[depth_id] = routing.depth}, {depth_id}
+    if not routing or type(writes) ~= "function" or params.lookup[depth_id] == nil then
+      error("hold_routing: a routing, writes and its depth param", 2)
+    end
     write_as_undo(writes)
+    local now = matrix.routing(k)
+    if now.source == routing.source and now.dest == routing.dest and now.depth == routing.depth then return false end
+    local values, ids = {[depth_id] = routing.depth}, {depth_id}
+    if param_id ~= nil and before ~= nil and params.lookup[param_id] then
+      values[param_id] = before
+      ids[2] = param_id
+    end
     clear_undo()
     hold_undo(where, values, ids, nil, nil, {routing = {k = k, source = routing.source, dest = routing.dest,
-      param = param_id, before = before}})
+      param = param_id}})
     request_redraw()
+    return true
   end
 
   -- Put back a chain start's step attributes, through the sequencer's own
@@ -344,7 +355,7 @@ return function(S)
   -- the voice's present active and source (ruling 46 as amended), and puts
   -- back the name the voice's preset row showed before (#869). 3.9's holds
   -- (#922, #927): a routing first, then the held params (a chain start's
-  -- keys, a routing's depth), the touched param, the seven patterns and
+  -- keys, a routing's depth and touched param), the seven patterns and
   -- their steps, a sequence's values
   function M.undo()
     local undo = S.undo
@@ -366,7 +377,6 @@ return function(S)
       local routing = undo.routing
       if routing then S.lib.matrix.set_routing(routing.k, routing.source, routing.dest) end
       for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
-      if routing and routing.param and routing.before ~= nil then set_randomized_param(routing.param, routing.before) end
       if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end
       if undo.patterns then
         for voice_idx = 1, NUM_VOICES do S.lib.sequencer.replace_pattern(voice_idx, undo.patterns[voice_idx]) end
@@ -431,7 +441,13 @@ return function(S)
   -- drift's writes and randomize's and undo's own are not edits
   function note_param_edit(param_id)
     if S.drift_writing or undo_writing then return end
-    if S.undo and S.undo.values[param_id] ~= nil then clear_undo() end
+    local undo = S.undo
+    if not (undo and undo.values[param_id] ~= nil) then return end
+    -- a learn's touched param keeps its hold through the turn that learned:
+    -- a turn of it (S.lib.ui_detent's as_turn, its stop at 0 included; a
+    -- mutation step's turn ends it in set_mutated_param), never a set (#927)
+    if undo.routing and undo.routing.param == param_id and S.turning_param == param_id then return end
+    clear_undo()
   end
 
   -- Called by every edit of voice_idx's pattern (lib/sequencer.lua): it
@@ -526,11 +542,16 @@ return function(S)
   -- Set one of voice_idx's params as a mutation step. A step moves the
   -- param from its stored value: a turn (S.lib.ui_detent.as_turn), so a
   -- quantized freq walks by scale tones (#318). A step that changes a param
-  -- of the undo's voice (stored or not) clears the undo
+  -- of the undo's voice (stored or not), or a learn's touched param (a turn
+  -- note_param_edit would keep, #927), clears the undo
   local function set_mutated_param(voice_idx, param_id, value)
     local before = params:get(param_id)
     S.lib.ui_detent.as_turn(param_id, function() params:set(param_id, value) end)
-    if S.undo and S.undo.voice == voice_idx and params:get(param_id) ~= before then clear_undo() end
+    local undo = S.undo
+    if undo and params:get(param_id) ~= before
+      and (undo.voice == voice_idx or (undo.routing and undo.routing.param == param_id)) then
+      clear_undo()
+    end
   end
 
   local function mutate_voices()

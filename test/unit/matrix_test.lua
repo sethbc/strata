@@ -2055,4 +2055,65 @@ test("a learn's rewiring can be undone: the routing's destination and the param'
   matrix.cancel_learn()
 end)
 
+
+-- #927, review round 1: the learn's hold keeps through the turn that
+-- learned (the detent path: a turn of that param, its stop at 0 included)
+-- and ends at any other edit of the touched param: a set (PARAMS, MIDI, a
+-- scene's value), a grid fader, a mutation step
+test("a learn's hold ends at any edit of the touched param but the turn that learned (#927)", function()
+  local _, S, matrix = loaded()
+  local mutation = S.lib.mutation
+  local MOD_PAGE = S.constants.UI_PAGES.index.MOD
+  local function held() return mutation.undo_for(MOD_PAGE, "matrix", nil) end
+  local function learn(param_id, value)
+    matrix.set_routing(3, "macro1", "v2_grain_size")
+    params:set("matrix_3_depth", 0)
+    params:set(param_id, value)
+    matrix.learn(3)
+    enc_param_delta(3, param_id, 1)
+    assert_true(held(), "the learn of " .. param_id .. " is held")
+  end
+  learn("v1_grain_pitch", 1.5)
+  params:set("v1_grain_pitch", 2.5)
+  assert_true(not held(), "a set of the touched param (PARAMS, MIDI, a scene's value) ends it")
+  learn("v1_grain_pitch", 1.5)
+  set_param_from_column("v1_grain_pitch", 1, 8)
+  assert_true(not held(), "a grid fader ends it")
+  learn("v1_grain_pitch", 1.5)
+  params:set("mutation_probability", 1); params:set("mutation_amount", 0.5)
+  local pitch = params:get("v1_grain_pitch")
+  for _ = 1, 200 do
+    gentle_mutate()
+    if params:get("v1_grain_pitch") ~= pitch then break end
+  end
+  assert_true(params:get("v1_grain_pitch") ~= pitch, "the pitch mutated")
+  assert_true(not held(), "a mutation step of the touched param ends it")
+  params:set("mutation_probability", 0)
+  -- the turn going on, through its stop at 0, keeps it, and the undo takes
+  -- the whole turn back
+  learn("v1_grain_skew", 0.02)                -- a destination whose range spans 0
+  enc_param_delta(3, "v1_grain_skew", -5)
+  assert_equal(params:get("v1_grain_skew"), 0, "the turn stops at 0")
+  assert_true(held(), "the stop at 0 of the same turn keeps it")
+  enc_param_delta(3, "v1_grain_skew", -1)
+  assert_true(held(), "and a detent the hold swallows")
+  assert_equal(mutation.undo(), true, "undone")
+  assert_near(params:get("v1_grain_skew"), 0.02, 1e-9, "the value from before the turn's first detent")
+end)
+
+-- #927, review round 1: a learn that changes nothing (the routing already
+-- has that destination) holds nothing, so an earlier undo stays
+test("a learn that changes nothing keeps the earlier undo (#927)", function()
+  local _, S, matrix = loaded()
+  local mutation = S.lib.mutation
+  matrix.set_routing(3, "macro1", "v3_grain_pitch")
+  params:set("matrix_3_depth", 40)
+  randomize_voice(1)
+  matrix.learn(3)
+  enc_param_delta(3, "v3_grain_pitch", 1)
+  assert_equal(matrix.routing(3).dest, "v3_grain_pitch", "the same destination")
+  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.MAIN, "voice", 1), "MAIN's undo stays")
+  assert_true(not mutation.undo_for(S.constants.UI_PAGES.index.MOD, "matrix", nil), "nothing held on MOD")
+end)
+
 end

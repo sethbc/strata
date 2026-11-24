@@ -730,22 +730,31 @@ return function(S)
   end
 
   -- A random sequence's row and its settings (#922): no draws, so a quick
-  -- ALT+K2 there only undoes the new held there
-  local SEQUENCES_SPEC = {page = UI_PAGES.index.MOD, section = "sequences", voice = nil, draws = {}}
+  -- ALT+K2 there only undoes a new of that sequence, held at its source key
+  -- (S.lib.random_sequences.new). One spec per key, made once
+  local sequence_specs = {}
+  local function sequence_spec(key)
+    local spec = sequence_specs[key]
+    if not spec then
+      spec = {page = UI_PAGES.index.MOD, section = key, voice = nil, draws = {}}
+      sequence_specs[key] = spec
+    end
+    return spec
+  end
 
   local function mod_randomize_section()
     local view = S.mod_page.view
     if view == "routing" then return matrix_spec() end
     if view == "settings" then
       local record = settings_source()
-      if record and record.section == "sequences" then return SEQUENCES_SPEC end
+      if record and record.section == "sequences" then return sequence_spec(record.key) end
       return nil
     end
     if view == "targets" then return nil end
     local section = cursor_row().section
     if section == "scatter" then return SCATTER_SPEC end
     if section == "matrix" then return matrix_spec() end
-    if section == "sequences" then return SEQUENCES_SPEC end
+    if section == "sequences" and cursor_row().source then return sequence_spec(cursor_row().source.key) end
     return nil
   end
 

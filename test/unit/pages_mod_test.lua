@@ -1076,4 +1076,30 @@ test("a learn whose routing stays incomplete is undone by a quick ALT+K2 with no
   key(1, 0)
 end)
 
+
+-- #922, review round 1 (ruling 1 amended): a sequence's new is undone only
+-- on its own sequence, its row or its settings
+test("a quick ALT+K2 on another sequence leaves a new alone (#922)", function()
+  local context, S = loaded()
+  local sequences = S.lib.random_sequences
+  for index = 1, 16 do sequences.set_value(2, index, index / 20 - 0.4) end
+  local before = sequences.values(2)
+  params:set("rseq2_new", 1)
+  local drawn = sequences.values(2)[1]
+  place(S, "source:rseq4")
+  key(1, 1); redraw()
+  assert_true(hint_text(context):find("K2:undo", 1, true) == nil, "no K2:undo on rseq4's row")
+  key(1, 0)
+  alt_k2_quick()
+  assert_equal(sequences.values(2)[1], drawn, "rseq4's row does not undo rseq2's new")
+  tap(3); redraw()
+  assert_equal(S.mod_page.settings, "rseq4", "rseq4's settings")
+  alt_k2_quick()
+  assert_equal(sequences.values(2)[1], drawn, "nor do rseq4's settings")
+  key(2, 1); key(2, 0)
+  place(S, "source:rseq2")
+  alt_k2_quick()
+  assert_equal(sequences.values(2)[1], before[1], "rseq2's row undoes it")
+end)
+
 end

@@ -1220,7 +1220,7 @@ local HOLDS = {
   new = function(S)
     capture_scene(1)
     params:set("rseq2_new", 1)
-    return S.constants.UI_PAGES.index.MOD, "sequences", nil
+    return S.constants.UI_PAGES.index.MOD, "rseq2", nil
   end,
   learn = function(S)
     capture_scene(1)
@@ -1257,6 +1257,8 @@ local HOLD_EDITS = {
     ends = {
       ["the routing edited"] = function(S) S.lib.matrix.edit_routing(3, "macro2", "v3_grain_pitch") end,
       ["its depth"] = function() params:set("matrix_3_depth", 40) end,
+      ["the touched param set"] = function() params:set("v3_grain_pitch", 2.5) end,
+      ["the touched param's grid fader"] = function() set_param_from_column("v3_grain_pitch", 1, 8) end,
     },
     keeps = {["the touched param's turn going on"] = function() enc_param_delta(3, "v3_grain_pitch", 1) end},
   },
