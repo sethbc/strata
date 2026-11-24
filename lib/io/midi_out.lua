@@ -22,7 +22,10 @@ return function(S)
     bend_center = 8192, bend_max = 16383, value_max = 127, notes = 128, channels = 16, max_members = 15,
     bend_range = {min = 1, max = 96, default = 48}, modes = {"plain", "mpe"}, mpe_mode = 2,
     param_count = 74, played_source = "midi", fields = {"bend", "pressure", "slide"},
-    refused = "port has an mpe voice", absent = "[--]", approximate = " ~"}
+    refused = "port has an mpe voice", absent = "[--]", approximate = " ~",
+    -- IO's marks (5c): a voice's port a remote holds (#880), and the row
+    -- naming the input's port while another owner claims it (#913)
+    held = "[held]", input_held = "midi in "}
   M.MIDI_OUT = MIDI_OUT
 
   -- config[voice]: the settled route {port, channel, mode (an index of
@@ -312,6 +315,21 @@ return function(S)
     return port and util.round(port) or nil
   end
 
+  -- A port's number, with its owner beside it while one holds it (as
+  -- SETUP's midi row shows it)
+  local function owned_text(port)
+    local owner = S.lib.io_ports.owner(port)
+    return owner and (port .. " (" .. owner .. ")") or tostring(port)
+  end
+
+  -- A layout state's remote grid on port, set as a player sets it (only
+  -- the IO page changes a rig setting): the remote section's grid port row
+  -- reached by S.lib.pages_io.go_to_row, E3 turned to port from off
+  local function remote_grid_through_page(port)
+    S.lib.pages_io.go_to_row("midi", "remote", {key = "remote_grid_port"})
+    enc(3, port)
+  end
+
   local function start_note(voice, id, pitch, velocity, info)
     if state.stopped or not valid_voice(voice) or not finite(pitch) then return end
     info = type(info) == "table" and info or {}
@@ -440,6 +458,12 @@ return function(S)
           if is_mpe(config) then return "port " .. config.port .. "  mpe " .. config.members end
           return "port " .. config.port .. "  ch " .. config.channel
         end,
+        -- a port a remote holds gets nothing of this voice's (#880)
+        mark = function()
+          local port = state.config[voice].port
+          if port > 0 and remote_holds(port) then return MIDI_OUT.held end
+          return nil
+        end,
         fields = {{label = "port", kind = "param", param_id = vid(voice, "port")},
           {label = "channel", kind = "param", param_id = vid(voice, "channel")},
           {label = "mode", kind = "param", param_id = vid(voice, "mode")},
@@ -455,6 +479,14 @@ return function(S)
         context.clock.advance_until(S.lfo_clock)
         S.lib.pages_io.go_to_row("midi", "voice", {id = "midi"})
         key(3, 1); key(3, 0)
+      end},
+      -- the row marked held (#880): voice 1 on port 3, which a remote grid claims
+      {name = "a port a remote holds", setup = function(context)
+        context.midi.plug(3, "synth")
+        params:set(vid(1, "port"), 3)
+        remote_grid_through_page(3)
+        context.clock.advance_until(S.lfo_clock)
+        S.lib.pages_io.go_to_row("midi", "voice", {id = "midi"})
       end},
     },
   })
@@ -844,13 +876,11 @@ return function(S)
   -- its routes settle here all the same
   S.register_pset_hook({name = "io_midi_out", read = function() settle(true) end})
 
-  -- A port's number, with its owner beside it while one holds it (as
-  -- SETUP's midi row shows it)
+  -- A port param's text: off, or the port with its owner (owned_text)
   local function port_text(param)
     local port = param:get()
     if port == 0 then return "off" end
-    local owner = S.lib.io_ports.owner(port)
-    return owner and (port .. " (" .. owner .. ")") or tostring(port)
+    return owned_text(port)
   end
 
   local function slot_changed(k) return function() state.cc_last[k] = nil end end
@@ -957,7 +987,14 @@ return function(S)
 
   S.register_io_section({name = "midi", title = "midi out",
     rows = function()
-      local rows = {{label = "bend range", kind = "param", param_id = "midi_out_bend_range", format = "%d st"}}
+      local rows = {}
+      -- the port the player plays from, while another owner claims it: its
+      -- notes are not heard (#913). First, so the section's top shows it
+      local input = input_port()
+      if input and S.lib.io_ports.owner(input) ~= nil then
+        rows[1] = {label = "midi in", kind = "status", id = "midi in", text = MIDI_OUT.input_held .. owned_text(input)}
+      end
+      rows[#rows + 1] = {label = "bend range", kind = "param", param_id = "midi_out_bend_range", format = "%d st"}
       for k = 1, MIDI_OUT.slots do
         rows[#rows + 1] = {label = "cc " .. k, kind = "detail", id = "cc " .. k,
           text = function() return slot_text(k) end,
@@ -992,6 +1029,12 @@ return function(S)
         S.lib.pages_io.show_section("midi")
         enc(2, 1)
         key(3, 1); key(3, 0)
+      end},
+      -- the input's port claimed (#913): a remote grid on port 1, the midi device's
+      {name = "the input's port held", setup = function(context)
+        context.midi.plug(1, "grid")
+        remote_grid_through_page(1)
+        S.lib.pages_io.show_section("midi")
       end},
     }})
 

@@ -7,6 +7,6 @@
 
 ## Owns
 
-- `lib/io/jf.lua` (`S.lib.io_jf`): `JF` (every tunable), `add_params()` (called by the ii module's group `strata_out_ii`; `param_count` 8), the ii device `jf` (`ports = false`: `play_note`'s first argument is a pitch, so the ii queue gives `play_note` one turn) and the note target `jf` (rows `jf` and `jf level` on IO's voice section).
+- `lib/io/jf.lua` (`S.lib.io_jf`): `JF` (every tunable), `add_params()` (called by the ii module's group `strata_out_ii`; `param_count` 8), the ii device `jf` (`ports = false`: `play_note`'s first argument is a pitch, so the ii queue gives `play_note` one turn) and the note target `jf` (rows `jf` and `jf level` on IO's voice section; `jf` marked `JF.idle_mark`, `[idle]`, while the route is on and Strata does not lead the bus, #937; the layout state `an idle ii route`).
 - Test: `test/unit/io_jf_test.lua`, with a double for `S.lib.io_ii`.
 - User page: `docs/user/io/jf.md`.

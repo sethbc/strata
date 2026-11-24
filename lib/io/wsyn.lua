@@ -20,6 +20,8 @@ return function(S)
     voices = 4,
     level = {min = 0, max = 10, default = 5},
     param_count = NUM_VOICES + 1,
+    -- IO's mark on a route set while Strata does not lead the bus (#937)
+    idle_mark = "[idle]",
   }
   M.WSYN = WSYN
 
@@ -83,7 +85,11 @@ return function(S)
     rows = function(voice)
       if not valid_voice(voice) or not has_params() then return {} end
       return {
-        {label = "w/ syn", kind = "param", param_id = out_id(voice), binary = {[0] = "off", [1] = "on"}},
+        {label = "w/ syn", kind = "param", param_id = out_id(voice), binary = {[0] = "off", [1] = "on"},
+          mark = function()
+            if params:get(out_id(voice)) == 1 and not leading() then return WSYN.idle_mark end
+            return nil
+          end},
         {label = "w/ level", kind = "param", param_id = "wsyn_level", format = "%.1f V"},
       }
     end,

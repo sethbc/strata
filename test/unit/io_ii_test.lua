@@ -1506,4 +1506,62 @@ test("the ii invariant names an asking count that is not the turns asking", func
   assert_true(ii_invariant(S) ~= nil, "asking one more than the turns is reported")
 end)
 
+
+-- #880 (5c, probe 2 of the outside devices' audit): an ER-301 gate high
+-- when crow's cable comes out, its off owed, the bus turned off and crow
+-- back. No line goes, the off stays owed, and the section's title says so
+test("the ii section's status reads n owed", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  ii.send("er301", "cv", 3, 1); ii.send("er301", "tr", 3, 1)
+  step(); step()
+  context.crow.unplug()
+  ii.send_off("er301", "tr", 3, 0)  -- the note's off, with no crow to take it
+  assert_equal(ii.owed(), 1, "owed: crow left while Strata led")
+  assert_equal(ii_section(S).status(), "[--] 1 owed", "no crow, an off owed")
+  set_bus(S, "off")
+  context.crow.plug()
+  local from = #context.crow.sent
+  for _ = 1, 5 do step() end
+  local sent = 0
+  for _, line in ipairs(lines_since(context, from)) do
+    if line:sub(1, 3) == "ii." then sent = sent + 1 end
+  end
+  assert_equal(sent, 0, "no ii line under off")
+  assert_equal(ii.owed(), 1, "the off still owed")
+  assert_equal(ii_section(S).status(), "1 owed", "the title says so")
+  h.show_page("IO"); S.lib.pages_io.show_section("ii"); redraw()
+  assert_true(h.screen_shows(context, "1 owed"), "on the screen")
+  h.assert_screen_layout(context, "IO, an ii off owed")
+  -- the next lead queues it: nothing owed, nothing shown
+  set_bus(S, "strata")
+  assert_equal(ii.owed(), 0, "queued by the lead")
+  assert_equal(ii_section(S).status(), nil, "nothing to show")
+end)
+
+-- #937 (5c): the dropped count is the lead's, so a later lead starts it again
+test("the dropped count starts again at a lead", function()
+  local context, S, ii = started()
+  local step = stepper(context, S)
+  lead(context, S)
+  local II = ii.II
+  for k = 1, II.queue_max + 3 do ii.send("jf", "play_note", k, 5) end
+  assert_equal(ii.dropped(), 3, "three dropped")
+  assert_equal(ii_section(S).status(), "3 dropped")
+  set_bus(S, "off")
+  assert_equal(ii.dropped(), 3, "kept while Strata does not lead, so the player still sees it")
+  assert_equal(ii_section(S).status(), "3 dropped")
+  set_bus(S, "strata")
+  assert_equal(ii.dropped(), 0, "a new lead starts the count again")
+  assert_equal(ii_section(S).status(), nil)
+  -- crow unplugged and back: the lead taken again starts it too
+  for k = 1, II.queue_max + 2 do ii.send("jf", "play_note", k, 5) end
+  assert_equal(ii.dropped(), 2)
+  context.crow.unplug(); context.crow.plug()
+  step()
+  assert_true(ii.leads(), "the lead taken again")
+  assert_equal(ii.dropped(), 0, "and its count started again")
+end)
+
 end

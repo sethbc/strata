@@ -27,7 +27,9 @@ return function(S)
     -- seconds: a step note ends this long before its gate's end (at most
     -- half the note's length early), about one and a half 48 Hz steps, so a
     -- gate target shows a low before the next step raises it
-    step_gap_seconds = 0.03}
+    step_gap_seconds = 0.03,
+    -- IO's mark on a failed target's rows while it is skipped (#880)
+    failed_mark = "[error]"}
   M.TARGETS = TARGETS
 
   -- sounding[voice][id] = {pitch, targets = {name, ...}, off_beat}; offs:
@@ -283,12 +285,25 @@ return function(S)
     return result
   end
 
+  -- A failed target's rows are copies marked TARGETS.failed_mark (the
+  -- target's own tables are never changed) while call_target skips it
+  local function marked_failed(row)
+    if type(row) ~= "table" then return row end
+    local copy = {}
+    for field, value in pairs(row) do copy[field] = value end
+    copy.mark = TARGETS.failed_mark
+    return copy
+  end
+
   local function section_rows()
     local rows = {}
     for _, target in ipairs(ordered_targets()) do
       if target.rows then
         local given = target_part(target, "rows", S.selected_voice)
-        for _, row in ipairs(type(given) == "table" and given or {}) do rows[#rows + 1] = row end
+        local skipped = failed[target.name] == true
+        for _, row in ipairs(type(given) == "table" and given or {}) do
+          rows[#rows + 1] = skipped and marked_failed(row) or row
+        end
       end
     end
     return rows

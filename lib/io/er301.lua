@@ -16,6 +16,8 @@ return function(S)
     ports = {min = 0, max = 100},   -- 0 is off
     volts = {min = -10, max = 10},  -- the SC.CV range
     labels = {off = "off", port = "port %d", row = "er-301"},
+    -- IO's mark on a route set while Strata does not lead the bus (#937)
+    idle_mark = "[idle]",
   }
   M.ER301 = ER301
 
@@ -118,7 +120,11 @@ return function(S)
     end,
     rows = function(voice)
       if not (valid_voice(voice) and params.lookup and params.lookup[param_id(voice)]) then return {} end
-      return {{label = ER301.labels.row, kind = "param", param_id = param_id(voice)}}
+      return {{label = ER301.labels.row, kind = "param", param_id = param_id(voice),
+        mark = function()
+          if port_of(voice) > 0 and not (bus() and bus().leads()) then return ER301.idle_mark end
+          return nil
+        end}}
     end,
   })
 

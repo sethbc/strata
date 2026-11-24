@@ -20,6 +20,8 @@ return function(S)
     mode_off = 0,
     param_count = NUM_VOICES + 1,
     level_id = "jf_level",
+    -- IO's mark on a route set while Strata does not lead the bus (#937)
+    idle_mark = "[idle]",
   }
   M.JF = JF
 
@@ -87,10 +89,22 @@ return function(S)
     rows = function(voice)
       if not params_added() or not valid_voice(voice) then return {} end
       return {
-        {label = "jf", kind = "param", param_id = route_id(voice), binary = {[0] = "off", [1] = "on"}},
+        {label = "jf", kind = "param", param_id = route_id(voice), binary = {[0] = "off", [1] = "on"},
+          mark = function()
+            if params:get(route_id(voice)) == 1 and not leads() then return JF.idle_mark end
+            return nil
+          end},
         {label = "jf level", kind = "param", param_id = JF.level_id, format = "%.1f V"},
       }
     end,
+    -- the route marked idle (#937): voice 1 to Just Friends with no crow,
+    -- the row reached as a player does
+    layout_states = {
+      {name = "an idle ii route", setup = function()
+        params:set(route_id(1), 1)
+        S.lib.pages_io.go_to_row("jf", "voice", {param_id = route_id(1)})
+      end},
+    },
   })
 
   return M
