@@ -476,22 +476,28 @@ var checkReplacementNeverStarts = {
 // The replace, the window's send and the restart run in one step of the
 // check's routine, with no sync or wait between them, so the replacement's
 // own timeout (startConfirmWait after the replace) cannot run before the
-// restart however slow the machine (#964); the stages are counted once
-// the server has had all three
+// restart however slow the machine (#964). The stages are counted right
+// after the replace by a tree query sent between the replace and the
+// window's send, whose reply the check reads later (the server answers it
+// in order, so it sees the group as the replace left it, and the check
+// does not wait for it there), then once the server has had all three
 var checkReplacementFailsTwice = {
     var state = engine.areaState[\mix], key = engine.voiceMixKey(voice), mixGroup = engine.voiceMixGroup(voice);
     var old = stageOf.(voice), held = { arg bundle, synth; bundle.reject({ arg msg; synth.notNil and: { [9, 15].includes(msg[0]) } and: { msg[1 + (msg[0] == 9).binaryValue] == synth.nodeID } }) };
     var stageCount = { h.synthTree(mixGroup).count({ arg node; node.def == \strataVoiceMix }) };
-    var bundle, first, second, counts = List.new, current, nodes, freq = 3210.0, kept;
+    var bundle, first, second, counts = List.new, current, nodes, freq = 3210.0, kept, afterReplace;
     bundle = server.makeBundle(false, { engine.areaCall(\replaceBadVoiceMix, old.nodeID, voice) });
     first = stageOf.(voice);
     server.sendBundle(nil, *held.(bundle, first));
+    // (flag 0: a synth's entry is its ID, -1 and its def's name)
+    OSCFunc({ arg msg; afterReplace = msg.count({ arg item; item.asString == "strataVoiceMix" }) }, '/g_queryTree.reply', server.addr).oneShot;
+    server.sendMsg('/g_queryTree', mixGroup.nodeID, 0);
     bundle = server.makeBundle(false, { command.(\setGrainParam, voice, \filterFreq, freq) });
     server.sendBundle(nil, *held.(bundle, first));
     bundle = server.makeBundle(false, { engine.areaCall(\restartVoiceMix, voice, [old], first) });
     second = stageOf.(voice);
     server.sendBundle(nil, *held.(bundle, second));
-    server.sync; counts.add(stageCount.value);
+    server.sync; counts.add(afterReplace); counts.add(stageCount.value);
     (engine.startConfirmWait * 0.5).wait; server.sync; counts.add(stageCount.value);
     (engine.startConfirmWait * 0.5 + 0.2).wait; server.sync;
     nodes = h.synthTree(mixGroup);
@@ -499,7 +505,7 @@ var checkReplacementFailsTwice = {
     current = stageOf.(voice);
     kept = current !? { getControl.(current, \filterFreq) };
     check.((second !== first) and: { current.notNil } and: { current !== second } and: { current !== first }
-        and: { nodes.last.id == current.nodeID } and: { counts.every({ arg count; count <= 1 }) } and: { counts.last == 1 }
+        and: { nodes.last.id == current.nodeID } and: { counts.every({ arg count; count.notNil and: { count <= 1 } }) } and: { counts.last == 1 }
         and: { state[\replacing][voice].not },
         "mix: a restarted stage that never starts either is started again, the third start succeeding, never two stages of the voice (#886; stages after each step %, replacing %)".format(
             counts.asArray, state[\replacing][voice]));
