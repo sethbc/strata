@@ -494,9 +494,20 @@ return function(S)
     start = (type(start) == "number" and start == start and start > 0 and start < math.huge) and start or 0
     local buffer = S.buffers[slot]
     -- remembered (with what it replaces) until a clear or recording, or
-    -- tracked_loads newer loads, in case the engine reports it failed
+    -- tracked_loads newer loads, in case the engine reports it failed.
+    -- A load being checked (the slot's checking_load, or one a tracked
+    -- load's state would give back) is never dropped while it is, and does
+    -- not count in the bound: its failure must end its check (#980)
     buffer.loads_sent = buffer.loads_sent + 1
-    if #buffer.pending_loads >= BUFFER_SETTLE.tracked_loads then table.remove(buffer.pending_loads, 1) end
+    local checked = {[buffer.checking_load or false] = true}
+    for _, load in ipairs(buffer.pending_loads) do checked[load.previous.checking_load or false] = true end
+    local others = 0
+    for _, load in ipairs(buffer.pending_loads) do if not checked[load.number] then others = others + 1 end end
+    if others >= BUFFER_SETTLE.tracked_loads then
+      for index, load in ipairs(buffer.pending_loads) do
+        if not checked[load.number] then table.remove(buffer.pending_loads, index); break end
+      end
+    end
     table.insert(buffer.pending_loads, {number = buffer.loads_sent, path = path, previous = buffer_state_before_load(slot)})
     -- loading cancels a recording in progress in the engine
     S.lib.record.end_take(slot)

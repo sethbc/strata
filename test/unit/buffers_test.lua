@@ -2672,6 +2672,45 @@ test("a checking load that fails ends its notice clock (#903)", function()
   assert_equal(S.lib.record.clock_role(2), nil, "and no notice is left")
 end)
 
+-- #980: a long load's check, then four bad loads back to back (the fourth
+-- would push the checked load out of the tracked list), failing in the
+-- order sent, then the checked load's own failure: it ends the check
+-- whatever was loaded after it, over an empty slot and over a file
+test("a checked load's failure ends its check whatever was loaded after it", function()
+  h.write_performance_active({ tier = "high", buffer_seconds = 300, max_grains = 128, history_seconds = 60,
+    reason = "high: setting" })
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  context.audio.files["/tmp/long.wav"] = {2, 48000 * 120, 48000}
+  local tracked = S.lib.buffers.BUFFER_SETTLE.tracked_loads
+  for _, case in ipairs({ {slot = 1, before = nil}, {slot = 2, before = "/tmp/old.wav"} }) do
+    local slot, first = case.slot, 1
+    if case.before then
+      load_buffer(slot, case.before); state_report(context, slot, 1, 8)
+      assert_equal(S.lib.buffers.status(slot), "loaded", "the file settled")
+      first = 2
+    end
+    load_buffer(slot, "/tmp/long.wav")
+    assert_equal(buffers[slot].checking_load, first, "the long load is checked")
+    local last = first + tracked
+    for number = first + 1, last do load_buffer(slot, "/tmp/bad" .. number .. ".wav") end
+    for number = first + 1, last do context.polls.fire("bufferLoadFailed", load_failed_value(slot, number)) end
+    assert_equal(buffers[slot].checking_load, first, "the last failure gives the check back")
+    assert_equal(S.lib.record.clock_role(slot), "notice", "and its notice")
+    context.polls.fire("bufferLoadFailed", load_failed_value(slot, first))
+    assert_equal(buffers[slot].checking_load, nil, "the check's own failure ends it")
+    assert_equal(buffers[slot].checking_from, nil)
+    assert_equal(S.lib.record.clock_role(slot), nil, "and its notice")
+    if case.before then
+      assert_equal(S.lib.buffers.status(slot), "loaded", "the file the check replaced is back")
+      assert_equal(buffers[slot].name, "old.wav"); assert_equal(buffers[slot].path, case.before)
+    else
+      assert_equal(S.lib.buffers.status(slot), "empty", "the empty slot the check replaced is back")
+    end
+    assert_equal(#buffers[slot].pending_loads, 0, "no load is left to fail")
+  end
+end)
+
 -- The "buffer slots" invariant: a notice clock runs only while the slot
 -- checks a load
 test("the buffer slots invariant: a notice clock only while a load is checked (#903)", function()
