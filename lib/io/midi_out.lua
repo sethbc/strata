@@ -39,9 +39,10 @@ return function(S)
   -- the notes on a channel; member_times[port][channel] = {released,
   -- assigned}; expressing: the played MPE notes the step reads, cursor the
   -- next to read; express_ports: the step's set of their ports; cc_last[k]:
-  -- slot k's last value; left_with[name][channel][note]: the notes a device
-  -- was sounding as it left, by the name of the device that got them, each
-  -- owed its own off where that device is next found; asked[port]: the scene a
+  -- slot k's last value; left_with[name][channel][note] = n: the offs a
+  -- device is owed for the notes it was sounding as it left, by the name of
+  -- the device that got them, paid where that device is next found with its
+  -- port free (#996); asked[port]: the scene a
   -- program change in on that port asked for, until its recall lands;
   -- setup_due[port]: the port's MPE zone owes its device a setup, sent once
   -- the port settles with its device not held (#772); held_owner[port]: the
@@ -231,8 +232,11 @@ return function(S)
   -- A note whose device left the port: marked departed, out of the
   -- expression list and the port's counts and channel use, so no off or
   -- value of it goes to whatever holds the port now, and its own off owed
-  -- where key (the device's name) is next found (#750). A note that
-  -- reached no device (key nil, #748), or went to a port a remote held
+  -- where key (the device's name) is next found (#750). The ids holding one
+  -- note on a port sounded it once on their device (each start while it
+  -- sounded sent an off first, #709), so the last of them set aside owes one
+  -- off, and the same note set aside on two ports owes two (#997). A note
+  -- that reached no device (key nil, #748), or went to a port a remote held
   -- (held: it was never sent and was never counted, #767), is owed to none
   local function set_aside(record, key)
     record.departed = true
@@ -240,11 +244,15 @@ return function(S)
     remove_expressing(record)
     local counts = table_at(state.counts, record.port, record.channel)
     counts[record.note] = (counts[record.note] or 1) - 1
-    if counts[record.note] <= 0 then counts[record.note] = nil end
+    local last = counts[record.note] <= 0
+    if last then counts[record.note] = nil end
     local use = table_at(state.use, record.port)
     use[record.channel] = (use[record.channel] or 1) - 1
     if use[record.channel] <= 0 then use[record.channel] = nil end
-    if key ~= nil then table_at(state.left_with, key, record.channel)[record.note] = true end
+    if key ~= nil and last then
+      local owed = table_at(state.left_with, key, record.channel)
+      owed[record.note] = (owed[record.note] or 0) + 1
+    end
   end
 
   -- The notes on port that went to a device the port no longer holds (a
@@ -549,35 +557,36 @@ return function(S)
     end
   end
 
-  -- What a device named name is owed, {[channel] = {[note] = true}},
-  -- taken: the entry is cleared
+  -- What a device named name is owed, {[channel] = {[note] = n}}, taken:
+  -- the entry is cleared
   local function arrived_notes(name)
     local owed = state.left_with[name]
     state.left_with[name] = nil
     return owed
   end
 
-  -- A note_off on port for each of offs ({[channel] = {[note] = true}}),
-  -- channels 1 to 16 and notes ascending
+  -- n note_offs on port for each channel and note of offs ({[channel] =
+  -- {[note] = n}}), channels 1 to 16 and notes ascending
   local function send_offs(port, offs)
     for channel = 1, MIDI_OUT.channels do
       local notes = offs[channel]
       if notes then
         for note = 0, MIDI_OUT.notes - 1 do
-          if notes[note] then send(port, "note_off", note, 0, channel) end
+          for _ = 1, notes[note] or 0 do send(port, "note_off", note, 0, channel) end
         end
       end
     end
   end
 
   -- The owed notes of the device named name, paid where it is now (port): a
-  -- note_off for each (send_offs), even for a note that sounds there again
-  -- now (the device had two ons, #709). No CC 123 is sent (#750). True
-  -- when anything was owed
+  -- note_off for each owed on (send_offs), even for a note that sounds there
+  -- again now (the device had two ons, #709). No CC 123 is sent (#750). A
+  -- port a remote holds gets nothing, so the debt stays owed until the port
+  -- is let go (the settled hook, below) or the device is found elsewhere
+  -- (#996). True when anything was paid
   local function pay_owed(port, name)
-    local owed = arrived_notes(name)
-    if not owed then return false end
-    send_offs(port, owed)
+    if remote_holds(port) or state.left_with[name] == nil then return false end
+    send_offs(port, arrived_notes(name))
     return true
   end
 
@@ -606,6 +615,9 @@ return function(S)
   -- marks the setup again) (#772, #788)
   S.lib.io_ports.on_settled("io_midi_out", function(port)
     if state.stopped or remote_holds(port) then return end
+    -- a debt kept while a remote held the port (#996), before any zone message
+    local name = S.lib.io_ports.device(port)
+    if name ~= nil and pay_owed(port, name) then request_redraw() end
     if state.takedown_due[port] then
       state.takedown_due[port] = nil
       if present(port) then takedown(port) end
@@ -617,15 +629,19 @@ return function(S)
   end)
 
   -- As the menu closes, after S.lib.io_ports' own hook (included first) has
-  -- told every move: each port whose device is still owed notes pays them
-  -- there. A device moved away and back to its port in one visit is told
-  -- nothing, since the port holds what it held before (#747)
+  -- told every move: every port is settled, so a note sent mid-menu to a
+  -- device at a port it visited and left again is set aside, owed to it,
+  -- though the close tells that port nothing (#988); then each port whose
+  -- device is owed notes pays them there, unless a remote holds it (#996). A
+  -- device moved away and back to its port in one visit is told nothing,
+  -- since the port holds what it held before (#747)
   function M.reconcile_owed()
     if state.stopped then return end
+    for port = 1, S.lib.io_ports.PORTS.count do settle_moved(port) end
     local paid = false
     for port = 1, S.lib.io_ports.PORTS.count do
       local name = S.lib.io_ports.device(port)
-      if name ~= nil and state.left_with[name] ~= nil and pay_owed(port, name) then paid = true end
+      if name ~= nil and pay_owed(port, name) then paid = true end
     end
     if paid then request_redraw() end
   end
@@ -665,7 +681,7 @@ return function(S)
     for voice = 1, NUM_VOICES do
       for _, record in pairs(state.notes[voice]) do
         if record.port == port and not record.departed and not record.held then
-          table_at(offs, record.channel)[record.note] = true
+          table_at(offs, record.channel)[record.note] = 1
           set_aside(record, nil)
         end
       end
