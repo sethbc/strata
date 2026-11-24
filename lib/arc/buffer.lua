@@ -7,7 +7,10 @@
 return function(S)
   local M = {}
 
-  local ARC_BUFFER_LEVELS = {buffer = 15, other = 4, fixed = 12}
+  -- held: ALT ring 1 while the selected voice's scan is held, by this
+  -- ring or a grid's HD key (#934)
+  local ARC_BUFFER_LEVELS = {buffer = 15, other = 4, fixed = 12, held = 8}
+  M.ARC_BUFFER_LEVELS = ARC_BUFFER_LEVELS
 
   -- Rings 1-4 plain and with ALT. voice_key: the param id suffix after
   -- "v<i>_"; param_id: a global param. always_level: the ring's level
@@ -60,16 +63,21 @@ return function(S)
     turn_ring(ring, delta)
   end
 
-  local function draw_rings(arc_port, rings)
+  -- Each ring at its fixed level or the voice's; with ALT, ring 1 at the
+  -- held level while the selected voice's scan is held (whoever holds it,
+  -- as the grid's HD key shows it)
+  local function draw_rings(arc_port, rings, alt)
     local uses_buffer = voice_uses_buffer(S.selected_voice)
     local voice_level = uses_buffer and ARC_BUFFER_LEVELS.buffer or ARC_BUFFER_LEVELS.other
     for n, ring in ipairs(rings) do
-      arc_ring_fill_param(arc_port, n, ring_param(ring), ring.always_level or voice_level)
+      local level = ring.always_level or voice_level
+      if alt and n == 1 and S.lib.positions.scan_held(S.selected_voice) then level = ARC_BUFFER_LEVELS.held end
+      arc_ring_fill_param(arc_port, n, ring_param(ring), level)
     end
   end
 
-  local function arc_buffer_redraw(arc_port) draw_rings(arc_port, ARC_BUFFER_RINGS) end
-  local function arc_buffer_alt_redraw(arc_port) draw_rings(arc_port, ARC_BUFFER_ALT_RINGS) end
+  local function arc_buffer_redraw(arc_port) draw_rings(arc_port, ARC_BUFFER_RINGS, false) end
+  local function arc_buffer_alt_redraw(arc_port) draw_rings(arc_port, ARC_BUFFER_ALT_RINGS, true) end
 
   S.register_alt_release(function()
     local voice = held_voice

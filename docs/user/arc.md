@@ -104,7 +104,7 @@ On the **BUFFER** page:
 
 With **ALT** (K1) held:
 
-- **Ring 1** - Buffer position; from its first turn the voice's own scan stops, until you let go of ALT
+- **Ring 1** - Buffer position; from its first turn the voice's own scan stops, until you let go of ALT. While the scan is held (by this ring or a grid's HD key) the ring is drawn at 8
 - **Ring 2** - Buffer rate
 - **Ring 3** - Scrub friction
 - **Ring 4** - Record feedback
@@ -149,5 +149,5 @@ The button runs the page's main action, on the pages that give it one (each page
 - IO: level 12
 - LFO: depth rings bright (15) while the LFO runs, dim (4) when off; ring 4 at 12
 - MOD: level 12; a routing's depth ring dim (4) while the routing is off or misses its source or destination
-- BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12. The slice editor's rings at 15
+- BUFFER: rings bright (15) for a buffer-sourced voice, dim (4) otherwise; the ALT record feedback ring always at 12; ALT ring 1 at 8 while the voice's scan is held. The slice editor's rings at 15
 - SCENES: level 12

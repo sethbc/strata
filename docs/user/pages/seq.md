@@ -6,7 +6,7 @@ All seven patterns, the sequencer's transport and the tempo, so patterns can be 
 
 - **E2** - Move the step cursor (steps 1-16)
 - **E3** - Set the step's level: 0 (off) to 15, the level the step accents its voice at (the same levels the grid shows)
-- **K2** - Play/stop the patterns
+- **K2** - Play/stop the patterns. With quantize actions on beat or bar a start waits for the next beat or bar: the hint reads `K2:cancel` until then, and K2 takes the start back
 - **K3** - Turn the step on (at 15) or off
 - **ALT+E2** - Move to another voice's row; the selected voice follows (MAIN, VOICE and BUFFER show it too)
 - **ALT+E3** - Change the tempo (1 BPM per detent)

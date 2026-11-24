@@ -1383,4 +1383,27 @@ test("an ALT+K2 held across a second open of the step editor holds nothing", fun
   S.lib.pages_seq.close_step_editor(2)
 end)
 
+
+-- #876: while a quantized start waits for its bar, K2 takes it back, and
+-- the hint says so; the bar's start then reads K2:stop
+test("SEQ's hint reads K2:cancel while a start waits", function()
+  local context, S = started_on_seq()
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  tap(2)
+  assert_equal(S.lib.sequencer.play_state(), "armed", "the start waits")
+  redraw()
+  assert_equal(hint_text(context), "K2:cancel K3:step E3:level", "K2 takes the start back")
+  tap(2)
+  assert_equal(S.lib.sequencer.play_state(), "stopped", "K2 took it back")
+  redraw()
+  assert_equal(hint_text(context), "K2:play K3:step E3:level", "stopped: K2 plays")
+  tap(2)
+  context.clock.run_for((4.05 - clock.get_beats()) * clock.get_beat_sec())
+  assert_equal(S.lib.sequencer.play_state(), "playing", "the bar started it")
+  redraw()
+  assert_equal(hint_text(context), "K2:stop K3:step E3:level", "playing: K2 stops")
+  tap(2)
+end)
+
 end

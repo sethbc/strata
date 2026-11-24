@@ -4,7 +4,7 @@
 - **The page reads the positions module's records only through `S.lib.positions`** (`grid_key`, `strip_key`, `grid_level`, `strip_level`): the module's record stays at `port_state(port).positions`, the module's own; the page has no state of its own (it would be `pane.state()`, never `port_state`). It sends no engine command for the heads or bookmarks: jumps and recalls enter only through `S.lib.positions`.
 - **The cells are always sixteen** (`GRID_PAGES.position_cells`): on a 64's half the pane shows cells 1-8 or 9-16 and a two-key loop is made within the half shown; the cells' level passes the port (`grid_level(v, cell, 16, port)`), as a slice row's bank is the port's.
 - **The slots' keys are side 2's columns 9-16** (slot `x - 8`, `slot_column` 8): line 1 `grid_core.record_key`, line 2 `grid_core.clear_key`, at the press only; LEDs `record_level(slot)` and `CLEAR_LEVEL`. Lines 3-7 there are dark and do nothing.
-- **Redraws come from elsewhere**: the cells and the marks repaint only from the playheads' 15 Hz clock, while any pane shows the page (`any_page(GRID_PAGES.positions)`, either side) and `S.lib.positions.display_signature()` changes; no param action redraws them. Side 2's record and clear keys follow the slots' display change instead: `lib/buffers.lua`'s poll gate (`any_page(sources) or any_page(positions, 2)`) and `buffer_display_changed`, which redraws every grid and which a record param's action (`buf<n>_record`) can raise. The page has no `signature` and no fader lines.
+- **Redraws come from elsewhere**: the cells and the marks repaint only from the playheads' 15 Hz clock, while any pane shows the page (`any_page(GRID_PAGES.positions)`, either side) and `S.lib.positions.display_signature()` changes, and, for a cell whose jump or loop waits, from the same clock's `S.lib.grid_core.blink_tick()` (#876); no param action redraws them. Side 2's record and clear keys follow the slots' display change instead: `lib/buffers.lua`'s poll gate (`any_page(sources) or any_page(positions, 2)`) and `buffer_display_changed`, which redraws every grid and which a record param's action (`buf<n>_record`) can raise. The page has no `signature` and no fader lines.
 
 ## Owns
 
@@ -17,7 +17,7 @@ Side 1 (lines 1-7 are voices 1-7):
 
 | x | Press | Release | LED |
 |---|---|---|---|
-| 1-16 | `grid_key(port, y, x, 16, 1, pane.index, still)`: a jump (quantized), with a key of the line held a loop, on a slice row its slice | `grid_key(..., 0, ...)` | `grid_level(y, x, 16, port)` |
+| 1-16 | `grid_key(port, y, x, 16, 1, pane.index, still)`: a jump (quantized), with a key of the line held a loop, on a slice row its slice | `grid_key(..., 0, ...)` | `grid_level(y, x, 16, port)`; the cell a waiting jump or loop was pressed on blinks once its key is up (#876) |
 
 Side 2:
 

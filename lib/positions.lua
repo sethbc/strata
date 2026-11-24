@@ -22,7 +22,8 @@ return function(S)
     bookmark = 6, recalled = 10, stored = 15, key_down = 15, key_up = 4, whole = 15,
     -- a bookmark that waits for its beat or bar (#593) blinks between these,
     -- each for waiting_ticks of the playhead clock's ticks (no steady level
-    -- stands clear of 6, 10 and 15 on a varibright grid)
+    -- stands clear of 6, 10 and 15 on a varibright grid); since #876 every
+    -- waiting key blinks so, through S.lib.grid_core.waiting_level
     waiting_high = 15, waiting_low = 2, waiting_ticks = 4, waiting_phases = 2,
     -- 3.7's slice rows (design §10): a slice that exists, its key held, the
     -- slice playing, none; the strip's bank keys: the bank shown, one that
@@ -133,12 +134,14 @@ return function(S)
 
   -- The hold changes (the holders were just changed to match): bring the
   -- playhead estimate up to now first. Every grid's hold key shows it,
-  -- whoever changed it (a grid key, the arc, a grid that left, cleanup)
+  -- whoever changed it (a grid key, the arc, a grid that left, cleanup),
+  -- and so does BUFFER's ALT ring 1 (#934)
   local function set_scan_hold(voice_idx, on)
     S.lib.playheads.advance(voice_idx)
     scan_hold[voice_idx] = on
     send_grain(voice_idx, "scanHold", on and 1 or 0)
     grid_redraw()
+    request_redraw()
   end
 
   -- A holder (any non-nil key, "caller" by default; the grid passes
@@ -217,23 +220,16 @@ return function(S)
   -- A user's bookmark recall (a grid's strip key, BUFFER's bm field; 3.4,
   -- design §8.9): at the next beat or bar quantize_actions names (key
   -- bookmark<v>), at once while it is off. waiting_bookmark(v) is the
-  -- bookmark that waits, while that recall is the one that waits
-  local waiting_recalls = {}  -- per voice, {n, token} of the last recall that waited
+  -- bookmark that waits: the number the waiting recall keeps as its detail
   function M.recall_bookmark_quantized(voice_idx, n)
     if not buffer_voice(voice_idx) or not valid_bookmark(n) then return end
-    local _, token = S.lib.quantize.schedule("bookmark" .. voice_idx, function() M.recall_bookmark(voice_idx, n) end,
-      "v" .. voice_idx .. " bm " .. n)
-    waiting_recalls[voice_idx] = token and {n = n, token = token} or nil
+    S.lib.quantize.schedule("bookmark" .. voice_idx, function() M.recall_bookmark(voice_idx, n) end,
+      "v" .. voice_idx .. " bm " .. n, n)
   end
 
-  -- The playhead clock's tick count, which times the waiting blink (#593)
-  local blink_ticks = 0
-  function M.advance_blink() blink_ticks = blink_ticks + 1 end
-
   function M.waiting_bookmark(voice_idx)
-    local recall = valid_voice(voice_idx) and waiting_recalls[voice_idx]
-    if recall and S.lib.quantize.waiting("bookmark" .. voice_idx, recall.token) then return recall.n end
-    return nil
+    if not valid_voice(voice_idx) then return nil end
+    return S.lib.quantize.waiting_detail("bookmark" .. voice_idx)
   end
 
   -- Bookmark n becomes the voice's playhead, or, stopped, its buf_pos mapped
@@ -600,11 +596,13 @@ return function(S)
     local held = record.held
     if held and held.voice == voice_idx and held.cells == cells and held.cell ~= cell then
       local low, high = math.min(held.cell, cell), math.max(held.cell, cell)
-      S.lib.quantize.schedule("position" .. voice_idx, function() M.set_loop(voice_idx, (low - 1) / cells, high / cells) end, "v" .. voice_idx .. " jump")
+      S.lib.quantize.schedule("position" .. voice_idx, function() M.set_loop(voice_idx, (low - 1) / cells, high / cells) end,
+        "v" .. voice_idx .. " jump", {voice = voice_idx, cell = cell})
       return
     end
     record.held = {voice = voice_idx, cell = cell, cells = cells, pane = pane or 1, still = held_still(still)}
-    S.lib.quantize.schedule("position" .. voice_idx, function() M.jump(voice_idx, (cell - 1) / cells) end, "v" .. voice_idx .. " jump")
+    S.lib.quantize.schedule("position" .. voice_idx, function() M.jump(voice_idx, (cell - 1) / cells) end,
+      "v" .. voice_idx .. " jump", {voice = voice_idx, cell = cell})
   end
 
   -- The strip's keys: 1-4 (recall; with store held, store), "store" and
@@ -744,7 +742,14 @@ return function(S)
     if type(cell) ~= "number" or cell < 1 or cell > cells or cell % 1 ~= 0 then return 0 end
     if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then return slice_level(slice_context(voice_idx, port), cell) end
     local context = row_context(voice_idx, cells)
-    return context and cell_level(context, cell) or 0
+    if not context then return 0 end
+    -- the cell a waiting jump or loop was pressed on blinks once its key
+    -- is up (#876; held, it shows the hold)
+    local waiting = S.lib.quantize.waiting_detail("position" .. voice_idx)
+    if type(waiting) == "table" and waiting.cell == cell and not context.held_cells[cell] then
+      return S.lib.grid_core.waiting_level()
+    end
+    return cell_level(context, cell)
   end
 
   -- The LED level of one of a voice's strip keys (1-4, "store", "hold",
@@ -761,9 +766,7 @@ return function(S)
       if any_record(function(record) return storing(record, voice_idx) and record.pressed[voice_idx] == key end, port) then
         return LEVELS.stored
       end
-      if M.waiting_bookmark(voice_idx) == key then
-        return math.floor(blink_ticks / LEVELS.waiting_ticks) % LEVELS.waiting_phases == 0 and LEVELS.waiting_high or LEVELS.waiting_low
-      end
+      if M.waiting_bookmark(voice_idx) == key then return S.lib.grid_core.waiting_level() end
       if M.last_recalled(voice_idx) == key then return LEVELS.recalled end
       return LEVELS.bookmark
     elseif key == "hold" then

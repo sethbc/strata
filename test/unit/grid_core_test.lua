@@ -2055,4 +2055,53 @@ test("fader groups sort by rank, and groups of one rank keep their registration 
     "rank 0 after the built-ins, a rank's later group after its earlier, 2.5 between 2 and 3")
 end)
 
+
+-- #876: while a quantized pattern start waits for its bar, the play key
+-- (PL on the 256, NV on the 64) blinks between the waiting levels, as a
+-- waiting bookmark does (#593), whoever pressed it (here SEQ's K2: the
+-- playheads' tick repaints the grids); the bar's start shows playing, and
+-- a start taken back off the grid shows stopped within a tick
+test("the play key blinks while a start waits, on PL and NV", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local core = grid_core()
+  local full = context.grid.plug(1, 16, 16)
+  local small = context.grid.plug(2, 8, 8)
+  local levels, tick = core.LEVELS, 1 / S.constants.PLAYHEADS.update_hz
+  local high, low = S.lib.positions.LEVELS.waiting_high, S.lib.positions.LEVELS.waiting_low
+  local function seen_over(ticks)
+    local seen = {pl = {}, nv = {}}
+    for _ = 1, ticks do
+      context.clock.run_for(tick)
+      seen.pl[full:get_led(1, 8)] = true
+      seen.nv[small:get_led(1, 8)] = true
+    end
+    return seen
+  end
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  assert_equal(full:get_led(1, 8), levels.stopped, "PL stopped")
+  assert_equal(small:get_led(1, 8), levels.stopped, "NV stopped")
+  pattern_toggle()
+  assert_equal(S.lib.sequencer.play_state(), "armed", "the start waits")
+  local seen = seen_over(12)
+  for _, name in ipairs({"pl", "nv"}) do
+    assert_true(seen[name][high] and seen[name][low], name .. " blinks while the start waits")
+    assert_true(not seen[name][levels.stopped], name .. " never shows stopped meanwhile")
+  end
+  pattern_toggle()  -- taken back from the screen: no grid key repaints
+  context.clock.run_for(tick * 2)
+  assert_equal(S.lib.sequencer.play_state(), "stopped", "taken back")
+  assert_equal(full:get_led(1, 8), levels.stopped, "PL stopped again within a tick")
+  assert_equal(small:get_led(1, 8), levels.stopped, "NV stopped again within a tick")
+  pattern_toggle()
+  context.clock.run_for((4.05 - clock.get_beats()) * clock.get_beat_sec())
+  assert_equal(S.lib.sequencer.play_state(), "playing", "the bar started it")
+  seen = seen_over(8)
+  for _, name in ipairs({"pl", "nv"}) do
+    assert_true(seen[name][levels.playing] and not seen[name][low], name .. " shows playing, steady")
+  end
+  pattern_clock_stop()
+end)
+
 end

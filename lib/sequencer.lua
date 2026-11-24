@@ -1566,6 +1566,15 @@ return function(S)
     end
   end
 
+  -- The patterns' play state (#876), read from the two facts that hold it:
+  -- "playing" while they play, "armed" while a start the play key left
+  -- waits for the quantizer, "stopped" otherwise. SEQ's hint and the
+  -- grid's play key read it; it stores nothing
+  function M.play_state()
+    if S.pattern_playing then return "playing" end
+    return S.lib.quantize.waiting("patterns") and "armed" or "stopped"
+  end
+
   -- Start (or start again) the patterns now: every voice and the transport
   -- at step 1 on this beat, a running chain at its first scene (the
   -- patterns it replaces held by the undo on SEQ, #922), and every

@@ -2,7 +2,7 @@
 
 - **SV saves only while held in its role on this pane** (`pane.pressed_as(2, 7, "save")`, or x 16 on a half pane showing columns 9-16): a scene key of line 1 or 2 then calls `S.lib.scenes.save(x)` alone, at its press, and recalls nothing. SV released first, the key recalls; a page change of the pane forgets SV's role (`end_pane_keys`, ruling 54); each pane of a 256 has its own SV (its role is its physical key's). There is no save hold (design §10.10): SV replaces 3.7's half-second save key.
 - **x 16 of line 7 is SV only on a half pane showing x 16 and not x 2** (the 64's right half, ruling 58); on a full pane it is dark and never takes the role.
-- **Every recall goes through the quantizer**, wrapped in a function: `S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x)` (line 1), and with `params:get("scene_transition_time")` read at the press (line 2). An unwrapped `recall_scene` would recall at once.
+- **Every recall goes through the quantizer**, wrapped in a function: `S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x, x)` (line 1), and with `params:get("scene_transition_time")` read at the press (line 2). An unwrapped `recall_scene` would recall at once. The last argument is the action's detail, its slot, by which both keys of the scene blink while it waits (`scene_recall_level`, `scene_fade_level`, #876); SCENES' K2 and K3 pass theirs too.
 - **SQ goes through `set_binary_param`**, so a MIDI map echoes it (#538).
 - **The recorders go through `pane.gesture_key(x, 7, z, x - 8)`** on the press and the release: the core's role makes a key act only at the release of a press made as that recorder's key, and its half-second hold clears.
 - **The morph's X and Y are fader lines** (`faders(pane)`: line 4 `morph`, line 5 `morph_y`, `S.lib.grid_pane.LINE_KEYS` keys each), set and drawn by the pane engine through `set_param_from_column`, so a recorder records them as grid touches. A missing (renamed) `morph` or `morph_y` raises in `faders` (`params:lookup_param`), inside the faders' containment, which prints it once and leaves the page no fader lines; never on the engine's `draw_line` path, and never a line silently dropped (#853).
@@ -19,8 +19,8 @@
 
 | Line | x | Press | Release | LED |
 |---|---|---|---|---|
-| 1 | 1-16 | SV held: save x; else recall x at once (quantized) | - | `scene_recall_level(x)` 15 / 10 / 8 / 2 |
-| 2 | 1-16 | SV held: save x; else recall x with the transition time (quantized) | - | `scene_fade_level(x)` 6 / 2 |
+| 1 | 1-16 | SV held: save x; else recall x at once (quantized) | - | `scene_recall_level(x)` 15 / 10 / 8 / 2; blinking while its recall waits |
+| 2 | 1-16 | SV held: save x; else recall x with the transition time (quantized) | - | `scene_fade_level(x)` 6 / 2; blinking while its recall waits |
 | 3 | 1-16 | `params:set("morph_" .. the corner's letter, x)` | - | 15 the corner's scene, 6 populated, 2 empty |
 | 4, 5 | 1-16 | fader lines `morph`, `morph_y` (the engine's) | - | bar 8, value 15 |
 | 6 | 1-16 | `scene_sequence_length = x` | - | 8 within, 2 beyond |

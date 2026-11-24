@@ -1829,4 +1829,43 @@ test("MAIN ring 3 is grain pitch on a voice source", function()
   assert_ring_fraction(device, 3, param_fraction("v1_grain_pitch"), "ring 3 shows grain pitch")
 end)
 
+
+-- #934: with ALT held, BUFFER's ring 1 shows the selected voice's scan hold
+-- at its held level, whoever holds it (the ring's own turn or a grid's HD
+-- key); unheld, and without ALT, it shows at the voice's level
+test("BUFFER's ring 1 shows the scan hold under ALT", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  local device = context.arc.plug(1)
+  local S = local_value("S")
+  params:set("v1_source", 2)
+  params:set_raw("v1_buf_pos", 0.5)
+  local held = S.lib.arc_buffer.ARC_BUFFER_LEVELS.held
+  assert_true(held ~= 15 and held ~= 4, "the held level is neither of the voice's levels")
+  key(1, 1)
+  arc_redraw()
+  assert_equal(device.segments[1].level, 15, "ALT, not held: the buffer voice's level")
+  context.arc.turn(1, 1, 1)
+  assert_true(S.lib.positions.scan_held(1), "the turn holds the scan")
+  arc_redraw()
+  assert_equal(device.segments[1].level, held, "ALT, held by the arc: the held level")
+  key(1, 0)
+  arc_redraw()
+  assert_equal(device.segments[1].level, 15, "ALT up: released, plain ring 1 at 15")
+  S.lib.positions.hold_scan(1, true, "grid:1")
+  arc_redraw()
+  assert_equal(device.segments[1].level, 15, "plain ring 1 never shows the hold")
+  key(1, 1)
+  arc_redraw()
+  assert_equal(device.segments[1].level, held, "ALT, held by a grid's HD: the held level")
+  -- a hold that ends or begins off the arc reaches the rings at the next frame
+  S.lib.positions.hold_scan(1, false, "grid:1")
+  context.clock.run_for(0.1)
+  assert_equal(device.segments[1].level, 15, "the grid let go: the ring follows by itself")
+  S.lib.positions.hold_scan(1, true, "grid:1")
+  context.clock.run_for(0.1)
+  assert_equal(device.segments[1].level, held, "the grid held again: the ring follows by itself")
+  key(1, 0)
+  S.lib.positions.hold_scan(1, false, "grid:1")
+end)
+
 end

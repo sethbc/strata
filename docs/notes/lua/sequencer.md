@@ -37,7 +37,7 @@
 ## Machines
 
 ### pattern clock
-- **State:** `S.pattern_playing`, the transport's `S.pattern_clock` and the voices' `S.pattern_clocks[v]` (the running clocks' ids; nil while stopped), and a start the play key left waiting (`S.lib.quantize.waiting("patterns")`): `stopped`, `armed` or `playing`. No accessor names it yet.
+- **State:** `S.pattern_playing`, the transport's `S.pattern_clock` and the voices' `S.pattern_clocks[v]` (the running clocks' ids; nil while stopped), and a start the play key left waiting (`S.lib.quantize.waiting("patterns")`): `stopped`, `armed` or `playing`, named by `S.lib.sequencer.play_state()` (#876; it stores nothing), which SEQ's hint and the grid's play key read. The table's test keeps its own reading of the two facts.
 - **Invariant:** `pattern clock`: playing exactly while the transport's and every voice's clock is recorded, each running and not retired; every retired clock still runs.
 - **Test:** `test/unit/sequencer_test.lua`: "pattern clock: stopped + play key" (one test a row: `quantize_actions` on bar, the MIDI clock followed), and "an error in a step stops the pattern clock and shows it stopped (#243)".
 
@@ -110,7 +110,7 @@ No table of its own: a first hit sets them (the two machines below); every end i
   - the data: `S.patterns` (levels) and `S.pattern_steps` (attributes), built fresh by the constructor; `S.seq_euclid` (the last fill per voice, not stored; nil after any other whole-pattern change, #923);
   - the clocks' state: `S.pattern_playing`, the transport's `S.pattern_clock`, `S.pattern_position` and `S.pattern_sounding_step`, the voices' `S.pattern_clocks` and `S.pattern_sounding_steps`; the rest (anchors, ticks, due beats, the count's offset, positions, the chain, the failed outputs, the overrides held, each voice's chord, the gate lengths sent) is local;
   - global functions: `toggle_pattern_step`, `clear_pattern`, `randomize_pattern`, `pattern_toggle`, `pattern_clock_start`, `pattern_clock_stop`, `step_brightness`;
-  - fields: `sounding_step(voice)`, `replace_pattern(voice, steps)`, `has_set_step(voice)`, `step_attr(voice, step, key)`, `set_step_attr(voice, step, key, value)`, `valid_steps(steps)`, `degree_semitones(voice, k)`, `gate_seconds(voice, step, hits)`, `note_gate(voice)`, `euclid(voice, hits, rotation)`, `restart_voice(voice, beat)` (public for its tests; nothing while the patterns are stopped, #924), `follows_transport()`, `count_offset()`, `add_params()`, `SEQ`;
+  - fields: `play_state()` (`stopped`, `armed` or `playing`, #876), `sounding_step(voice)`, `replace_pattern(voice, steps)`, `has_set_step(voice)`, `step_attr(voice, step, key)`, `set_step_attr(voice, step, key, value)`, `valid_steps(steps)`, `degree_semitones(voice, k)`, `gate_seconds(voice, step, hits)`, `note_gate(voice)`, `euclid(voice, hits, rotation)`, `restart_voice(voice, beat)` (public for its tests; nothing while the patterns are stopped, #924), `follows_transport()`, `count_offset()`, `add_params()`, `SEQ`;
   - the `voices` step output; the `steps` scene block; the `seq` voice-param record (eight params per voice); the `strata_seq` group (`add_params`, called by `lib/params_setup.lua`'s `seq` menu record);
   - the transport handlers (a local `transport` table: `start`, `stop`, the handlers found at install and `installed`, true from start step 160 to cleanup);
   - start step 160: the transport handlers installed; cleanup step 90: the patterns stopped, every retired clock canceled and the transport handlers given back;

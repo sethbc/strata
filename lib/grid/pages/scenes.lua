@@ -73,15 +73,16 @@ return function(S)
   end
 
   -- A scene key of line 1 or 2: with SV held it saves only; else the
-  -- recall waits for the quantizer (at once with quantize actions off)
+  -- recall waits for the quantizer (at once with quantize actions off),
+  -- keeping its slot, by which the scene's keys blink while it waits (#876)
   local function scene_key(pane, x, y)
     if sv_held(pane) then
       S.lib.scenes.save(x)
     elseif y == lines.recall then
-      S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x)
+      S.lib.quantize.schedule("scene", function() recall_scene(x, 0) end, "S" .. x, x)
     else
       local t = params:get("scene_transition_time")
-      S.lib.quantize.schedule("scene", function() recall_scene(x, t) end, "S" .. x)
+      S.lib.quantize.schedule("scene", function() recall_scene(x, t) end, "S" .. x, x)
     end
   end
 
