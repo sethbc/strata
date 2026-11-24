@@ -255,11 +255,25 @@ return function(S)
   end
 
   -- Whether a playing routing or LFO home moves one of the voice's params
-  -- (MAIN's ~): the homes 17-22 count as the routings 1-16 do (#881)
+  -- (MAIN's ~): the homes 17-22 count as the routings 1-16 do (#881). Each
+  -- slot's read (its destination's resolve among it) is contained: one
+  -- that raises counts as not playing and prints once per message under
+  -- "<the step's label> (affects)", so MAIN's draw goes on (fix round 1)
+  local affects_errors, affects_labels, affects_found = {}, {}, false
+  for k = 1, ROUTINGS do
+    affects_labels[k] = (k > MATRIX_SLOTS and ("matrix home " .. (k - MATRIX_SLOTS)) or ("matrix routing " .. k))
+      .. " (affects)"
+  end
+  local function affects_one(k, voice_text)
+    local _, id = examine(k)
+    affects_found = id ~= nil and id:match("^v(%d+)_") == voice_text
+  end
   function M.affects(voice_idx)
+    local voice_text = tostring(voice_idx)
     for k = 1, ROUTINGS do
-      local _, id = examine(k)
-      if id and id:match("^v(%d+)_") == tostring(voice_idx) then return true end
+      affects_found = false
+      local ran = S.lib.ui_frame.contained_call(affects_errors, k, affects_labels[k], affects_one, k, voice_text)
+      if ran and affects_found then return true end
     end
     return false
   end

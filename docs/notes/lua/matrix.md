@@ -105,7 +105,7 @@ Each routing's read and each destination's update is contained (above); a raisin
 
 `set_fast_extra(source_key, param_id, m)` records the macros' extras (half ranges, by source key `macro<m>`, nil or a value that is not finite clearing it; a param that is no fast destination is ignored). The macros call it at once, never through the round robin (#636: the hand-over reaches no engine), so an extra joins the sum at the matrix's next step: the same step when the LFO step or the macros' hook (both before the matrix's) hands it over.
 
-`uses_source(key)` and `affects(voice)` read the playing routings (`status` `summed` or `owned`): a routing that is off, incomplete, at depth 0 or with an unknown part counts for neither; `affects` reads the six homes as well. `offset(param_id)` is the matrix's current sum on a param: the extra offset on a Lua destination (in its units), the clamped sum on a fast one (half ranges); 0 when nothing reaches it.
+`uses_source(key)` and `affects(voice)` read the playing routings (`status` `summed` or `owned`): a routing that is off, incomplete, at depth 0 or with an unknown part counts for neither; `affects` reads the six homes as well, each slot's read (its destination's `resolve` among it) contained under `<the step's label> (affects)`: one that raises counts as not playing and prints once per message, so MAIN's draw goes on. `offset(param_id)` is the matrix's current sum on a param: the extra offset on a Lua destination (in its units), the clamped sum on a fast one (half ranges); 0 when nothing reaches it.
 
 ## Learn
 

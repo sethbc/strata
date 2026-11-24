@@ -1171,7 +1171,7 @@ end)
 -- #896 (3.9, package 5d): with fewer than two corners set the morph does
 -- nothing, so its rows say so where the morph is drawn: each empty
 -- corner's row ([empty], right) and the morph row (what it needs), read
--- from the morph's own plan_ready(); with two set nothing changes
+-- from the morph's own corners_ready(); with two set nothing changes
 test("the morph says it has fewer than two corners", function()
   local context, S = loaded()
   assert_true(not S.lib.morph.plan_ready(), "no corner holds a scene at the start")
@@ -1194,13 +1194,88 @@ test("the morph says it has fewer than two corners", function()
   assert_equal(row_text(context, list_row(context, "C").y, ROW_LABEL_X), "C  S3", "C empty, but the morph is ready")
   place(S, "morph")
   assert_equal(row_text(context, list_row(context, "morph").y, ROW_LABEL_X), "morph  0%", "the morph row as before")
-  -- the page reads the morph's answer, never a copy of its own
-  local real = S.lib.morph.plan_ready
-  S.lib.morph.plan_ready = function() return false end
+  -- the page reads the morph's answer (its pure reader), never a copy of its own
+  local real = S.lib.morph.corners_ready
+  S.lib.morph.corners_ready = function() return false end
   redraw()
   assert_equal(row_text(context, list_row(context, "morph").y, ROW_LABEL_X), "morph [need 2]  0%",
-    "the row follows plan_ready")
-  S.lib.morph.plan_ready = real
+    "the row follows corners_ready")
+  S.lib.morph.corners_ready = real
+end)
+
+
+-- The morph's own state table (lib/morph.lua's local state), reached
+-- through a function that closes over it, to check that MOD's draw leaves
+-- it alone
+local function morph_state(S)
+  local index = 1
+  while true do
+    local name, value = debug.getupvalue(S.lib.morph.corner, index)
+    if name == nil then error("S.lib.morph.corner holds no state upvalue") end
+    if name == "state" then return value end
+    index = index + 1
+  end
+end
+
+-- Scene 1: voice 3 on its synth; scene 2: voice 3 on buffer 1 (a discrete
+-- entry they differ in), the morph's A and B
+local function two_morph_scenes(S)
+  local synth = S.constants.SOURCE_SYNTH
+  params:set("v3_source", synth + 1); capture_scene(2)
+  params:set("v3_source", synth); capture_scene(1)
+  return synth
+end
+
+-- #896, fix round 1: MOD reads the corners through the morph's pure
+-- reader, so a draw with a stale plan rebuilds nothing, forgets nothing
+-- applied and flashes nothing again
+test("drawing MOD with a stale plan leaves the morph's plan, owned and flashed as they were", function()
+  local context, S = loaded()
+  two_morph_scenes(S)
+  params:set("morph", 0.3); context.clock.run_for(0.5)       -- a ready morph applies
+  local state = morph_state(S)
+  local plan, owned, flashed = state.plan, state.applied.owned, state.flashed
+  assert_true(plan ~= nil and plan.ready, "a ready plan")
+  params:set("morph_c", 4)                                    -- the plan is stale
+  place(S, "morph_a"); redraw()
+  place(S, "morph"); redraw()
+  assert_true(state.plan == plan, "the plan is not rebuilt by a draw")
+  assert_true(state.applied.owned == owned, "what the morph owns is not forgotten")
+  assert_equal(state.flashed, flashed, "the flash is not reset")
+end)
+
+-- #896, fix round 1: the morph's own test of a corner (populated and
+-- valid), never MOD's own: a populated corner the morph refuses is empty
+test("a populated but invalid corner is marked [empty]", function()
+  local context, S = loaded()
+  capture_scene(1); capture_scene(2)
+  S.scenes[2].data.reverb_mix = "broken"                      -- populated, and no scene the morph can use
+  assert_true(S.scenes[2].populated, "still populated")
+  place(S, "morph_a")
+  assert_equal(row_text(context, list_row(context, "A").y, ROW_LABEL_X), "A  S1", "A holds a valid scene")
+  assert_equal(row_text(context, list_row(context, "B").y, ROW_LABEL_X), "B S2  [empty]", "B is marked")
+  place(S, "morph")
+  assert_equal(row_text(context, list_row(context, "morph").y, ROW_LABEL_X), "morph [need 2]  0%")
+  assert_true(not S.lib.morph.corners_ready(), "one valid corner is not enough")
+  assert_equal(S.lib.morph.corner_valid("b"), false, "B is not valid")
+  assert_equal(S.lib.morph.corner_valid("a"), true, "A is")
+  assert_equal(S.lib.morph.corner_valid("e"), false, "no corner e")
+end)
+
+-- #896, fix round 1: a hand change the morph left alone (ruling 87: it
+-- owns the entry and the corner did not change) survives a corner turned
+-- one step and back on MOD, though MOD drew the morph's rows between
+test("a hand change survives a corner turned and turned back on MOD", function()
+  local context, S = loaded()
+  local synth = two_morph_scenes(S)
+  params:set("morph", 0.3); context.clock.run_for(0.5)       -- corner A applied, v3_source owned
+  params:set("v3_source", synth + 3)                          -- by hand
+  place(S, "morph_c")
+  enc(3, 1); redraw()
+  enc(3, -1); redraw()
+  assert_equal(params:get("morph_c"), 3, "C back on its scene")
+  params:set("morph", 0.35); context.clock.run_for(0.5)      -- a move on the same corner
+  assert_equal(params:get("v3_source"), synth + 3, "the hand change stays")
 end)
 
 end

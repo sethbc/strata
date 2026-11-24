@@ -72,7 +72,8 @@ The six states (3.9, #948), a table with no test yet: the examples of `morph_tes
 
 `lib/morph.lua` (`S.lib.morph`, 3.4, packages 1g and 3a, design §5.1-§5.5):
 - `add_params()`: the group `strata_morph` ("morph", `MORPH.param_count` 6) with `morph` (control 0-1, shown in whole percents, default 0), `morph_a` to `morph_d` (numbers 1..`NUM_SCENES`, defaults 1-4; menu names `morph A` ... `morph D`) and `morph_y` (control 0-1, percent, default 0). `lib/params_setup.lua`'s menu record `morph` calls it, after the LFOs and the macros.
-- `plan_ready()`: whether at least two corners hold populated scenes that pass `validate_scene`.
+- `plan_ready()`: whether at least two corners hold populated scenes that pass `validate_scene` (it builds the plan when a corner or its scene changed, so it is no pure read).
+- `corner_valid(corner)` and `corners_ready()` (#896, package 5d): the pure readers MOD draws from: whether corner `"a"` to `"d"` holds a populated scene that passes `validate_scene` (false for any other corner), and whether `MORPH.min_corners` corners do. They read only the corners' params and `S.scenes`, never `state` or the plan, so a draw rebuilds nothing, forgets nothing applied and flashes nothing again.
 - `weights()`: `a, b, c, d`, the corners' weights at the position now: A (1 − x)(1 − y), B x(1 − y), C (1 − x)y, D xy (x = `morph`, y = `morph_y`), an invalid corner's shared among the valid ones in proportion, the limit from inside the square where every valid corner weighs 0 (above); all 0 with no valid corner.
 - `corner()`: `"a"` to `"d"`, the current discrete corner (the one the next apply takes at the position now, given the corner applied; `"a"` with no valid corner).
 - `MORPH`, the module's one table of tunables (`apply_hz` 10, `hysteresis` 0.02, `max_values_per_apply` 120, `send_threshold` 1/1000, `epsilon`, `param_count` 6, `corners` `{"a", "b", "c", "d"}`, `min_corners` 2, `row_partner` and `column_partner`, `crossing_seconds` 0.3).
