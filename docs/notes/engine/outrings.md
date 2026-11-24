@@ -17,7 +17,8 @@
 |-----|------|
 | `\left`, `\right` | Arrays of `numVoices` mono buffers of `outRingSeconds` (4 s, the performance area's method) at the server rate: each voice's output ring |
 | `\phaseBuses` | `numVoices` control buses, each writer's frame (zeroed at alloc) |
-| `\writers` | the `numVoices` `\strataOutRingWrite` synths |
+
+The `numVoices` `\strataOutRingWrite` synths are kept in `synths` alone, under `outRingWriterKeys` (#943: no second record of them).
 
 Methods: `outRingWriterKeys`, `outRingFor(voice)` → `[left buffer, right buffer, phase bus]`, `allocOutRings`, `addOutRingDefs` (adds the def, returns no names), `startOutRingWriters`, `stopOutRingWriters`, `freeOutRings`; each hook calls its method through `areaCall`.
 

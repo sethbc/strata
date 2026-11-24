@@ -120,7 +120,6 @@
         rings[\copyPhaseBuses].do({ arg bus; bus.set(0) });
         rings[\readers] = IdentityDictionary.new;
         rings[\changes] = Array.fill(numVoices, 0);
-        rings[\writers] = [];
     }
 
     // A ring writer's frame position (audio rate), for both writer defs: a
@@ -160,18 +159,16 @@
     }
 
     // One writer per voice (reading its voice bus), then the input's
-    // (reading inputBus), each at the tail of voiceGroup
+    // (reading inputBus), each at the tail of voiceGroup. synths, under
+    // ringWriterKeys, is the writers' one record (#943)
     startRingWriters {
-        var rings = areaState[\rings];
-        rings[\writers] = this.ringWriterKeys.collect({ arg key, index;
+        this.ringWriterKeys.do({ arg key, index;
             var isInput = index == numVoices;
             var buffers = this.ringBuffersFor(index, if (isInput) { this.inputSource } { 0 });
-            var writer = Synth(\strataRingWrite, [
+            synths[key] = Synth(\strataRingWrite, [
                 \in, if (isInput) { inputBus } { granBuses[index] },
                 \bufL, buffers[0], \bufR, buffers[1], \phaseOut, buffers[2]
             ], voiceGroup, \addToTail);
-            synths[key] = writer;
-            writer
         });
     }
 
@@ -181,7 +178,6 @@
             var synth = synths.removeAt(key);
             if (synth.notNil) { this.sendToSynth(synth.freeMsg); synth.free(false) };
         });
-        areaState[\rings][\writers] = [];
     }
 
     // The rings, the copy rings and their phase buses (every area's nodes

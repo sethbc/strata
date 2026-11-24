@@ -167,8 +167,11 @@ check.(SynthDescLib.global.at(\strataGrainRing).def.children.count({ arg ugen; u
     "rings: strataGrainRing runs two stereo GrainBufs (one per channel buffer)");
 
 // ---- The writers ----
-ringNames = [\voiceL, \voiceR, \copyL, \copyR, \inputL, \inputR, \phaseBuses, \copyPhaseBuses, \writers, \readers, \changes];
+ringNames = [\voiceL, \voiceR, \copyL, \copyR, \inputL, \inputR, \phaseBuses, \copyPhaseBuses, \readers, \changes];
 check.(ringNames.every({ arg key; rings[key].notNil }), "rings: the rings area keeps %".format(ringNames));
+// #943: the writers have one record, synths under ringWriterKeys
+check.(rings.includesKey(\writers).not and: { engine.ringWriterKeys.every({ arg key; engine.synths[key].notNil }) },
+    "rings: the writers are kept only in synths, under ringWriterKeys (no second record, #943)");
 check.((rings[\voiceL] ++ rings[\voiceR] ++ rings[\copyL] ++ rings[\copyR]).every({ arg buffer;
         (buffer.numFrames == (sampleRate * engine.ringSeconds)) and: { buffer.numChannels == 1 } })
     and: { [rings[\voiceL], rings[\voiceR], rings[\copyL], rings[\copyR]].every({ arg each; each.size == engine.numVoices }) }
@@ -558,8 +561,8 @@ h.stopAllVoices;
 // ---- free frees the writers and rings (a second engine) ----
 other = h.startEngine;
 otherRings = other.areaState[\rings];
-otherWriters = otherRings[\writers].copy;
-check.(otherWriters.size == (other.numVoices + 1)
+otherWriters = other.ringWriterKeys.collect({ arg key; other.synths[key] });
+check.((otherWriters.size == (other.numVoices + 1)) and: { otherWriters.every(_.notNil) }
     and: { h.synthNames(other.context.xg).count({ arg name; name == \strataRingWrite }) == (other.numVoices + 1) },
     "rings: a second engine starts its own writers");
 h.freeEngine(other);

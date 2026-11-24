@@ -187,12 +187,14 @@ steps = { var values = h.readBus(stepBus); (min: values[0], max: values[1], othe
 mixBuses = [engine.mainBus, engine.mixBus(\delaySend), engine.mixBus(\reverbSend)];
 
 // ---- The area, its rings and their writers ----
-check.(state.notNil and: { [\left, \right, \phaseBuses, \writers].every({ arg key; state[key].notNil }) }
+check.(state.notNil and: { [\left, \right, \phaseBuses].every({ arg key; state[key].notNil }) }
+    // #943: the writers have one record, synths under outRingWriterKeys
+    and: { state.includesKey(\writers).not }
     and: { (state[\left] ++ state[\right]).every({ arg buffer;
         (buffer.numFrames == (engine.tryPerform(\outRingSeconds) * sampleRate)) and: { buffer.numChannels == 1 } }) }
     and: { [state[\left], state[\right], state[\phaseBuses]].every({ arg each; each.size == engine.numVoices }) }
     and: { (state[\left] ++ state[\right]).collect(_.bufnum).asSet.size == (2 * engine.numVoices) },
-    "outrings: areaState[\\outRings] holds % mono rings of outRingSeconds (% s) a channel and % phase buses".format(
+    "outrings: areaState[\\outRings] holds % mono rings of outRingSeconds (% s) a channel and % phase buses, and no second record of the writers (#943)".format(
         2 * engine.numVoices, engine.tryPerform(\outRingSeconds), engine.numVoices));
 check.(state.notNil and: { outRing.(2) == [state[\left][2], state[\right][2], state[\phaseBuses][2]] }
     and: { engine.ringBuffersFor(0, sourceOf.(3)) == outRing.(3) } and: { engine.ringBuffersFor(5, sourceOf.(5)) == outRing.(5) },
