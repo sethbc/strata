@@ -49,8 +49,9 @@ jobs:
     # (the list's apt-get update, #993). 12 covers the slowest suite measured
     # (471 s, run 45320574628) after a slow mirror's setup, on a cache hit
     # (about 642 s) and on a miss (about 707 s): docs/checks.md, Installs.
-    # Balancing the Lua suite's shards (about 315 s against 140 s) gives it
-    # real room; the default is 360
+    # The shards weigh the same; shard 1's time is ui_layout_test.lua's
+    # alone, so splitting that file (another change) shortens it, and no
+    # UNIT_FILE_SECONDS change does. The default is 360
     timeout-minutes: 12
     runs-on: ubuntu-24.04
     strategy:

@@ -1539,9 +1539,10 @@ test("every apt-get in CI has retries and a stall limit, in a step with its own 
       -- limit (a hit whose restore hangs to it still fits). Not covered,
       -- each a fault on top of the slowest mirror and suite seen: on a miss,
       -- a cache service that hangs both the restore and the save to their
-      -- limits (they only warn), or a list that runs to its own limit. What
-      -- gives the limit real room is balancing the two shards (about 315 s
-      -- against 140 s) through UNIT_FILE_SECONDS, a later change
+      -- limits (they only warn), or a list that runs to its own limit.
+      -- The shards weigh the same: shard 1's time is ui_layout_test.lua's
+      -- alone, so no UNIT_FILE_SECONDS change shortens it; splitting that
+      -- file, another change, does
       local lua, limit, install, restore = CI_WORKFLOW.SECONDS.lua, job.minutes * 60, nil, nil
       for _, step in ipairs(job.steps) do
         if step.name == "Install Lua 5.3 and LuaJIT" then install = step end
