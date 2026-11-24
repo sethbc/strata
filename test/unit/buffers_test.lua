@@ -306,7 +306,7 @@ test("a failed load over audio puts the slot's file back and is never remembered
   assert_equal(params:get("buf2_file"), "/tmp/good.wav", "the file param shows the old file again")
   assert_true(table.concat(context.printed, "\n"):find("/tmp/corrupt.wav", 1, true), "the console names the bad file")
   next_frame(context)
-  assert_equal(buffer_hint(context), "buf 2 load failed", "the BUFFER page says so")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 2 load failed", "the header says so, on every page (#878)")
   assert_screen_layout(context, "BUFFER page load failed flash")
   context.clock.run_for(2); next_frame(context)
   assert_equal(buffer_hint(context), buffer_record_hints(), "briefly: then the page's own hints")
@@ -568,7 +568,7 @@ test("a save says saved only once the engine reports the file written (#127)", f
   text = printed_since(context, printed)
   assert_true(text:find("buffer 2: cannot save " .. failed_path, 1, true), "the console says it failed: " .. text)
   assert_true(not text:find("saved to", 1, true), "never that it saved")
-  assert_equal(buffer_hint(context), "buf 2 save failed", "the BUFFER page says the save failed")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 2 save failed", "the header says the save failed (#878)")
   assert_screen_layout(context, "BUFFER page save failed flash")
   context.clock.run_for(2); next_frame(context)
   assert_equal(buffer_hint(context), buffer_record_hints(), "briefly: then the page's own hints")
@@ -588,6 +588,7 @@ test("a late, duplicate or bad save report never corrects a newer save", functio
   local printed = #context.printed
   context.polls.fire("bufferSaveResult", save_result_value(5, 1, true)); next_frame(context)
   assert_equal(buffer_hint(context), "saved buf 5", "an older save's late failure leaves the newer save's flash")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), nil, "and raises no failure in the header (#878)")
   assert_true(printed_since(context, printed):find("buffer 5: cannot save", 1, true),
     "the console still names the older file")
   -- the other order: the older save's late success never confirms a newer save still writing
@@ -596,7 +597,7 @@ test("a late, duplicate or bad save report never corrects a newer save", functio
   context.polls.fire("bufferSaveResult", save_result_value(5, 3)); next_frame(context)
   assert_equal(buffer_hint(context), buffer_record_hints(), "save 3's success says nothing of save 4")
   context.polls.fire("bufferSaveResult", save_result_value(5, 4, true)); next_frame(context)
-  assert_equal(buffer_hint(context), "buf 5 save failed", "save 4's own report shows")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 5 save failed", "save 4's own report shows")
   -- repeats, saves never sent, another slot's numbers and bad values do nothing
   context.clock.run_for(2); next_frame(context)
   printed = #context.printed
@@ -606,6 +607,7 @@ test("a late, duplicate or bad save report never corrects a newer save", functio
     assert_true(ok, "report " .. tostring(value) .. " raises no error: " .. tostring(message))
     next_frame(context)
     assert_equal(buffer_hint(context), buffer_record_hints(), "report " .. tostring(value) .. " flashes nothing")
+    assert_equal(local_value("S").lib.ui_flash.text("header"), nil, "report " .. tostring(value) .. ": nor the header")
   end
   assert_equal(printed_since(context, printed), "", "and prints nothing")
   assert_equal(rawget(local_value("buffers"), 0), nil); assert_equal(rawget(local_value("buffers"), 9), nil)
@@ -2608,7 +2610,7 @@ test("a scratch take that cannot be written forgets its path and flashes (#312)"
   context.polls.fire("takeWriteFailed", take_write_failed_value(3, 1)); next_frame(context)
   assert_equal(buffers[3].path, nil, "no file holds the take")
   assert_equal(buffers[3].name, "take 3", "it is still take 3"); assert_true(buffers[3].loaded, "and still plays")
-  assert_equal(buffer_hint(context), "buf 3 take not saved", "the BUFFER page says so")
+  assert_equal(local_value("S").lib.ui_flash.text("header"), "take 3 unsaved", "the header says so, on every page (#878)")
   assert_screen_layout(context, "BUFFER page take not saved flash")
   assert_true(printed_since(context, printed):find(scratch_take_path(3), 1, true), "the console names the file")
   save_buffers_to_disk()
@@ -3013,6 +3015,38 @@ test("the buffer slots invariant: a path with take_unsaved only while recording 
   assert_equal(broken(), "buffer slots: slot 1 has an unsaved take but names the path /tmp/one.wav")
   buffers[1].path = nil
   assert_equal(broken(), "", "an unsaved take with no path holds")
+end)
+
+
+-- #878: a failure of a load, a take's write or a save goes to the header
+-- flash, which shows on every page (a grid key, a poll or a param brings it
+-- while any page is up); never to BUFFER's hint row, which shows on BUFFER
+-- alone. Its texts fit the header's flash room whole
+test("load failed, take not saved and a save's failure flash on every page", function()
+  local context = load_strata(); finish_startup(context)
+  local S, buffers = local_value("S"), local_value("buffers")
+  load_buffer(4, "/tmp/keep.wav"); state_report(context, 4, 1, 4)
+  local function shows(text, where)
+    next_frame(context)
+    assert_equal(S.lib.ui_flash.text("header"), text, where .. ": the header flash")
+    assert_true(h.screen_shows(context, text), where .. ": drawn whole")
+    assert_equal(S.lib.ui_flash.slots.hints.text, nil, where .. ": not BUFFER's hint flash")
+    assert_screen_layout(context, where)
+    S.lib.ui_flash.start("header", nil)
+  end
+  for page = 1, #h.PAGE_TITLES do
+    show_page(page)
+    local where = h.PAGE_TITLES[page]
+    load_buffer(2, "/tmp/bad.wav")
+    context.polls.fire("bufferLoadFailed", load_failed_value(2, buffers[2].loads_sent))
+    shows("buf 2 load failed", where .. " load failed")
+    record_buffer(3); wake_buffer_clock(context, 3); state_report(context, 3, 0, 4)
+    context.polls.fire("takeWriteFailed", take_write_failed_value(3, buffers[3].records_sent))
+    shows("take 3 unsaved", where .. " take not saved")
+    save_buffer(4)
+    context.polls.fire("bufferSaveResult", save_result_value(4, buffers[4].saves_sent, true))
+    shows("buf 4 save failed", where .. " save failed")
+  end
 end)
 
 end

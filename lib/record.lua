@@ -314,7 +314,7 @@ return function(S)
       -- same take either way; a playable one waits (K3 again once the slot
       -- shows its length) (#455)
       if playable and buffer.confirm_since ~= nil then
-        buffer_page_flash("buf " .. slot .. " loading")
+        header_flash("buf " .. slot .. " loading")  -- a refusal: on every page (#878)
         return
       end
       M.cancel_timer(slot)

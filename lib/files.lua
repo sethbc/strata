@@ -127,11 +127,12 @@ return function(S)
     return true
   end
 
-  -- Give every free slot (S.lib.buffers.is_free: empty, or a remembered file
-  -- missing on start; never one recording, loading or holding a named load
-  -- the engine has not reported yet) a distinct random sound file from the
-  -- folder of the BUFFER page's cursor slot, until the files run out; how
-  -- many slots filled
+  -- Give every empty slot (S.lib.buffers.status "empty": never one
+  -- recording, loading or holding a named load the engine has not reported
+  -- yet, and never one whose remembered file was missing on start, which
+  -- keeps that path for the next start, #877) a distinct random sound file
+  -- from the folder of the BUFFER page's cursor slot, until the files run
+  -- out; how many slots filled
   function M.fill_empty()
     local folder = M.folder_for(S.buffer_page.slot)
     local names = sound_files(folder)
@@ -150,7 +151,7 @@ return function(S)
     local filled = 0
     for slot = 1, NUM_BUFFERS do
       if #names == 0 then break end
-      if S.lib.buffers.is_free(slot) then
+      if S.lib.buffers.status(slot) == "empty" then
         load_buffer(slot, folder .. table.remove(names, math.random(1, #names)), 0)
         filled = filled + 1
       end

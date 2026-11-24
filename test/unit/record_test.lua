@@ -467,7 +467,7 @@ test("a playable recording waits for a load the engine has not confirmed", funct
   context.clear_engine_calls(); record_buffer(1)
   assert_equal(#recording_calls(context), 0, "no recordBuffer while the load awaits the engine")
   assert_equal(S.lib.buffers.status(1), "loading"); assert_equal(buffers[1].name, "b.wav")
-  assert_equal(S.lib.ui_flash.text("hints"), "buf 1 loading")
+  assert_equal(S.lib.ui_flash.text("header"), "buf 1 loading", "in the header (#878)")
   context.polls.fire("bufferState", context.polls.buffer_state_value(1, 2, 0))  -- the load takes effect (0 s, #401)
   context.polls.fire("bufferState", context.polls.buffer_state_value(1, 2, 6))  -- b.wav is in
   record_buffer(1)
@@ -1160,6 +1160,25 @@ test("a replace take stopped while armed leaves the slot as it was after its fal
     assert_equal(S.lib.record.clock_role(slot), nil, "slot " .. slot .. ": no clock left")
     assert_true(buffers[slot].path ~= scratch_take_path(slot), "slot " .. slot .. ": never the scratch path")
   end
+end)
+
+
+-- #878: a refusal goes to the header flash, which shows on every page: an
+-- overdub refused from the grid while MAIN shows (a load still awaits the
+-- engine) says so there, and never in BUFFER's hint row
+test("an overdub refused from the grid on MAIN flashes in the header", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  h.show_page("MAIN")
+  load_buffer(1, "/tmp/a.wav")                     -- awaiting the engine
+  params:set("record_feedback", 50)
+  context.clear_engine_calls()
+  S.lib.grid_core.record_key(1); h.next_frame(context)
+  assert_equal(#context.calls_named("recordBuffer"), 0, "the overdub is refused")
+  assert_equal(S.lib.ui_flash.text("header"), "buf 1 loading", "the header says why")
+  assert_true(h.screen_shows(context, "buf 1 loading"), "MAIN draws it")
+  assert_equal(S.lib.ui_flash.slots.hints.text, nil, "and BUFFER's hint flash is not raised")
+  h.assert_screen_layout(context, "MAIN with a refused overdub's flash")
 end)
 
 end

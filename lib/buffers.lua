@@ -625,6 +625,7 @@ return function(S)
     table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop or nil,
       settings = (not loop) and S.lib.samples.snapshot(slot) or nil})
     engine.saveBuffer(slot - 1, path, start, length)
+    request_redraw()  -- the row shows saving (M.saving, #905)
   end
 
   -- Why a save of the slot cannot go: "invalid" (not a slot), "busy" (the slot
@@ -707,9 +708,10 @@ return function(S)
   -- made, the disk filled: a file already at the path stays), 0 when the
   -- file is in place. A save abandoned for a newer write to the same path is
   -- never reported; the newer one is. The console names the file either way;
-  -- the BUFFER page flashes the result only for the slot's newest save, so a
-  -- late report never corrects a newer save (still writing, or reported
-  -- already). A repeated report, or one for a save no longer tracked, finds
+  -- the result flashes only for the slot's newest save, so a late report
+  -- never corrects a newer save (still writing, or reported already): a
+  -- failure in the header (every page), a file written in BUFFER's hint
+  -- row. A repeated report, or one for a save no longer tracked, finds
   -- nothing. Loads, clears and recordings leave the tracked saves alone: a
   -- report is about the file written, not what the slot holds now.
   function buffer_save_result(value)
@@ -737,10 +739,15 @@ return function(S)
       -- 3.7: a whole save's file has the settings the slot had at the send
       if save.settings then S.lib.samples.store_file(save.path, save.settings) end
     end
-    if save.number == buffer.saves_sent then
-      buffer_page_flash(failed and ("buf " .. slot .. " save failed")
-        or ("saved buf " .. slot .. (save.loop and " loop" or "")))
+    -- (a failure in the header, on every page, and the hint row's saving
+    -- flash it answers ends; a file written in BUFFER's hint row, #878)
+    if save.number == buffer.saves_sent and failed then
+      header_flash("buf " .. slot .. " save failed")
+      buffer_page_flash(nil)
+    elseif save.number == buffer.saves_sent then
+      buffer_page_flash("saved buf " .. slot .. (save.loop and " loop" or ""))
     end
+    request_redraw()  -- the row's saving mark may end (M.saving, #905)
   end
 
   -- takeWriteFailed poll (#312): the engine could not write the scratch
@@ -773,7 +780,7 @@ return function(S)
     end
     print("buffer " .. slot .. ": cannot write its take to " .. scratch_take_path(slot)
       .. " (it plays until the script ends; save the buffer to keep it)")
-    buffer_page_flash("buf " .. slot .. " take not saved")
+    header_flash("take " .. slot .. " unsaved")  -- a failure: on every page, whole in its room (#878)
     buffer_display_changed()
   end
 
@@ -935,7 +942,7 @@ return function(S)
     end
     print("buffer " .. slot .. ": cannot load " .. failed.path .. " (missing, unreadable, empty or damaged)"
       .. (emptied and "; the buffer is now empty" or ""))
-    buffer_page_flash("buf " .. slot .. " load failed")
+    header_flash("buf " .. slot .. " load failed")  -- a failure: on every page (#878)
     buffer_display_changed()
   end
 
@@ -1282,6 +1289,22 @@ return function(S)
   function M.is_free(slot)
     local status = M.status(slot)
     return status == "empty" or status == "missing"
+  end
+
+  -- Whether a save of the slot awaits the engine's bufferSaveResult report
+  -- (a tracked save, pending_saves; #905): BUFFER's row shows saving until
+  -- it comes. false without the poll, which no report could then end, and
+  -- for a slot out of range
+  function M.saving(slot)
+    slot = slot_index(slot)
+    return slot ~= nil and S.buffer_polls.save_result ~= nil and #S.buffers[slot].pending_saves > 0
+  end
+
+  -- The remembered file of a "missing" slot (its path, found missing on
+  -- start and kept for the next one), else nil: BUFFER's row names it (#877)
+  function M.missing_file(slot)
+    if M.status(slot) ~= "missing" then return nil end
+    return S.buffers[slot_index(slot)].missing_path
   end
 
   M.valid_buffer_slot = valid_buffer_slot
