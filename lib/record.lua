@@ -331,7 +331,9 @@ return function(S)
       if playable and rate and rate ~= S.constants.NORNS_SAMPLE_RATE then
         playable = false
         loop = false  -- a replace take ends at its length
-        buffer_page_flash("buf " .. slot .. ": replaced (rate)")
+        -- the overdub asked for is refused, and the take empties the slot:
+        -- on every page (#878, #1027), whole within the header's room
+        header_flash("buf " .. slot .. " replaced")
       end
       -- what a replace take replaces, put back if it is canceled before the
       -- engine prepares its slot (taken before anything below changes it)
