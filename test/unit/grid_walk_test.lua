@@ -16,8 +16,9 @@
 -- expects open. After every op `after` compares the model with
 -- S.patterns, S.grid_held and the open step editor (and the chooser on
 -- the 64), and every invariant runs; at the end every key goes up, and
--- then no hold clock lives, no positions record holds a key, no scan is
--- held and no step editor is open. The model reads the core's rules from
+-- then no hold the core armed lives and fill is not held (read before any
+-- wait), and a second on no hold clock is pending or retired, no positions
+-- record holds a key, no scan is held and no step editor is open. The model reads the core's rules from
 -- docs/notes/lua/grid-core.md (Machines, `grid keys`, and the step-level
 -- gesture), not from its code; what it observes is only when a pattern
 -- was replaced (every whole-pattern change goes through replace_pattern:
@@ -368,24 +369,75 @@ function Walk.clock(state, seconds)
     if a.time ~= b.time then return a.time < b.time end
     return a.order < b.order
   end)
+  -- the events in groups, each event closer than tie_window to the one
+  -- before it in the same group (a group of one is in no doubt)
+  local groups = {}
   for index, event in ipairs(events) do
-    local neighbor = events[index + 1]
-    if neighbor and neighbor.time - event.time < WALK.tie_window then state.tied = true end
-    if event.voice then
-      Model.replaced(model, event.voice)
-    elseif event.entry.deadline then
-      local entry = event.entry
-      entry.deadline = nil
-      state.counts.hold_fired = state.counts.hold_fired + 1
-      if entry.kind == "step" and not entry.dropped then
-        entry.consumed = true
-        model.editor = entry
-      elseif entry.kind == "nv" then
-        model.chooser = true
-        Model.end_pane(model, 1)
+    if index == 1 or event.time - events[index - 1].time >= WALK.tie_window then groups[#groups + 1] = {} end
+    local group = groups[#groups]
+    group[#group + 1] = event
+  end
+  -- `possible`, while a tie leaves the editor's key to the code: the keys
+  -- (entries, or false for none) the editor may be open for. A group of
+  -- holds alone opens one of them, whatever their order; a group with a
+  -- replacement or NV's hold may also have closed it, or kept the one before
+  -- it; a key whose gesture ended can be none of them. nil: no doubt
+  local possible, editor_before = nil, model.editor
+  for _, group in ipairs(groups) do
+    local fired, closes = {}, false
+    for _, event in ipairs(group) do
+      if event.voice then
+        closes = true
+        Model.replaced(model, event.voice)
+      elseif event.entry.deadline then
+        local entry = event.entry
+        entry.deadline = nil
+        state.counts.hold_fired = state.counts.hold_fired + 1
+        if entry.kind == "step" and not entry.dropped then
+          entry.consumed = true
+          model.editor = entry
+          fired[#fired + 1] = entry
+        elseif entry.kind == "nv" then
+          closes = true
+          model.chooser = true
+          Model.end_pane(model, 1)
+        end
       end
     end
+    if #group > 1 then
+      state.counts.tied = state.counts.tied + 1
+      local before = possible or { editor_before or false }
+      local next_possible = {}
+      local function add(entry)
+        if entry and entry.dropped then return end
+        for _, known in ipairs(next_possible) do
+          if known == entry then return end
+        end
+        next_possible[#next_possible + 1] = entry
+      end
+      for _, entry in ipairs(fired) do add(entry) end
+      if closes or #fired == 0 then
+        for _, entry in ipairs(before) do add(entry) end
+        add(false)
+      end
+      possible = next_possible
+    elseif possible then
+      -- after a tie, one event in no doubt: a hold opens its key's editor, a
+      -- replacement or NV's hold ends what it ends
+      if #fired == 1 then
+        possible = { fired[1] }
+      else
+        local kept = {}
+        for _, entry in ipairs(possible) do
+          if entry and entry.dropped then entry = false end
+          kept[#kept + 1] = entry
+        end
+        possible = kept
+      end
+    end
+    editor_before = model.editor
   end
+  state.possible = possible
   Walk.read_replaced(state)
 end
 
@@ -393,19 +445,24 @@ end
 
 function Walk.compare(state)
   local S, model, core, problems = state.S, state.model, state.core, state.problems
-  -- the open editor: two timed events within a tick leave its key to the
-  -- code; the model follows what opened (a key it holds), or nothing
+  -- the open editor: two timed events within tie_window leave its key to
+  -- the code, among the keys Walk.clock found possible (none, only where
+  -- the tie could close it); the model then follows the one that opened
   local editor = S.lib.pages_seq.step_editor()
-  if state.tied then
-    state.tied = false
-    model.editor = nil
-    if editor then
-      for _, entry in pairs(model.entries) do
-        if entry.kind == "step" and entry.consumed and not entry.dropped and entry.voice == editor.voice
-            and entry.step == editor.step then
-          model.editor = entry
-        end
-      end
+  local possible = state.possible
+  state.possible = nil
+  if possible then
+    local found, names = nil, {}
+    for _, entry in ipairs(possible) do
+      names[#names + 1] = entry and (entry.voice .. " " .. entry.step) or "none"
+      if entry == false and editor == nil then found = false end
+      if entry and editor and entry.voice == editor.voice and entry.step == editor.step then found = entry end
+    end
+    if found == nil then
+      problems[#problems + 1] = "step editor: after a tie, open " .. (editor and (editor.voice .. " " .. editor.step)
+        or "none") .. ", not one of " .. table.concat(names, ", ")
+    else
+      model.editor = found or nil
     end
   end
   local expected = model.editor and (model.editor.voice .. " " .. model.editor.step .. " " .. WALK.port) or "none"
@@ -444,6 +501,15 @@ end
 
 local OPS = {}
 
+-- Whether the core holds any key of the port: a row with a press time
+-- (S.grid_held keeps a column its keys' releases emptied)
+function Walk.any_held(state)
+  for _, rows in pairs(state.S.grid_held[WALK.port] or {}) do
+    if next(rows) ~= nil then return true end
+  end
+  return false
+end
+
 -- Unplugged, a key down plugs the grid back first (an unplugged grid
 -- stays out only for the ops before the next press)
 function Walk.plug(state)
@@ -481,11 +547,17 @@ OPS.clock = { 5, "clock", function(state, random)
   Walk.clock(state, WALK.clock_min + span * (random(1000) - 1) / 999)
 end }
 
+-- Unplugged, a page change still reaches the port (set_page takes a port
+-- with no grid, on pane 1), and the plug that follows starts the grid
+-- over on its start pages
 OPS.page = { 2, "page", function(state, random)
   local layout, layout_kind = Walk.layout(state)
-  if layout == nil then return end
+  if layout == nil then
+    state.counts.page_unplugged = state.counts.page_unplugged + 1
+    layout_kind = state.layout
+  end
   local S = state.S
-  local pane = random(layout.panes)
+  local pane = random(layout and layout.panes or 1)
   local pick = random(WALK.patterns_share)
   local page = (pick == 1 and S.constants.GRID_PAGES.patterns) or (pick == 2 and S.constants.GRID_PAGES.positions)
     or random(S.constants.GRID_PAGES.count)
@@ -505,8 +577,7 @@ end }
 
 OPS.plug = { 0.6, "unplug or plug", function(state)
   if Walk.device(state) then
-    local held = state.S.grid_held[WALK.port]
-    if held and next(held) then state.counts.unplug_with_key_held = state.counts.unplug_with_key_held + 1 end
+    if Walk.any_held(state) then state.counts.unplug_with_key_held = state.counts.unplug_with_key_held + 1 end
     Model.forget(state.model)
     state.context.grid.unplug(WALK.port)
   else
@@ -514,8 +585,10 @@ OPS.plug = { 0.6, "unplug or plug", function(state)
   end
 end }
 
-OPS.rotation = { 0.5, "rotation", function(state, random)
-  if Walk.device(state) == nil then return end
+-- Unplugged, a rotation is written and kept, and the plug that follows
+-- turns the grid to it
+OPS.rotation = { 1, "rotation", function(state, random)
+  if Walk.device(state) == nil then state.counts.rotation_unplugged = state.counts.rotation_unplugged + 1 end
   local rotation = random(state.core.MAX_ROTATION + 1) - 1
   if rotation ~= state.core.rotation(WALK.port) then Model.forget(state.model) end
   state.core.set_rotation(WALK.port, rotation)
@@ -562,8 +635,16 @@ local function finish(state)
   for _, name in ipairs(names) do Walk.release(state, name) end
   Walk.settle(state)
   Walk.compare(state)
-  state.context.clock.run_for(WALK.finish_seconds)
   local problems = state.problems
+  -- with every key up, before any wait: no hold the core armed still lives
+  -- (a hold never stopped would fire and clear itself during the wait)
+  for _, hold in ipairs(state.hold_handles) do
+    if S.lib.clocks.alive(hold.handle) then
+      problems[#problems + 1] = "key " .. hold.key .. ": its hold clock lives with every key up"
+    end
+  end
+  if S.lib.conditions.fill() then problems[#problems + 1] = "fill is held with every key up" end
+  state.context.clock.run_for(WALK.finish_seconds)
   local hold_clocks = h.registered_invariant("grid keys").upvalue("hold_clocks")
   for port, columns in pairs(hold_clocks) do
     for x, rows in pairs(columns) do
@@ -599,7 +680,8 @@ local function finish(state)
 end
 
 local COUNTERS = { "hold_fired", "hold_ended_by_page", "release_under_chooser", "unplug_with_key_held",
-  "step_toggled", "level_set", "fill_released", "hold_key_released" }
+  "step_toggled", "level_set", "fill_released", "hold_key_released", "page_unplugged", "rotation_unplugged",
+  "tied" }
 
 -- The walk's state on a fresh script with a grid of the layout, every
 -- pattern step as `fill` says (a function of voice and step), and every
@@ -612,8 +694,19 @@ local function walk_state(context, layout, fill)
     for step = 1, S.constants.PATTERN_LENGTH do S.patterns[voice][step] = fill(voice, step) end
   end
   local state = { context = context, S = S, core = S.lib.grid_core, model = Model.new(S), fingers = {},
-    cols = pane.device.native_cols, rows = pane.device.native_rows, problems = {}, replaces = {}, counts = {} }
+    cols = pane.device.native_cols, rows = pane.device.native_rows, problems = {}, replaces = {}, counts = {},
+    layout = layout, hold_handles = {} }
   for _, counter in ipairs(COUNTERS) do state.counts[counter] = 0 end
+  -- every hold the core arms, kept (a pending hold's handle, read from the
+  -- core's hold_clocks once on_hold returns) so the end can ask whether one
+  -- still lives
+  local on_hold = S.lib.grid_core.on_hold
+  local hold_clocks = h.registered_invariant("grid keys").upvalue("hold_clocks")
+  S.lib.grid_core.on_hold = function(port, x, y, seconds, fn)
+    on_hold(port, x, y, seconds, fn)
+    local handle = hold_clocks[port] and hold_clocks[port][x] and hold_clocks[port][x][y]
+    if handle then state.hold_handles[#state.hold_handles + 1] = { handle = handle, key = key_name(x, y) } end
+  end
   -- every whole-pattern change, observed and passed on: the model ends the
   -- voice's step keys and reads its pattern again
   local replace_pattern = S.lib.sequencer.replace_pattern
@@ -672,9 +765,59 @@ h.test("the grid walk's model: taps, the editor's hold, a level key and a page c
     "a change the model did not make is named")
 end)
 
+-- A tie (two held steps pressed at one instant, their holds due in one
+-- tick) leaves the editor's key to the code, but an editor must be open
+-- for one of them: none open is named
+h.test("the grid walk's tie: the editor is open for one of the keys whose holds were due, and none open is named",
+  function()
+  for _, close in ipairs({ false, true }) do
+    local context = h.load_strata()
+    h.finish_startup(context)
+    local state = walk_state(context, "128h", function() return 0 end)
+    local S = state.S
+    run_op(state, Walk.press, 5, 1)
+    run_op(state, Walk.press, 6, 2)
+    local problems = run_op(state, function(walk_now)
+      Walk.clock(walk_now, 0.4)
+      if close then S.lib.pages_seq.close_step_editor(WALK.port) end  -- behind the model's back
+    end)
+    h.assert_equal(state.counts.tied, 1, "the two holds were one tie")
+    if close then
+      h.assert_equal(table.concat(problems, "; "), "step editor: after a tie, open none, not one of 1 5, 2 6; "
+        .. "step editor: expected 2 6 1, open none", "no editor after the tie is named")
+    else
+      h.assert_equal(table.concat(problems, "; "), "", "the editor the code opened is one of the two")
+      h.assert_true(h.shown_step_editor() == "1 5 1" or h.shown_step_editor() == "2 6 1", "open for one of them")
+    end
+  end
+end)
+
+-- The end check on a 256: a tempo key held into its repeat and let go, a
+-- fill key held and the grid unplugged under it, then every key up: no
+-- hold lives and fill is not held (read before the end's wait, when a
+-- hold never stopped would still live)
+h.test("the grid walk's end: a tempo key's repeat and a fill held through an unplug leave nothing", function()
+  local context = h.load_strata()
+  h.finish_startup(context)
+  local state = walk_state(context, "256", function() return 0 end)
+  local S = state.S
+  local layout = Walk.layout(state)
+  local strip_line = S.constants.NUM_VOICES + 1
+  local tempo_x, tempo_y = S.lib.grid_pane.physical(layout, 2, 2, strip_line, 1)  -- the lower strip's T+
+  local fill_x, fill_y = S.lib.grid_pane.physical(layout, 1, WALK.fill_key, strip_line, 1)
+  run_op(state, Walk.press, tempo_x, tempo_y)
+  run_op(state, Walk.clock, 0.7)
+  h.assert_equal(table.concat(run_op(state, Walk.release, key_name(tempo_x, tempo_y)), "; "), "", "T+ up")
+  run_op(state, Walk.press, fill_x, fill_y)
+  h.assert_true(S.lib.conditions.fill(), "FL holds fill")
+  run_op(state, OPS.plug[3])
+  h.assert_true(#state.hold_handles >= 2, "the walk kept T+'s holds")
+  h.assert_equal(table.concat(finish(state), "; "), "", "nothing lives at the end")
+end)
+
 for _, layout in ipairs({ "256", "128h", "128v", "64" }) do
   local reached = { "hold_fired", "hold_ended_by_page", "unplug_with_key_held", "step_toggled", "level_set",
-    "hold_key_released" }
+    "hold_key_released", "page_unplugged", "rotation_unplugged" }
   -- the 64 has the chooser and no fill key; the other layouts the reverse
   reached[#reached + 1] = layout == "64" and "release_under_chooser" or "fill_released"
   h.walk({
