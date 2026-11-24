@@ -1119,4 +1119,58 @@ test("ALT+E2 after a refused E3 keeps the unseen row's mark for the draw", funct
   assert_true(marked_at(context, S, row_y(context, "amount")), "the draw shows the row marked")
 end)
 
+
+-- 5c re-review: ALT+E2 follows the cursor's row before it re-places it.
+-- Rows that came or went since the last draw are judged first: the cursor's
+-- own row gone is a fall the player is shown (marked, E3 refused until the
+-- draw); a row gone above it leaves the cursor on its own row
+local function voice_section_with(S, state)
+  S.register_io_section({ name = "voice", title = "voice", rows = function()
+    local voice = S.selected_voice
+    local rows = {}
+    if not state.above_gone then rows[#rows + 1] = { label = "above", kind = "param", param_id = "mutation_rate" } end
+    for _, field in ipairs({ "jf", "wsyn", "er301" }) do
+      if not (state.own_gone and field == "wsyn") then
+        rows[#rows + 1] = { label = field, kind = "param", param_id = "v" .. voice .. "_out_" .. field }
+      end
+    end
+    return rows
+  end })
+end
+
+test("ALT+E2 after the cursor's row went is a fall the player is shown", function()
+  local context, S = loaded()
+  local state = {}
+  voice_section_with(S, state)
+  show_page("IO")
+  enc(2, 2); redraw()
+  assert_equal(current_row(S).param_id, "v" .. S.selected_voice .. "_out_wsyn")
+  state.own_gone = true
+  key(1, 1); enc(2, 1); key(1, 0)
+  local voice = S.selected_voice
+  assert_equal(current_row(S).param_id, "v" .. voice .. "_out_er301", "the row in its place")
+  enc(3, 1)
+  assert_equal(params:get("v" .. voice .. "_out_er301"), 0, "E3 refused: no draw has shown the row")
+  assert_equal(invariant(S, "io view"), nil)
+  redraw()
+  assert_true(marked_at(context, S, row_y(context, "er301")), "the draw marks it")
+end)
+
+test("ALT+E2 after a row above the cursor went keeps the cursor on its own row", function()
+  local context, S = loaded()
+  local state = {}
+  voice_section_with(S, state)
+  show_page("IO")
+  enc(2, 2); redraw()
+  assert_equal(current_row(S).param_id, "v" .. S.selected_voice .. "_out_wsyn")
+  state.above_gone = true
+  key(1, 1); enc(2, 1); key(1, 0)
+  local voice = S.selected_voice
+  assert_equal(current_row(S).param_id, "v" .. voice .. "_out_wsyn", "the new voice's row in its own row's place")
+  redraw()
+  assert_true(not marked_at(context, S, row_y(context, "wsyn")), "no fall: no mark")
+  enc(3, 1)
+  assert_equal(params:get("v" .. voice .. "_out_wsyn"), 1, "E3 edits it")
+end)
+
 end

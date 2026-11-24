@@ -445,6 +445,9 @@ return function(S)
   -- io_enc (where enc_param_delta turns a param finely itself)
   local function io_alt_enc(n, d)
     if n == 2 then
+      -- rows that came or went since the last use are judged first: the
+      -- cursor follows its row, and a row gone is a fall (unseen, marked)
+      cursor_row(M.rows())
       -- the player's act, as a page change is: it ends the mark unless no
       -- draw has shown the fallen row yet (that draw still marks it)
       if not view.unseen then acted() end
