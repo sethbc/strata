@@ -121,9 +121,9 @@ return function(S)
   end
 
   -- FZ: frozen or not, blinking while the voice's freeze set waits for
-  -- the quantizer (S.lib.freeze.toggle_quantized's key freeze<v>, #876)
+  -- the quantizer (S.lib.freeze.waiting, #876, #1031)
   local function freeze_level(voice_idx)
-    if S.lib.quantize.waiting("freeze" .. voice_idx) then return S.lib.grid_core.waiting_level() end
+    if S.lib.freeze.waiting(voice_idx) then return S.lib.grid_core.waiting_level() end
     return S.lib.freeze.is_frozen(voice_idx) and levels.freeze_on or levels.freeze_off
   end
 
