@@ -548,6 +548,67 @@ test.("record: an idle engine's synced take starts delay after its send", {
         "record: an idle engine's synced take starts delay after its send (off by % frames, % frames kept)".format(
             error.round(1), engine.bufferFrames[4]));
 });
+// #981: a synced take is sent paused with a timestamped /n_run 1. A run the
+// server takes late, in the callback that makes the node, is performed
+// before the node's first calculation, and scsynth's Node_SetRun ignores it
+// (the paused node's calc function is not yet Node_NullCalc): the take
+// stayed sent and paused. The engine sends the run again at the node's
+// /n_go, which comes after that calculation. Synced takes on an idle
+// engine (a 0.5 s file loaded, as the issue's sequence) with delays from
+// 30 to 90 ms, so the wait sendTake sees (read here when the take is
+// marked sent, to 1 ms) runs from below 0 to past the check servers'
+// period (1024 frames, 21.3 ms at 48 kHz; the server's lead): each starts
+// and keeps its frames
+test.("record: synced takes sent with waits across the server's period all start (#981)", {
+    var slot = 3, takeFrames = (0.05 * sampleRate).round.asInteger, period = 1024 / sampleRate;
+    var path = writeLevelFile.("synced-lead.wav", 0.5, 0.5), results = List.new(16);
+    (30, 36 .. 90).do({ arg milliseconds;
+        var start, take, wait, ended, states;
+        h.command(\loadBuffer, slot, path, 0);
+        h.awaitLoad(slot);
+        start = nowReports.value;
+        record.(slot, 0.05, 1.0, 0, 0, 0, 0, milliseconds / 1000);
+        take = state[\takes][slot];
+        // (1 ms steps: the wait sendTake computes, to within a step)
+        while { take.notNil and: { take[\sent] != true } and: { state[\takes][slot] === take } } { 0.001.wait };
+        wait = take !? { take[\startAt] - Main.elapsedTime };
+        ended = h.waitFor({ engine.recordSynths[slot].isNil and: { state[\takes][slot].isNil } }, 1);
+        states = reportsFor.(slot, start).collect(_[2]);
+        results.add((delay: milliseconds, wait: wait, started: states.includes(1), frames: engine.bufferFrames[slot], ended: ended));
+        reset.(slot);
+    });
+    check.(results.every({ arg each; each[\started] and: { each[\ended] } and: { each[\frames] == takeFrames } })
+        and: { results.any({ arg each; each[\wait].notNil and: { each[\wait] > 0 } and: { each[\wait] < period } }) }
+        and: { results.any({ arg each; each[\wait].notNil and: { each[\wait] > period } }) },
+        "record: synced takes sent with waits across the server's period all start (#981; delay ms, wait ms, started, frames: %)".format(
+            results.collect({ arg each; [each[\delay], each[\wait] !? { arg value; (value * 1000).round(0.1) }, each[\started], each[\frames]] }).asArray));
+});
+// ... and the run sent again at /n_go is sent only while the slot and the
+// take are what sendTake left: a stop between the take's send and its
+// /n_go (from a responder of the check's own, which runs before the
+// engine's, made later) sends nothing, so no run reaches the stopped take's
+// node, which the stop's sync then frees: the take is canceled, with no
+// recording or ended after the stop, and the server prints nothing
+test.("record: a stop between a synced take's send and its /n_go sends it no run (#981)", {
+    var slot = 3, path = writeLevelFile.("synced-stop.wav", 0.5, 0.5), start, stopped = false, responder, states, ended;
+    h.command(\loadBuffer, slot, path, 0);
+    h.awaitLoad(slot);
+    responder = OSCFunc({ arg msg;
+        var synth = engine.recordSynths[slot];
+        if (stopped.not and: { synth.notNil } and: { msg[1] == synth.nodeID }) { stopped = true; h.command(\stopRecord, slot) };
+    }, '/n_go', server.addr);
+    start = nowReports.value;
+    // (50 ms: the issue's delay, whose wait falls inside the server's lead)
+    record.(slot, 0.05, 1.0, 0, 0, 0, 0, 0.05);
+    ended = h.waitFor({ engine.recordSynths[slot].isNil and: { state[\takes][slot].isNil } }, 1);
+    responder.free;
+    0.1.wait;
+    states = reportsFor.(slot, start).collect(_[2]);
+    check.(stopped and: { ended } and: { states == [0, 3] } and: { engine.recordSynths[slot].isNil },
+        "record: a stop between a synced take's send and its /n_go sends it no run (#981; stopped %, ended %, states % (0 armed, 1 recording, 2 ended, 3 canceled))".format(
+            stopped, ended, states));
+    reset.(slot);
+});
 // #565: of the messages that arrive while sclang is held, sclang stamps only
 // the first with its arrival and reads the later ones when the hold ends.
 // The check thread cannot send while it holds sclang, so a sender outside
