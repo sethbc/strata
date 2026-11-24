@@ -380,4 +380,67 @@ test("a backup never replaces an earlier one", function()
   end
   assert_equal(file_text(path), "fifth", "the file itself is untouched")
 end)
+
+-- 3.9 (#895, ruling 8): read, set_aside and write keep each file's problem,
+-- and problems() lists them for SETUP, in the order first found
+local function problem_of(data_files, path)
+  for _, entry in ipairs(data_files.problems()) do
+    if entry.file == path then return entry end
+  end
+end
+
+test("a file that later reads well loses its row", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  local path = context.data_dir .. "later.data"
+  write_text(path, "return {")
+  assert_equal(data_files.read(path), nil)
+  local entry = problem_of(data_files, path)
+  assert_true(entry ~= nil, "an unreadable file has a row")
+  assert_equal(entry.problem, "unreadable"); assert_equal(entry.backup, nil, "still in place")
+  write_text(path, data_files.encode({ version = 1 }))
+  assert_equal(data_files.read(path).version, 1)
+  assert_equal(problem_of(data_files, path), nil, "read well: the row is gone")
+  -- a missing file is no problem either
+  write_text(path, "return {"); data_files.read(path); os.remove(path)
+  assert_equal(select(2, data_files.read(path)), "missing")
+  assert_equal(problem_of(data_files, path), nil, "missing: no row")
+end)
+
+test("problems() keeps a set-aside's backup, a failed write and a write over an unreadable file", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  local kept, in_place = context.data_dir .. "kept.data", context.data_dir .. "in-place.data"
+  -- refused by its reader after a good read (another version): set aside
+  write_text(kept, data_files.encode({ version = 99 }))
+  assert_equal(data_files.read(kept).version, 99)
+  assert_equal(problem_of(data_files, kept), nil, "a good read is no problem")
+  assert_equal(data_files.set_aside(kept, ".bak"), kept .. ".bak")
+  assert_equal(problem_of(data_files, kept).backup, kept .. ".bak", "set aside: kept as its backup")
+  assert_equal(problem_of(data_files, kept).problem, "unreadable")
+  -- a good write then keeps the set-aside's row (#868's rule)
+  assert_true(data_files.write(kept, { version = 1 }))
+  assert_equal(problem_of(data_files, kept).backup, kept .. ".bak", "the set-aside's row stays")
+  -- unreadable in place: a failed write says not saved, a good one ends both
+  write_text(in_place, "return {")
+  data_files.read(in_place)
+  local restore = watch_writes("in-place.data", { at = "write", after = 0 })
+  assert_equal(data_files.write(in_place, { version = 1 }), false)
+  restore()
+  assert_equal(problem_of(data_files, in_place).problem, "not saved", "the write's problem shows first")
+  assert_true(data_files.write(in_place, { version = 1 }))
+  assert_equal(problem_of(data_files, in_place), nil, "written over: no row")
+  -- the order first found
+  local listed = data_files.problems()
+  assert_equal(listed[#listed].file, kept)
+  -- a file this session wrote, then set aside on purpose (the live scenes
+  -- kept before a PSET load): no problem
+  local mine = context.data_dir .. "mine.data"
+  assert_true(data_files.write(mine, { version = 1 }))
+  assert_true(data_files.set_aside(mine, ".pset.bak") ~= nil)
+  assert_equal(problem_of(data_files, mine), nil, "kept on purpose: no row")
+  -- problems() is a copy: changing it changes nothing kept
+  data_files.problems()[1].backup = "x"
+  assert_equal(problem_of(data_files, kept).backup, kept .. ".bak")
+end)
 end

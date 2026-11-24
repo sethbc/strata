@@ -15,6 +15,9 @@
 --                        or nil, "unreadable" and why
 --   read_text(path)      a file's bytes, or nil
 --   set_aside(path, s)   rename path to its first free backup name
+--   problems()           the files with a problem this session, as read,
+--                        set_aside and write found them (3.9, #895), for
+--                        SETUP's rows
 -- See docs/notes/lua/data-files.md.
 
 return function(S)
@@ -295,10 +298,55 @@ return function(S)
   end
   M.read_text = read_text
 
+  -- What is known of each data file this session (3.9, #895, plan ruling
+  -- 8: every data file is read and written here, so its problem is kept
+  -- here and no reader changes), by path: load_problem, nil or
+  -- "unreadable" (the last read found a file it could not use, or the file
+  -- was set aside after a read); backup, the name it was set aside under
+  -- (nil: still in place); write_problem, nil or "not saved" (the last
+  -- write failed); written, whether a write came after the last read (a
+  -- set_aside then keeps a file on purpose, as the scenes before a PSET
+  -- load do, and is no problem). order: the paths in the order first kept
+  local known = {records = {}, order = {}}
+
+  local function record_of(path)
+    local record = known.records[path]
+    if not record then
+      record = {}
+      known.records[path] = record
+      known.order[#known.order + 1] = path
+    end
+    return record
+  end
+
+  -- A read's outcome: one that could not use the file keeps it as
+  -- unreadable and in place; any other (a value, or no file) ends the
+  -- file's problems, as a scenes load does
+  local function note_read(path, problem)
+    local record = record_of(path)
+    record.load_problem = problem == "unreadable" and "unreadable" or nil
+    record.backup, record.write_problem, record.written = nil, nil, false
+  end
+
+  -- The files with a problem, in the order first found: a list of
+  -- {file = <path>, problem = "not saved" (the last write failed) or
+  -- "unreadable" (the last read could not use it), backup = <the name it
+  -- was set aside under>, or nil while it is in place}. A copy; SETUP draws
+  -- a row for each (lib/pages/setup.lua)
+  function M.problems()
+    local list = {}
+    for _, path in ipairs(known.order) do
+      local record = known.records[path]
+      local problem = record.write_problem or record.load_problem
+      if problem then list[#list + 1] = {file = path, problem = problem, backup = record.backup} end
+    end
+    return list
+  end
+
   -- The value the file at path holds; or nil and "missing" (it cannot be
   -- opened); or nil, "unreadable" and why (larger than
   -- DATA_FILES.max_bytes, or not tab.save's layout)
-  function M.read(path)
+  local function read_value(path)
     local file = io.open(path, "rb")
     if not file then return nil, "missing" end
     local size = file:seek("end")
@@ -313,6 +361,11 @@ return function(S)
     local value, problem = M.decode(text)
     if value == nil then return nil, "unreadable", problem end
     return value
+  end
+  function M.read(path)
+    local value, problem, why = read_value(path)
+    note_read(path, problem)
+    return value, problem, why
   end
 
   -- Write text to <path>.part and rename it over path. The open, write,
@@ -344,10 +397,28 @@ return function(S)
   -- opened for writing, so an exit or a repeated save with nothing new
   -- costs the card no write); or false and what failed (path then holds
   -- what it held before, whole)
+  -- Each write's outcome is kept (problems()): a failure is the write's
+  -- problem; one that works ends it and an unreadable file still in place
+  -- (this write replaced it); one set aside keeps its row (#868's rule)
+  local function note_write(path, done)
+    local record = record_of(path)
+    record.written = true
+    if not done then
+      record.write_problem = "not saved"
+      return
+    end
+    record.write_problem = nil
+    if not record.backup then record.load_problem = nil end
+  end
+
   function M.write(path, value)
     local text = M.encode(value)
-    if read_text(path) == text then return true, "unchanged" end
+    if read_text(path) == text then
+      note_write(path, true)
+      return true, "unchanged"
+    end
     local done, problem = replace_file(path, text)
+    note_write(path, done)
     if not done then return false, problem end
     return true, "written"
   end
@@ -370,12 +441,28 @@ return function(S)
 
   -- Move path out of the way, to its first free backup name: that name, or
   -- nil and why (every name taken, or the rename failed; path is then still
-  -- in place)
+  -- in place). A file set aside after its read (its reader could not use
+  -- it) is kept as unreadable (problems()): under its backup's name, or in
+  -- place when it could not be moved; one this session wrote since is
+  -- kept on purpose and is no problem
+  local function note_set_aside(path, backup)
+    local record = record_of(path)
+    if record.written then return end
+    record.load_problem, record.backup = "unreadable", backup
+  end
+
   function M.set_aside(path, suffix)
     local backup = free_backup_name(path, suffix)
-    if not backup then return nil, "every backup name is taken" end
+    if not backup then
+      note_set_aside(path, nil)
+      return nil, "every backup name is taken"
+    end
     local moved, problem = os.rename(path, backup)
-    if not moved then return nil, tostring(problem) end
+    if not moved then
+      note_set_aside(path, nil)
+      return nil, tostring(problem)
+    end
+    note_set_aside(path, backup)
     return backup
   end
 
