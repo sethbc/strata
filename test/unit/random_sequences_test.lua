@@ -377,16 +377,20 @@ test("a scene without the block gets sixteen zeros, and a block of the wrong sha
   refused(named, "a key that is no index")
 end)
 
-test("the largest scenes file holds 7026 tables", function()
+test("the largest scenes file holds 19474 tables", function()
   -- matrix_test.lua writes that file and counts its tables against the
   -- figure; here, the block's share: the block and its four lists, always
   -- captured whole, five tables a scene, 80 in all, over a base of 6818
   -- (3.6's 7394 less the groundwork's 672: a scene voice is two tables,
   -- itself and its values (format 9's and 3.8's 10, whose type is a
   -- string), where 3.7's was eight, 16 x 7 x 6; and its six LFO home
-  -- routings in the matrix block, 16 x 6), and 3.9's lanes block (2c),
-  -- a table and one a voice, 16 x 8
+  -- routings in the matrix block, 16 x 6), 3.9's lanes block (2c),
+  -- a table and one a voice, 16 x 8, and its variations block (4a) with
+  -- every letter full: the block, three a voice (itself, its order, its
+  -- slots), and per stored letter (three a voice) itself, its levels,
+  -- steps and lanes and each full step's settings and chord, 16 x 778
   local context, S = loaded()
+  local NUM_VOICES, PATTERN_LENGTH = S.constants.NUM_VOICES, S.constants.PATTERN_LENGTH
   capture_scene(1)
   local block = S.scenes[1].data.sequences
   local tables = 1
@@ -403,8 +407,19 @@ test("the largest scenes file holds 7026 tables", function()
   assert_equal(voice_tables + 1, 2, "a voice is two tables: itself and its values")
   local lanes_tables = 1 + #S.scenes[1].data.lanes
   assert_equal(lanes_tables, 8, "the lanes block: eight tables a scene")
-  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 6818 + 16 * (tables + lanes_tables))
-  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 7026)
+  local letters = S.scenes[1].data.variations
+  local letter_tables = 1
+  for _, entry in ipairs(letters) do
+    for _, value in pairs(entry) do
+      if type(value) == "table" then letter_tables = letter_tables + 1 end
+    end
+    letter_tables = letter_tables + 1
+  end
+  assert_equal(letter_tables, 1 + 3 * NUM_VOICES, "the variations block with no letter stored")
+  local stored = (#S.lib.pattern_letters.LETTERS - 1) * NUM_VOICES * (4 + 2 * PATTERN_LENGTH)
+  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables,
+    6818 + 16 * (tables + lanes_tables + letter_tables + stored))
+  assert_equal(S.lib.data_files.DATA_FILES.largest_scenes_tables, 19474)
 end)
 
 -- Review 1g, Important 1: a first start's drawn values reach the live file

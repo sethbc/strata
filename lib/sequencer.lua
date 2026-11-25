@@ -1405,7 +1405,7 @@ return function(S)
       {params:get("seq_chain_next"), params:get("seq_chain_previous"), params:get("seq_chain_random")})
   end
 
-  -- A link: the scene's patterns, steps and lanes blocks and each voice's length,
+  -- A link: the scene's patterns, steps, lanes and variations blocks and each voice's length,
   -- division, direction and misstep, and nothing else; every override ends
   local function load_chain_scene(slot)
     local data = S.scenes[slot].data
@@ -1414,6 +1414,7 @@ return function(S)
     for voice_idx = 1, NUM_VOICES do M.replace_pattern(voice_idx, data.patterns[voice_idx]) end
     S.lib.lanes.apply_block(data.lanes or {})  -- 2c: the lanes block before the steps block, as a recall
     set_all_steps(data.steps or {})
+    S.lib.pattern_letters.apply_block(data.variations or {})  -- 4a: the letters (a copy: the scene keeps its own)
     for voice_idx = 1, NUM_VOICES do
       local scene_values = data.voices[voice_idx].values or {}
       for _, key in ipairs(SEQ.chain_keys) do
@@ -1803,6 +1804,35 @@ return function(S)
     S.lib.grid_core.end_step_gestures(voice_idx)
     S.lib.mutation.note_pattern_edit(voice_idx)
     if M.gate_wanted(voice_idx) ~= answer then M.send_gate_rule(voice_idx) end
+  end
+
+  -- 3.9 grid sequencer (package 4a, design section 3): the whole pattern,
+  -- the levels, the steps' settings and the lane lengths. whole(voice): a
+  -- deep copy of the playing one, {levels = {16 levels}, steps = {[step] =
+  -- settings}, lanes = {[lane] = length}}; nil for no voice
+  function M.whole(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    local levels = {}
+    for step = 1, PATTERN_LENGTH do levels[step] = S.patterns[voice_idx][step] end
+    return {levels = levels, steps = copy_steps({[voice_idx] = S.pattern_steps[voice_idx]})[voice_idx],
+      lanes = S.lib.lanes.lengths(voice_idx)}
+  end
+
+  -- The door every whole-pattern load goes through (a letter's switch, a
+  -- paste, the chain start's undo): the levels through replace_pattern, so
+  -- its endings run once (the held values and locks, the held step
+  -- gestures, the step editor but for its own replacement, the fill, the
+  -- undo), then a copy of the steps' settings and the lane lengths
+  -- (S.lib.lanes.set_lengths: a lane it does not name follows), then the
+  -- gate rule. pattern is as whole gives it (steps and lanes may be
+  -- absent: none); a voice out of range or a pattern with no levels table
+  -- does nothing. Redraws are the caller's
+  function M.replace_whole(voice_idx, pattern)
+    if not valid_voice(voice_idx) or type(pattern) ~= "table" or type(pattern.levels) ~= "table" then return end
+    M.replace_pattern(voice_idx, pattern.levels)
+    S.pattern_steps[voice_idx] = copy_steps({[voice_idx] = pattern.steps or {}})[voice_idx]
+    S.lib.lanes.set_lengths(voice_idx, type(pattern.lanes) == "table" and pattern.lanes or {})
+    M.send_gate_rule(voice_idx)
   end
 
   function clear_pattern(voice_idx)

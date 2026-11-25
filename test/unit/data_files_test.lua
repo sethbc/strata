@@ -171,7 +171,7 @@ end
 -- byte of text here and 8.5 to 16.5 with a part kept per escape
 local MEMORY_BOUNDS = { bytes_per_table = 160, heap_per_text_byte = 5 }
 
-test("decode refuses more than max_tables tables, and hostile 4 MB texts cost a bounded heap", function()
+test("decode refuses more than max_tables tables, and hostile 12 MB texts cost a bounded heap", function()
   local context = load_strata()
   local data_files = local_value("S").lib.data_files
   local max_tables, max_bytes = data_files.DATA_FILES.max_tables, data_files.DATA_FILES.max_bytes
@@ -195,7 +195,7 @@ test("decode refuses more than max_tables tables, and hostile 4 MB texts cost a 
   value, problem = data_files.decode(tables_text(1, "{" .. (max_tables + 1) .. "},"))
   assert_equal(value, nil)
   assert_true(tostring(problem):find("more than " .. max_tables .. " tables", 1, true) ~= nil, tostring(problem))
-  -- 4 MB texts of empty tables, of tables of one entry and of tables of one
+  -- max_bytes texts of empty tables, of tables of one entry and of tables of one
   -- reference: the reader gives up at max_tables + 1, having built at most
   -- max_tables tables, each at a small cost
   for _, entry in ipairs({ "", "1,", "{1}," }) do
@@ -208,7 +208,7 @@ test("decode refuses more than max_tables tables, and hostile 4 MB texts cost a 
     assert_true(per_table < MEMORY_BOUNDS.bytes_per_table,
       "{" .. entry .. "} repeated costs " .. math.floor(per_table) .. " bytes per table")
   end
-  -- a 4 MB string of \0 escapes: the heap grows by a small multiple of the text
+  -- a max_bytes string of \0 escapes: the heap grows by a small multiple of the text
   local text = 'return {\n{\n"' .. string.rep("\\0", math.floor((max_bytes - 16) / 2)) .. '",\n},\n}'
   local grown = heap_growth_bytes(function()
     value, problem = data_files.decode(text)
@@ -223,7 +223,7 @@ test("read says a file is missing, too large or damaged; read_text gives a file'
   local context = load_strata()
   local data_files = local_value("S").lib.data_files
   local max_bytes = data_files.DATA_FILES.max_bytes
-  assert_equal(max_bytes, 4 * 1024 * 1024, "4 MB (16 full scenes are at most about 1.1 MB)")
+  assert_equal(max_bytes, 12 * 1024 * 1024, "12 MB (16 full scenes, every letter full, are about 3.3 MB)")
   local path = context.data_dir .. "read.data"
   local value, outcome, why = data_files.read(context.data_dir .. "no_such.data")
   assert_equal(value, nil); assert_equal(outcome, "missing"); assert_equal(why, nil)

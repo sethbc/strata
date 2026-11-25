@@ -200,6 +200,7 @@ S.lib.grid_layout_128v = include("lib/grid/layout_128v")(S)
 S.lib.grid_layout_64 = include("lib/grid/layout_64")(S)
 S.lib.lanes = include("lib/lanes")(S)
 S.lib.sequencer = include("lib/sequencer")(S)
+S.lib.pattern_letters = include("lib/pattern_letters")(S)
 
 -- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds
 -- later; clock is the start-up clock while it waits (cleanup() cancels it).

@@ -1629,8 +1629,9 @@ test("matrix: cleanup cancels learn and forgets its offsets, sending nothing", f
 end)
 
 -- A scenes file of 16 scenes, each with 16 full macros, 16 routings, six
--- home routings and attributes on every step, loads
-test("16 full scenes with six homes and every lane length write 7026 tables", function()
+-- home routings, attributes on every step, every lane length and (3.9's
+-- 4a) every letter of every voice full, loads
+test("the largest scenes file stays a quarter of the table cap and under the size cap", function()
   local context, S, matrix = loaded()
   local macros = S.lib.macros
   local NUM_VOICES, PATTERN_LENGTH = S.constants.NUM_VOICES, S.constants.PATTERN_LENGTH
@@ -1688,15 +1689,22 @@ test("16 full scenes with six homes and every lane length write 7026 tables", fu
   for voice = 1, NUM_VOICES do
     for _, lane in ipairs(S.lib.lanes.LANES) do S.lib.lanes.set_length(voice, lane, PATTERN_LENGTH) end
   end
+  -- 3.9's 4a: every letter of every voice full (each first switch copies
+  -- the playing pattern: D plays, A, B and C are stored)
+  for voice = 1, NUM_VOICES do
+    for _, letter in ipairs({"B", "C", "D"}) do S.lib.pattern_letters.switch_now(voice, letter) end
+  end
   -- a real save of each slot: captured and written through S.lib.data_files.write
   for slot = 1, S.constants.NUM_SCENES do assert_true(S.lib.scenes.save(slot), "slot " .. slot .. " saved") end
   local text = h.file_text(context.data_dir .. "strata/scenes.data")
   local tables = select(2, text:gsub("%-%- Table: ", ""))
-  assert_true(tables <= S.lib.data_files.DATA_FILES.max_tables,
-    tables .. " tables fit the reader's bound of " .. S.lib.data_files.DATA_FILES.max_tables)
-  local largest = S.lib.data_files.DATA_FILES.largest_scenes_tables  -- the cap keeps 4 times it (data_files_test.lua)
+  local DATA_FILES = S.lib.data_files.DATA_FILES
+  assert_true(tables * 4 <= DATA_FILES.max_tables,
+    tables .. " tables are at most a quarter of the reader's bound of " .. DATA_FILES.max_tables)
+  assert_true(#text <= DATA_FILES.max_bytes, #text .. " bytes fit the reader's size cap of " .. DATA_FILES.max_bytes)
+  local largest = DATA_FILES.largest_scenes_tables  -- the cap keeps 4 times it (data_files_test.lua)
   assert_equal(tables, largest, "the largest scenes file the reader's cap is sized for holds exactly its figure")
-  assert_equal(largest, 7026, "the figure: 6802, six home routings a scene and the lanes block's eight")
+  assert_equal(largest, 19474, "the figure: 7026 and the variations block's 778 a scene, every letter full")
   cleanup()
   local _, next_S, next_matrix = loaded({ data_subdir = data_dir_name(context) })
   for slot = 1, next_S.constants.NUM_SCENES do
@@ -1708,6 +1716,9 @@ test("16 full scenes with six homes and every lane length write 7026 tables", fu
     assert_near(last.gate, 7.123456789, 1e-9, "and their gates")
     assert_equal(last.slice, next_S.lib.slices.SLICES.max, "and their slices")
     assert_equal(last.cond, "!first", "and their conditions")
+    local letters = scene.data.variations[NUM_VOICES]
+    assert_equal(letters.current, "D", "scene " .. slot .. " plays D")
+    assert_equal(letters.slots.A.steps[PATTERN_LENGTH].notes[8], 14, "and holds A's steps")
   end
   for k = 1, 16 do next_matrix.set_routing(k, "", "") end
   recall_scene(16, 0)

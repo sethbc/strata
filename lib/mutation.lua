@@ -221,8 +221,8 @@ return function(S)
   end
 
   -- What a chain start can replace: every voice's levels, step attributes,
-  -- the keys a link carries (S.lib.sequencer.SEQ.chain_keys) and (3.9's
-  -- 2c) its lanes' lengths
+  -- the keys a link carries (S.lib.sequencer.SEQ.chain_keys), (3.9's 2c)
+  -- its lanes' lengths and (4a) its letters (S.lib.pattern_letters' block)
   local function capture_patterns()
     local patterns, steps, values, ids, lanes = {}, {}, {}, {}, {}
     for voice_idx = 1, NUM_VOICES do
@@ -235,11 +235,11 @@ return function(S)
         ids[#ids + 1] = param_id
       end
     end
-    return patterns, steps, values, ids, lanes
+    return patterns, steps, values, ids, lanes, S.lib.pattern_letters.capture()
   end
 
-  -- Hold all seven patterns, their step attributes and lane lengths and
-  -- each voice's chain keys around writes (a chain start's link, lib/sequencer.lua): captured
+  -- Hold all seven patterns, their step attributes, lane lengths and
+  -- letters and each voice's chain keys around writes (a chain start's link, lib/sequencer.lua): captured
   -- before, the writes made as the undo's own (their pattern and param
   -- edits end nothing), then held at where when they changed any of it.
   -- Writes that change nothing leave an earlier undo as it was. Returns
@@ -247,15 +247,16 @@ return function(S)
   function M.hold_patterns(where, writes)
     check_where(where, "hold_patterns")
     if type(writes) ~= "function" then error("hold_patterns: writes is a function", 2) end
-    local patterns, steps, values, ids, lanes = capture_patterns()
+    local patterns, steps, values, ids, lanes, letters = capture_patterns()
     write_as_undo(writes)
-    local now_patterns, now_steps, now_values, _, now_lanes = capture_patterns()
+    local now_patterns, now_steps, now_values, _, now_lanes, now_letters = capture_patterns()
     if same(patterns, now_patterns) and same(steps, now_steps) and same(values, now_values)
-      and same(lanes, now_lanes) then
+      and same(lanes, now_lanes) and same(letters, now_letters) then
       return false
     end
     clear_undo()
-    hold_undo(where, values, ids, nil, nil, {patterns = patterns, steps = steps, lanes = lanes})
+    hold_undo(where, values, ids, nil, nil,
+      {patterns = patterns, steps = steps, lanes = lanes, letters = letters})
     request_redraw()
     grid_redraw()
     return true
@@ -303,23 +304,6 @@ return function(S)
     return true
   end
 
-  -- Put back a chain start's step attributes, through the sequencer's own
-  -- set (a key the step did not have is cleared first)
-  local function restore_steps(steps)
-    local sequencer = S.lib.sequencer
-    for voice_idx = 1, NUM_VOICES do
-      for step = 1, S.constants.PATTERN_LENGTH do
-        local old = steps[voice_idx][step] or {}
-        local gone = {}
-        for key in pairs(S.pattern_steps[voice_idx][step] or {}) do
-          if old[key] == nil then gone[#gone + 1] = key end
-        end
-        for _, key in ipairs(gone) do sequencer.set_step_attr(voice_idx, step, key, nil) end
-        for key, value in pairs(old) do sequencer.set_step_attr(voice_idx, step, key, value) end
-      end
-    end
-  end
-
   -- 3.8 (package 3b, design §8.3, ruling 46 as amended): the held voice
   -- undo. After a voice preset's load or copy has applied, hold the
   -- voice's sound from before it, capture = {type, values} holding what a
@@ -360,8 +344,9 @@ return function(S)
   -- the voice's present active and source (ruling 46 as amended), and puts
   -- back the name the voice's preset row showed before (#869). 3.9's holds
   -- (#922, #927): a routing first, then the held params (a chain start's
-  -- keys, a routing's depth and touched param), the seven patterns,
-  -- their steps and their lane lengths (2c), a sequence's values
+  -- keys, a routing's depth and touched param), the seven whole patterns
+  -- (their levels, steps and lane lengths, 2c, through
+  -- S.lib.sequencer.replace_whole) and the letters (4a), a sequence's values
   function M.undo()
     local undo = S.undo
     if not undo or util.time() >= undo.until_time then return false end
@@ -384,9 +369,11 @@ return function(S)
       for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
       if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end
       if undo.patterns then
-        for voice_idx = 1, NUM_VOICES do S.lib.sequencer.replace_pattern(voice_idx, undo.patterns[voice_idx]) end
-        restore_steps(undo.steps)
-        S.lib.lanes.apply_block(undo.lanes)
+        for voice_idx = 1, NUM_VOICES do
+          S.lib.sequencer.replace_whole(voice_idx, {levels = undo.patterns[voice_idx], steps = undo.steps[voice_idx],
+            lanes = undo.lanes[voice_idx]})
+        end
+        S.lib.pattern_letters.apply_block(undo.letters)
       end
       if undo.sequence then
         for index, value in ipairs(undo.sequence.values) do

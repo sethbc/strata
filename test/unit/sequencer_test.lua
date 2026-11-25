@@ -1182,6 +1182,35 @@ test("the chain loads the next scene's patterns every N bars and nothing else", 
   pattern_clock_stop()
 end)
 
+-- 3.9's 4a (design section 3, Storage): a link loads the scene's letters
+-- with its patterns: the letter it plays and the others' patterns
+test("a chain link loads the scene's letters", function()
+  local context, S = setup()
+  local seq, letters = S.lib.sequencer, S.lib.pattern_letters
+  -- scene 1: voice 1 on A alone; scene 2: voice 1 playing C, A stored
+  for step = 1, 4 do seq.set_level(1, step, 15) end
+  capture_scene(1)
+  letters.switch_now(1, "C")
+  clear_pattern(1); seq.set_level(1, 9, 15); S.lib.lanes.set_length(1, "gate", 3)
+  capture_scene(2)
+  letters.switch_now(1, "A")
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 2)
+  params:set("seq_chain_bars", 1)
+  pattern_clock_start()
+  assert_equal(letters.current(1), "A", "scene 1: A")
+  assert_true(not letters.used(1, "C"), "and C unused")
+  context.clock.run_for(2.0 + 0.01)  -- one bar
+  assert_equal(letters.current(1), "C", "scene 2: C plays")
+  assert_equal(S.patterns[1][9], 15, "its pattern")
+  assert_equal(S.lib.lanes.length(1, "gate"), 3, "and lane lengths")
+  pattern_clock_stop()
+  letters.switch_now(1, "A")
+  assert_equal(S.patterns[1][1], 15, "scene 2's A")
+  assert_equal(S.patterns[1][9], 0)
+  seq.set_level(1, 2, 0)
+  assert_equal(S.scenes[2].data.variations[1].slots.A.levels[2], 15, "an edit after the link leaves the scene")
+end)
+
 test("seq_division_reset puts every voice back at step 1 at the next bar", function()
   local context, S = setup()
   local seq = S.lib.sequencer

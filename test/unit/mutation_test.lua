@@ -1299,6 +1299,44 @@ test("a chain start that changes only a lane length holds its undo (2c)", functi
   assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "a lane length alone holds the undo")
 end)
 
+-- 3.9's 4a (rulings 2c-3, 4a-1): the hold takes every voice's letters too
+-- (S.lib.pattern_letters: the playing one, the others' patterns, the
+-- order), and its undo puts them back
+test("a chain start's undo puts the letters back (4a)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local letters, mutation = S.lib.pattern_letters, S.lib.mutation
+  chain_on_scene_1(S)  -- the scene: every voice on A alone
+  S.lib.sequencer.set_level(1, 4, 15)
+  letters.switch_now(1, "C")
+  S.lib.sequencer.set_level(1, 9, 15)
+  local c = S.lib.sequencer.whole(1)
+  pattern_clock_start(); pattern_clock_stop()
+  assert_equal(letters.current(1), "A", "the link applied the scene's letters")
+  assert_true(not letters.used(1, "C"), "and C is unused in it")
+  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "the start's undo is held")
+  assert_true(mutation.undo(), "and used")
+  assert_equal(letters.current(1), "C", "the undo puts C back playing")
+  assert_equal(S.patterns[1][9], 15, "with its pattern")
+  assert_true(letters.used(1, "A"), "and A stored")
+  letters.switch_now(1, "A")
+  assert_equal(S.patterns[1][4], 15, "A as it was before the start")
+  assert_equal(S.patterns[1][9], 0)
+  letters.switch_now(1, "C")
+  assert_equal(S.patterns[1][9], c.levels[9], "C again")
+end)
+
+test("a chain start that changes only the letters holds its undo (4a)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local letters, mutation = S.lib.pattern_letters, S.lib.mutation
+  chain_on_scene_1(S)
+  letters.switch_now(2, "B")  -- B a copy of A: the playing pattern is the scene's
+  pattern_clock_start(); pattern_clock_stop()
+  assert_equal(letters.current(2), "A", "the link put voice 2 back on A")
+  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 2), "the letters alone hold the undo")
+end)
+
 test("each hold ends as a page randomize's does (#922, #927)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
