@@ -505,12 +505,11 @@ return function(S)
     if next(held) == nil then held_values[voice_idx] = nil end
   end
 
-  -- The step's own level on a target (the key of lane A or B, whichever
-  -- names it now), or nil
-  function values.step_level(voice_idx, step, target)
-    local attrs = S.pattern_steps[voice_idx][step] or {}
+  -- The step's own level on a target (lane A's or B's read at the step's
+  -- tick, whichever names it now: S.lib.lanes.last_read, 2c), or nil
+  function values.step_level(voice_idx, target)
     for _, lane in ipairs({"a", "b"}) do
-      if S.lib.lanes.target(voice_idx, lane) == target then return attrs[S.lib.lanes.MOVE.step_key[lane]] end
+      if S.lib.lanes.target(voice_idx, lane) == target then return S.lib.lanes.last_read(voice_idx, lane) end
     end
     return nil
   end
@@ -520,23 +519,23 @@ return function(S)
   -- voice's own note (the value gives way: values.take sets nothing), else
   -- the held one; nil with neither. values.midi_keeps_own is
   -- other_owns_slot_1, set where that is defined
-  function values.pitch_level(voice_idx, step)
-    local level = values.step_level(voice_idx, step, "pitch")
+  function values.pitch_level(voice_idx)
+    local level = values.step_level(voice_idx, "pitch")
     if level and not values.midi_keeps_own(voice_idx) then return level end
     return M.held_value(voice_idx, "pitch")
   end
 
   -- A played step's values (its first hit): each of lanes A and B whose
-  -- target and step key are set replaces the voice's held value on that
+  -- target is set and whose read at the step's tick holds a value (2c:
+  -- S.lib.lanes.last_read) replaces the voice's held value on that
   -- target, but for a pitch value while a MIDI key down keeps the voice's
   -- own note (2b: it gives way). Returns the params they set, param id ->
   -- value, to be sent where no lock of the step holds them
   function values.take(voice_idx, step)
-    local attrs = S.pattern_steps[voice_idx][step] or {}
     local fresh = {}
     for _, lane in ipairs({"a", "b"}) do
       local target = S.lib.lanes.target(voice_idx, lane)
-      local level = target and attrs[S.lib.lanes.MOVE.step_key[lane]]
+      local level = target and S.lib.lanes.last_read(voice_idx, lane)
       if level and target == "pitch" and values.midi_keeps_own(voice_idx) then level = nil end
       local param_id, value
       if level then param_id, value = S.lib.lanes.value(voice_idx, target, level) end
@@ -650,10 +649,12 @@ return function(S)
   end
 
   -- A step's gate in seconds: the step's gate (or the voice's length) in
-  -- steps x the voice's nominal step in seconds / hits, clamped
+  -- steps x the voice's nominal step in seconds / hits, clamped. With a
+  -- step (a hit's), its gate is the gate lane's read at the step's tick
+  -- (2c: S.lib.lanes.last_read, the step's own key while the lane follows)
   function M.gate_seconds(voice_idx, step, hits)
     if not valid_voice(voice_idx) then return nil end
-    local steps = (step and M.step_attr(voice_idx, step, "gate")) or voice_values(voice_idx).seq_gate_length
+    local steps = (step and S.lib.lanes.last_read(voice_idx, "gate")) or voice_values(voice_idx).seq_gate_length
       or SEQ.gate_length_default
     local seconds = steps * division_beats(voice_idx) * S.lib.params_setup.beat_seconds_now() / (hits or 1)
     return util.clamp(seconds, SEQ.gate_seconds[1], SEQ.gate_seconds[2])
@@ -865,7 +866,7 @@ return function(S)
     -- the step's locks, wanted values and chord, worked out once at the
     -- step's begin (begin_voice_step: its events' pitches come from them)
     local step = stepping[voice_idx]
-      or step_inputs(voice_idx, event.locks, event.semitones, values.pitch_level(voice_idx, event.step))
+      or step_inputs(voice_idx, event.locks, event.semitones, values.pitch_level(voice_idx))
     stepping[voice_idx] = nil
     local locks, wanted, lock_ids, chord = step.locks, step.wanted, step.lock_ids, step.chord
     local note_id = chord and chord.note_id
@@ -1158,7 +1159,9 @@ return function(S)
     -- 3.9: outside, a move hit is at full velocity (its level is kept)
     if M.step_mode(voice_idx) == "move" then event.velocity = 1 end
     if gated(voice_idx) then
-      local steps = attrs.gate or voice_values(voice_idx).seq_gate_length or SEQ.gate_length_default
+      -- 2c: the gate lane's read at the step's tick
+      local steps = S.lib.lanes.last_read(voice_idx, "gate") or voice_values(voice_idx).seq_gate_length
+        or SEQ.gate_length_default
       event.gate_beats = steps * division / hits
     end
     if attrs.notes then event.notes, event.semitones = copy_list(attrs.notes), copy_list(semitones or {}) end
@@ -1402,7 +1405,7 @@ return function(S)
       {params:get("seq_chain_next"), params:get("seq_chain_previous"), params:get("seq_chain_random")})
   end
 
-  -- A link: the scene's patterns, steps block and each voice's length,
+  -- A link: the scene's patterns, steps and lanes blocks and each voice's length,
   -- division, direction and misstep, and nothing else; every override ends
   local function load_chain_scene(slot)
     local data = S.scenes[slot].data
@@ -1410,6 +1413,7 @@ return function(S)
     end_all_overrides()
     for voice_idx = 1, NUM_VOICES do M.replace_pattern(voice_idx, data.patterns[voice_idx]) end
     set_all_steps(data.steps or {})
+    S.lib.lanes.apply_block(data.lanes or {})  -- 2c: the lanes block, with the steps block
     for voice_idx = 1, NUM_VOICES do
       local scene_values = data.voices[voice_idx].values or {}
       for _, key in ipairs(SEQ.chain_keys) do
@@ -1436,11 +1440,13 @@ return function(S)
   -- A voice's step ------------------------------------------------------
 
   -- The voice's position starts (a pattern start, a restart, a division
-  -- reset's bar, a stop): no step taken, pass 1 with no outcome
+  -- reset's bar, a stop): no step taken, pass 1 with no outcome, every
+  -- free lane back at 1 (2c)
   local function start_position(voice_idx, state)
     state.last, state.taken, state.heading, state.pass_length = nil, 0, 1, voice_length(voice_idx)
     state.way = nil
     S.lib.conditions.start(voice_idx)
+    S.lib.lanes.start(voice_idx)
   end
 
   -- Ping-pong's move after last (3.7, design §5.5): up to the pass's
@@ -1544,16 +1550,22 @@ return function(S)
   -- §5.1): its condition is tested first (S.lib.conditions.test), its
   -- probability drawn once only if it holds, and its outcome recorded
   -- (S.lib.conditions.record); a step that plays plays its first hit.
-  -- Returns the hits still to play and their spacing
+  -- 2c: each lane is read once, at the tick (S.lib.lanes.read: the step's
+  -- key while it follows, its own cell while it is free), and the free
+  -- lanes move on (advance); the rest of the tick reads what was read
+  -- (S.lib.lanes.last_read). Returns the hits still to play and their spacing
   local function begin_voice_step(voice_idx)
     local state = play.voices[voice_idx]
     at_beat(state.beat)
     local step = take_position(voice_idx)
     S.pattern_sounding_steps[voice_idx] = step
+    local lanes = S.lib.lanes
+    for _, lane in ipairs(lanes.LANES) do lanes.read(voice_idx, lane, step) end
+    lanes.advance(voice_idx)
     local level = S.patterns[voice_idx][step]
     local hits, spacing, semitones, pitches = 0, 0, nil, nil
     local attrs = S.pattern_steps[voice_idx][step] or {}
-    local prob = attrs.prob or SEQ.max_prob
+    local prob = lanes.last_read(voice_idx, "chance") or SEQ.max_prob
     local plays = false
     if level > 0 then
       plays = (attrs.cond == nil or S.lib.conditions.test(voice_idx, attrs.cond)) and prob > 0
@@ -1565,8 +1577,9 @@ return function(S)
       local division, swing = division_beats(voice_idx), swing_beats(voice_idx)
       local step_beats = division + (state.tick % 2 == 0 and swing or -swing)
       local step_seconds = step_beats * S.lib.params_setup.beat_seconds_now()
-      hits = math.min(attrs.ratchet or 1, math.max(1, math.floor(step_seconds / SEQ.min_ratchet_seconds + 1e-9)))
-      local pitch_level = values.pitch_level(voice_idx, step)
+      hits = math.min(lanes.last_read(voice_idx, "repeats") or 1,
+        math.max(1, math.floor(step_seconds / SEQ.min_ratchet_seconds + 1e-9)))
+      local pitch_level = values.pitch_level(voice_idx)
       spacing, semitones = step_beats / hits, step_semitones(voice_idx, attrs, pitch_level)
       -- the chord the voices output plays and the pitches every hit carries, from one reckoning
       local inputs = step_inputs(voice_idx, step_locks(attrs), semitones, pitch_level)
@@ -1633,13 +1646,15 @@ return function(S)
 
   -- No bursts (rule 4): at a wake the voice plays at most one step that has
   -- come. While its next tick has come too, the step at its tick is skipped
-  -- (its position moves on, nothing plays) and it takes that tick, so it
-  -- plays the latest, at the position the count puts it at
+  -- (its position moves on, nothing plays, and, 2c, its free lanes move
+  -- on, reading nothing) and it takes that tick, so it plays the latest,
+  -- at the position the count puts it at
   local function skip_due_ticks(voice_idx)
     while true do
       local k, beat = next_voice_tick(voice_idx)
       if not is_due(beat) then return end
       take_position(voice_idx)
+      S.lib.lanes.advance(voice_idx)
       take_tick(voice_idx, k, beat)
     end
   end

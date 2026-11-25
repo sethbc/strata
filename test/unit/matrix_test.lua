@@ -1630,7 +1630,7 @@ end)
 
 -- A scenes file of 16 scenes, each with 16 full macros, 16 routings, six
 -- home routings and attributes on every step, loads
-test("16 full scenes with six homes write 6898 tables", function()
+test("16 full scenes with six homes and every lane length write 7026 tables", function()
   local context, S, matrix = loaded()
   local macros = S.lib.macros
   local NUM_VOICES, PATTERN_LENGTH = S.constants.NUM_VOICES, S.constants.PATTERN_LENGTH
@@ -1683,6 +1683,11 @@ test("16 full scenes with six homes write 6898 tables", function()
     assert_near(sequencer.step_attr(NUM_VOICES, PATTERN_LENGTH, key), value, 1e-12, "the sequencer stored " .. key)
   end
   assert_equal(#sequencer.step_attr(NUM_VOICES, PATTERN_LENGTH, "notes"), 8, "and eight notes")
+  -- 3.9's 2c: every lane of every voice at its own length (the lanes block:
+  -- a table and one a voice, eight a scene, its lengths numbers)
+  for voice = 1, NUM_VOICES do
+    for _, lane in ipairs(S.lib.lanes.LANES) do S.lib.lanes.set_length(voice, lane, PATTERN_LENGTH) end
+  end
   -- a real save of each slot: captured and written through S.lib.data_files.write
   for slot = 1, S.constants.NUM_SCENES do assert_true(S.lib.scenes.save(slot), "slot " .. slot .. " saved") end
   local text = h.file_text(context.data_dir .. "strata/scenes.data")
@@ -1691,7 +1696,7 @@ test("16 full scenes with six homes write 6898 tables", function()
     tables .. " tables fit the reader's bound of " .. S.lib.data_files.DATA_FILES.max_tables)
   local largest = S.lib.data_files.DATA_FILES.largest_scenes_tables  -- the cap keeps 4 times it (data_files_test.lua)
   assert_equal(tables, largest, "the largest scenes file the reader's cap is sized for holds exactly its figure")
-  assert_equal(largest, 6898, "the figure: 6802 and six home routings a scene")
+  assert_equal(largest, 7026, "the figure: 6802, six home routings a scene and the lanes block's eight")
   cleanup()
   local _, next_S, next_matrix = loaded({ data_subdir = data_dir_name(context) })
   for slot = 1, next_S.constants.NUM_SCENES do

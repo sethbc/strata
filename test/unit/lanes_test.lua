@@ -953,4 +953,339 @@ h.transition_table({
   },
 })
 
+-- Lane lengths (package 2c, design section 2, Following and free, Lane
+-- lengths) ---------------------------------------------------------------
+
+-- Every step of voice 1 set (voice 1 reading buffer 1, its length 16)
+local function every_step(S)
+  for step = 1, S.constants.PATTERN_LENGTH do S.lib.sequencer.set_level(1, step, 15) end
+end
+
+-- Voice 1's retriggers sent since the calls were cleared
+local function hits(context)
+  local count = 0
+  for _, call in ipairs(context.calls_named("retrigger")) do
+    if call.args[1] == 0 then count = count + 1 end
+  end
+  return count
+end
+
+-- Voice 1's step in seconds
+local function step_seconds(S)
+  return S.lib.sequencer.SEQ.division_beats[params:get("v1_seq_division")] * S.lib.params_setup.beat_seconds_now()
+end
+
+-- Voice 1's next wake held back one step: the tick due then is skipped (its
+-- position moves on, nothing plays) and the one after it is played
+local function skip_tick(context, S)
+  local late = step_seconds(S)
+  context.clock.advance_until(S.pattern_clocks[1], function() context.set_time(util.time() + late) end)
+end
+
+test("the lanes and their step keys; a length is 1 to 16 or none, and nil follows", function()
+  local _, S = setup()
+  local lanes = S.lib.lanes
+  assert_equal(table.concat(lanes.LANES, " "), "a b chance repeats gate", "the five lanes")
+  local keys = {}
+  for _, lane in ipairs(lanes.LANES) do keys[#keys + 1] = lanes.STEP_KEYS[lane] end
+  assert_equal(table.concat(keys, " "), "va vb prob ratchet gate", "their step keys")
+  for voice = 1, h.voice_count() do
+    for _, lane in ipairs(lanes.LANES) do assert_equal(lanes.length(voice, lane), nil, "a fresh lane follows") end
+  end
+  lanes.set_length(1, "chance", 16); assert_equal(lanes.length(1, "chance"), 16, "16")
+  lanes.set_length(1, "chance", 1); assert_equal(lanes.length(1, "chance"), 1, "1")
+  for _, bad in ipairs({0, 17, 2.5, "3"}) do
+    lanes.set_length(1, "chance", bad); assert_equal(lanes.length(1, "chance"), 1, "refuses " .. tostring(bad))
+  end
+  lanes.set_length(1, "hits", 4); assert_equal(lanes.length(1, "hits"), nil, "hits is no lane of its own length")
+  local past = h.voice_count() + 1
+  lanes.set_length(past, "a", 4); assert_equal(lanes.length(past, "a"), nil, "no voice past the last")
+  lanes.set_length(1, "chance", nil); assert_equal(lanes.length(1, "chance"), nil, "nil follows again")
+  lanes.set_lengths(2, {a = 5, gate = 3})
+  local copy = lanes.lengths(2)
+  assert_equal(copy.a, 5, "lengths: a"); assert_equal(copy.gate, 3, "lengths: gate"); assert_equal(copy.b, nil, "b follows")
+  copy.a = 9
+  assert_equal(lanes.length(2, "a"), 5, "lengths is a copy")
+  lanes.set_lengths(2, {b = 2})
+  assert_equal(lanes.length(2, "a"), nil, "set_lengths sets all five: a follows")
+  assert_equal(lanes.length(2, "b"), 2, "and b is 2")
+end)
+
+test("a free lane keeps its own position", function()
+  local context, S = setup()
+  every_step(S)
+  S.lib.sequencer.set_step_attr(1, 1, "va", 15); S.lib.sequencer.set_step_attr(1, 3, "va", 1)
+  S.lib.lanes.set_length(1, "a", 5)
+  context.clear_engine_calls()
+  local set_at = {}
+  pattern_clock_start()
+  for at = 1, 20 do
+    if at > 1 then tick(context, S) end
+    if #sent(context, "bufPos") > 0 then set_at[#set_at + 1] = at end
+    context.clear_engine_calls()
+  end
+  assert_equal(table.concat(set_at, " "), "1 3 6 8 11 13 16 18", "the values of cells 1 and 3, every five ticks")
+  pattern_clock_stop()
+end)
+
+test("a free lane moves on a skipped tick", function()
+  local context, S = setup()
+  every_step(S)
+  S.lib.sequencer.set_step_attr(1, 1, "va", 15)
+  S.lib.lanes.set_length(1, "a", 2)
+  context.clear_engine_calls()
+  pattern_clock_start()
+  assert_sends(context, "bufPos", {1}, "tick 1 reads cell 1")
+  S.lib.sequencer.set_step_attr(1, 1, "va", 1)
+  context.clear_engine_calls()
+  skip_tick(context, S)
+  assert_equal(S.lib.sequencer.sounding_step(1), 3, "tick 2 skipped, tick 3 played")
+  assert_equal(S.lib.lanes.sounding(1, "a"), 1, "the lane moved on at the skipped tick: cell 1 again")
+  assert_sends(context, "bufPos", {0}, "tick 3 sets cell 1's value")
+  pattern_clock_stop()
+end)
+
+test("a free chance lane is drawn at its own cell", function()
+  local context, S = setup()
+  every_step(S)
+  S.lib.sequencer.set_step_attr(1, 2, "prob", 0)
+  S.lib.lanes.set_length(1, "chance", 2)
+  context.clear_engine_calls()
+  local played = {}
+  pattern_clock_start()
+  for at = 1, 8 do
+    if at > 1 then tick(context, S) end
+    played[#played + 1] = hits(context)
+    context.clear_engine_calls()
+  end
+  assert_equal(table.concat(played, " "), "1 0 1 0 1 0 1 0", "every second hit held back")
+  pattern_clock_stop()
+end)
+
+test("a free repeats lane ratchets at its own cell", function()
+  local context, S = setup()
+  every_step(S)
+  S.lib.sequencer.set_step_attr(1, 2, "ratchet", 3)
+  S.lib.lanes.set_length(1, "repeats", 3)
+  local seconds = step_seconds(S)
+  pattern_clock_start()
+  -- tick 2 reads cell 2 (its own step): its ratchets wake the clock, so
+  -- the ticks are counted in time
+  context.clock.run_for(4 * seconds - 0.01)
+  assert_equal(S.lib.sequencer.sounding_step(1), 4, "tick 4")
+  assert_equal(hits(context), 6, "ticks 1 to 4: cell 2's three hits at tick 2, one at each other")
+  context.clear_engine_calls()
+  -- tick 5 reads cell 2 (step 5 has no ratchet): three hits over its step
+  context.clock.run_for(seconds)
+  assert_equal(S.lib.sequencer.sounding_step(1), 5, "still step 5")
+  assert_equal(hits(context), 3, "three hits from cell 2's repeats")
+  pattern_clock_stop()
+end)
+
+test("a free gate lane sets gateSeconds from its own cell", function()
+  local context, S = setup()
+  every_step(S)
+  S.lib.sequencer.set_step_attr(1, 2, "gate", 4)
+  S.lib.lanes.set_length(1, "gate", 3)
+  local per_step = step_seconds(S)
+  context.clear_engine_calls()
+  local last = {}
+  pattern_clock_start()
+  for at = 1, 6 do
+    if at > 1 then tick(context, S) end
+    local values = sent(context, "gateSeconds")
+    last[at] = values[#values]
+    context.clear_engine_calls()
+  end
+  assert_near(last[2], 4 * per_step, 1e-9, "tick 2: cell 2's gate")
+  assert_near(last[3], params:get("v1_seq_gate_length") * per_step, 1e-9, "tick 3: cell 3 has none, the voice's length")
+  assert_equal(last[4], nil, "tick 4: cell 1, the same length, not sent again")
+  assert_near(last[5], 4 * per_step, 1e-9, "tick 5: cell 2's gate, where step 5 has none")
+  pattern_clock_stop()
+end)
+
+test("conditions count the hits' passes whatever the lanes' lengths", function()
+  local context, S = setup()
+  params:set("v1_seq_length", 4)
+  set_step(S, 1, {cond = "1:2"})
+  S.lib.lanes.set_length(1, "a", 5)
+  S.lib.lanes.set_length(1, "chance", 5)
+  context.clear_engine_calls()
+  local plays = {}
+  pattern_clock_start()
+  for at = 1, 20 do
+    if at > 1 then tick(context, S) end
+    if hits(context) > 0 then plays[#plays + 1] = S.lib.conditions.pass(1) end
+    context.clear_engine_calls()
+  end
+  assert_equal(table.concat(plays, " "), "1 3 5", "step 1 plays on passes 1, 3 and 5")
+  pattern_clock_stop()
+end)
+
+test("sounding is the cell last read", function()
+  local context, S = setup()
+  every_step(S)
+  S.lib.lanes.set_length(1, "a", 5)
+  assert_equal(S.lib.lanes.sounding(1, "a"), nil, "nothing read before a start")
+  pattern_clock_start()
+  for _ = 1, 6 do tick(context, S) end
+  assert_equal(S.lib.sequencer.sounding_step(1), 7, "the hits at step 7")
+  assert_equal(S.lib.lanes.sounding(1, "a"), 2, "the lane of 5 at cell 2")
+  assert_equal(S.lib.lanes.sounding(1, "b"), 7, "a following lane at the step played")
+  pattern_clock_stop()
+  assert_equal(S.lib.lanes.sounding(1, "a"), nil, "nothing read after a stop")
+end)
+
+test("the lanes block fills an old scene with no lengths, refuses a bad name and a length of 0 or 17", function()
+  local _, S = setup()
+  local lanes = S.lib.lanes
+  lanes.set_length(1, "a", 5); lanes.set_length(3, "gate", 16)
+  capture_scene(1)
+  local scene = S.scenes[1]
+  assert_equal(scene.data.lanes[1].a, 5, "the scene keeps voice 1's lane A")
+  assert_equal(scene.data.lanes[3].gate, 16, "and voice 3's gate lane")
+  assert_true(validate_scene(scene), "and passes its check")
+  lanes.set_length(1, "a", nil); lanes.set_length(3, "gate", nil); lanes.set_length(2, "b", 4)
+  recall_scene(1)
+  assert_equal(lanes.length(1, "a"), 5, "a recall applies lane A's length")
+  assert_equal(lanes.length(3, "gate"), 16, "and the gate lane's")
+  assert_equal(lanes.length(2, "b"), nil, "and a lane the scene does not name follows")
+  for _, bad in ipairs({{hits = 4}, {va = 4}, {a = 0}, {a = 17}, {a = 2.5}, {a = "4"}}) do
+    local key, value = next(bad)
+    scene.data.lanes[1] = bad
+    assert_true(not validate_scene(scene), "refused: " .. key .. " = " .. tostring(value))
+  end
+  scene.data.lanes[1] = {}
+  scene.data.lanes[h.voice_count() + 1] = {}
+  assert_true(not validate_scene(scene), "refused: a voice past the last")
+  scene.data.lanes[h.voice_count() + 1] = nil
+  scene.data.lanes[2] = nil
+  assert_true(not validate_scene(scene), "refused: a voice missing")
+  scene.data.lanes = nil
+  fill_scene(scene)
+  assert_equal(#scene.data.lanes, h.voice_count(), "an old scene is filled with a table a voice")
+  for voice = 1, h.voice_count() do assert_equal(next(scene.data.lanes[voice]), nil, "with no lengths") end
+  assert_true(validate_scene(scene), "and passes its check")
+  lanes.set_length(1, "a", 5)
+  recall_scene(1)
+  assert_equal(lanes.length(1, "a"), nil, "and its recall leaves every lane following")
+end)
+
+test("a chain link applies the lane lengths, and the chain start's undo puts them back", function()
+  local _, S = setup()
+  local lanes, mutation = S.lib.lanes, S.lib.mutation
+  set_step(S, 1)
+  lanes.set_length(1, "a", 5)
+  capture_scene(1)
+  lanes.set_length(1, "a", nil); lanes.set_length(2, "chance", 3)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
+  pattern_clock_start()
+  assert_equal(lanes.length(1, "a"), 5, "the start's link applies the scene's lane A")
+  assert_equal(lanes.length(2, "chance"), nil, "and makes the live chance lane follow")
+  pattern_clock_stop()
+  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "the start's undo is held")
+  mutation.undo()
+  assert_equal(lanes.length(1, "a"), nil, "the undo puts lane A back to following")
+  assert_equal(lanes.length(2, "chance"), 3, "and the chance lane's 3")
+end)
+
+test("a chain start that changes only a lane length holds its undo", function()
+  local _, S = setup()
+  local lanes, mutation = S.lib.lanes, S.lib.mutation
+  set_step(S, 1)
+  capture_scene(1)
+  lanes.set_length(1, "gate", 2)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
+  pattern_clock_start(); pattern_clock_stop()
+  assert_equal(lanes.length(1, "gate"), nil, "the link made the gate lane follow")
+  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "a lane length alone holds the undo")
+end)
+
+-- The machine `lane position`: voice 1's lane A, with the patterns playing
+-- on every step of 16. following: no length; free at 1, inside (cell 3)
+-- and at its end (cell 5): a length of 5, set after the first tick (it
+-- starts at 1), then none, two or four ticks more
+local function lane_enter(ticks)
+  return function(context)
+    local S = local_value("S")
+    every_step(S)
+    pattern_clock_start()
+    if ticks then
+      S.lib.lanes.set_length(1, "a", 5)
+      for _ = 1, ticks do tick(context, S) end
+    end
+  end
+end
+
+-- The row's check: the cell lane A read last, and the step the hits played
+local function read_cell(cell, step)
+  return function()
+    local S = local_value("S")
+    assert_equal(S.lib.lanes.sounding(1, "a"), cell, "lane A read cell " .. tostring(cell))
+    assert_equal(S.lib.sequencer.sounding_step(1), step, "the hits at step " .. step)
+  end
+end
+
+local function lane_length(n)
+  return function()
+    assert_equal(local_value("S").lib.lanes.length(1, "a"), n, "lane A's length " .. tostring(n))
+  end
+end
+
+h.transition_table({
+  name = "lane position",
+  notes = {"docs/notes/lua/lanes.md", "lane position"},
+  states = {
+    ["following"] = lane_enter(nil),
+    ["free at 1"] = lane_enter(0),
+    ["free inside"] = lane_enter(2),
+    ["free at its end"] = lane_enter(4),
+  },
+  events = {
+    ["tick played"] = function(context) tick(context, local_value("S")) end,
+    ["tick skipped"] = function(context) skip_tick(context, local_value("S")) end,
+    ["voice started"] = function() pattern_clock_stop(); pattern_clock_start() end,
+    ["length set"] = function() local_value("S").lib.lanes.set_length(1, "a", 8) end,
+    ["length set below"] = function() local_value("S").lib.lanes.set_length(1, "a", 2) end,
+    ["set back to following"] = function() local_value("S").lib.lanes.set_length(1, "a", nil) end,
+  },
+  state_of = function()
+    local lanes = local_value("S").lib.lanes
+    local length, position = lanes.length(1, "a"), lanes.position(1, "a")
+    if length == nil then return position == nil and "following" or "following, with a position" end
+    if position == 1 then return "free at 1" end
+    if position == length then return "free at its end" end
+    return (position > 1 and position < length) and "free inside" or "free outside its length"
+  end,
+  rows = {
+    {"following", "tick played", "following", check = read_cell(2, 2)},
+    {"following", "tick skipped", "following", check = read_cell(3, 3)},
+    {"following", "voice started", "following", check = read_cell(1, 1)},
+    {"following", "length set", "free at 1", check = lane_length(8)},
+    {"following", "set back to following", "following", check = lane_length(nil)},
+    {"free at 1", "tick played", "free inside", check = read_cell(1, 2)},
+    {"free at 1", "tick skipped", "free inside", check = read_cell(2, 3)},
+    {"free at 1", "voice started", "free inside", check = read_cell(1, 1)},
+    {"free at 1", "length set", "free at 1", check = lane_length(8)},
+    {"free at 1", "set back to following", "following", check = lane_length(nil)},
+    {"free inside", "tick played", "free inside", check = read_cell(3, 4)},
+    {"free inside", "tick skipped", "free at its end", check = read_cell(4, 5)},
+    {"free inside", "voice started", "free inside", check = read_cell(1, 1)},
+    {"free inside", "length set", "free inside", check = lane_length(8)},
+    {"free inside", "length set below", "free at 1", check = lane_length(2)},
+    {"free inside", "set back to following", "following", check = lane_length(nil)},
+    {"free at its end", "tick played", "free at 1", check = read_cell(5, 6)},
+    {"free at its end", "tick skipped", "free inside", check = read_cell(1, 7)},
+    {"free at its end", "voice started", "free inside", check = read_cell(1, 1)},
+    {"free at its end", "length set", "free inside", check = lane_length(8)},
+    {"free at its end", "length set below", "free at 1", check = lane_length(2)},
+    {"free at its end", "set back to following", "following", check = lane_length(nil)},
+  },
+  impossible = {
+    {"following", "length set below",
+      "a following lane has no position (S.lib.lanes.position is nil), so no length is below it: any length starts it at 1"},
+    {"free at 1", "length set below", "set_length takes 1 to 16 only, so no length is below cell 1"},
+  },
+})
+
 end
