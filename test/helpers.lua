@@ -842,55 +842,68 @@ local function table_cells(line)
   return cells
 end
 
--- The rows {state, event, next} of the first table under the heading
--- `### <machine>` of a notes file (a path from the repository's root, or
--- absolute), from its columns State, Event and Next wherever they stand,
--- backticks stripped. Headings and tables inside code fences do not count;
--- the table must come before the section's next heading. Raises on a file it
--- cannot read, no such heading, no table under it, or a column missing
-local function notes_table(path, machine)
+-- The rows {state, event, next} of a table under the heading `### <machine>`
+-- of a notes file (a path from the repository's root, or absolute): the
+-- first, or the number-th (a whole number from 1) when number is given,
+-- from its columns State, Event and Next wherever they stand, backticks
+-- stripped. Headings and tables inside code fences do not count; the table
+-- must come before the section's next heading. Raises on a file it cannot
+-- read, no such heading, no such table under it, or a column missing
+local function notes_table(path, machine, number)
+  if number ~= nil and not (type(number) == "number" and number >= 1 and number == math.floor(number)) then
+    error("notes_table: the table's number is a whole number from 1, not " .. tostring(number), 2)
+  end
+  number = number or 1
   local full = path:sub(1, 1) == "/" and path or (repo_root .. "/" .. path)
   local file = io.open(full, "r")
   if not file then error("notes_table: cannot read " .. path, 2) end
   local text = file:read("*a")
   file:close()
   local heading, found, fenced, header, columns, rows = "### " .. machine, false, false, nil, nil, nil
+  local tables, in_table = 0, false  -- the tables begun under the heading, and whether a line is in one
   for line in (text .. "\n"):gmatch("([^\n]*)\n") do
     if line:match("^%s*```") or line:match("^%s*~~~") then
       fenced = not fenced
+      in_table = false
       if header then break end
     elseif not fenced then
       if line:match("^#+%s") then
         if found then break end
         found = line:gsub("%s+$", "") == heading
       elseif found and line:match("^%s*|") then
-        local cells = table_cells(line)
-        if not header then
-          header, columns = cells, {}
-          for index, name in ipairs(cells) do columns[name] = columns[name] or index end
-        elseif not rows then
-          if not line:match("^[%s|:%-]+$") then
-            error("notes_table: the table under " .. path .. ", ### " .. machine .. " has no |---| row after its header", 2)
-          end
-          rows = {}  -- the separator row, |---|
-        else
-          local row = {cells[columns.State], cells[columns.Event], cells[columns.Next]}
-          for position, column in ipairs({"State", "Event", "Next"}) do
-            if row[position] == nil then
-              error("notes_table: a row under " .. path .. ", ### " .. machine .. " has no " .. column .. " cell: "
-                .. line, 2)
+        if not in_table then tables, in_table = tables + 1, true end
+        if tables == number then
+          local cells = table_cells(line)
+          if not header then
+            header, columns = cells, {}
+            for index, name in ipairs(cells) do columns[name] = columns[name] or index end
+          elseif not rows then
+            if not line:match("^[%s|:%-]+$") then
+              error("notes_table: the table under " .. path .. ", ### " .. machine .. " has no |---| row after its header", 2)
             end
+            rows = {}  -- the separator row, |---|
+          else
+            local row = {cells[columns.State], cells[columns.Event], cells[columns.Next]}
+            for position, column in ipairs({"State", "Event", "Next"}) do
+              if row[position] == nil then
+                error("notes_table: a row under " .. path .. ", ### " .. machine .. " has no " .. column .. " cell: "
+                  .. line, 2)
+              end
+            end
+            rows[#rows + 1] = row
           end
-          rows[#rows + 1] = row
         end
-      elseif header then
-        break
+      else
+        in_table = false
+        if header then break end
       end
     end
   end
   local where = path .. ", ### " .. machine
   if not found then error("notes_table: no heading ### " .. machine .. " in " .. path, 2) end
-  if not header then error("notes_table: no table under " .. where, 2) end
+  if not header then
+    error("notes_table: no table" .. (number > 1 and (" " .. number) or "") .. " under " .. where, 2)
+  end
   for _, name in ipairs({"State", "Event", "Next"}) do
     if not columns[name] then error("notes_table: the table under " .. where .. " has no column " .. name, 2) end
   end
@@ -917,8 +930,9 @@ local function whole_positive(value) return type(value) == "number" and value >=
 
 -- Run a state machine's table as tests (see the notes for the spec's
 -- fields): one test a row, `<name>: <state> + <event>`; `<name>: every cell
--- is decided`; and, with spec.notes = {path, machine}, `<name>: the notes'
--- table equals these rows`. Returns {known = {"<name>: <state> + <event> ->
+-- is decided`; and, with spec.notes = {path, machine} (or {path, machine,
+-- number}, the heading's number-th table), `<name>: the notes' table equals
+-- these rows`. Returns {known = {"<name>: <state> + <event> ->
 -- <next> (known #<issue>)", ...}}, the rows that assert a fault of an open
 -- issue; each prints its line when its test passes
 local function transition_table(spec)
@@ -934,8 +948,8 @@ local function transition_table(spec)
     error("transition_table " .. name .. ": spec.impossible is a list", 2)
   end
   if spec.notes ~= nil and (type(spec.notes) ~= "table" or type(spec.notes[1]) ~= "string"
-      or type(spec.notes[2]) ~= "string") then
-    error("transition_table " .. name .. ": spec.notes is {path, machine}", 2)
+      or type(spec.notes[2]) ~= "string" or (spec.notes[3] ~= nil and not whole_positive(spec.notes[3]))) then
+    error("transition_table " .. name .. ": spec.notes is {path, machine} or {path, machine, number}", 2)
   end
   local known = {}
   for _, row in ipairs(spec.rows) do
@@ -1013,10 +1027,10 @@ local function transition_table(spec)
   end)
   if spec.notes then
     test(name .. ": the notes' table equals these rows", function()
-      local path, machine = spec.notes[1], spec.notes[2]
+      local path, machine, number = spec.notes[1], spec.notes[2], spec.notes[3]
       local problems, mine, theirs = {}, {}, {}
       for _, row in ipairs(spec.rows) do mine[cell_name(row[1], row[2])] = row[3] end
-      local notes_rows = notes_table(path, machine)
+      local notes_rows = notes_table(path, machine, number)
       for _, row in ipairs(notes_rows) do
         local cell = cell_name(row[1], row[2])
         if theirs[cell] ~= nil then problems[#problems + 1] = cell .. ": twice in the notes" end
