@@ -755,6 +755,77 @@ test("a letter's switch under an order leaves a held roll", function()
   pattern_clock_stop()
 end)
 
+test("a start ends a roll, by hand and a followed transport start alike, and the voice plays its own steps", function()
+  for _, case in ipairs({"by hand", "transport"}) do
+    local context, S = setup()
+    if case == "transport" then params:set("clock_source", 2) end  -- midi: the patterns follow its transport
+    local log = hit_log(S)
+    pattern_clock_start()
+    S.lib.loop_roll.roll(1, 4, (key()))
+    if case == "transport" then clock.transport.start() else pattern_clock_start() end
+    assert_equal(S.lib.loop_roll.rolling(1), nil, case .. ": the start ended the roll")
+    local before = #log
+    context.clock.run_for(2 * STEP_SECONDS + 0.005)
+    local own, rolled = 0, 0
+    for index = before + 1, #log do
+      if log[index].rolled then rolled = rolled + 1 else own = own + 1 end
+    end
+    assert_equal(rolled, 0, case .. ": no rolled hit after the start")
+    assert_equal(own, 2, case .. ": the voice's own steps 2 and 3 play")
+    pattern_clock_stop()
+  end
+end)
+
+test("a late wake plays one rolled hit and keeps the roll's grid", function()
+  local context, S = setup()
+  pattern_clock_start()
+  context.clear_engine_calls()
+  local start = util.time()
+  S.lib.loop_roll.roll(1, 4, (key()))
+  assert_equal(retriggers(context), 1, "the first hit at once")
+  -- the roll's wake (31.25 ms on) comes 100 ms on, past two more of its
+  -- hits: the norns busy until then, one scheduler step delivers every
+  -- clock overdue (the LFO clock's too)
+  context.set_time(start + 0.1)
+  context.clock.advance()
+  assert_equal(retriggers(context), 2, "one hit at the late wake, never a burst")
+  context.clear_engine_calls()
+  local late = util.time() - start
+  local times = retrigger_times(context, 0.05)
+  assert_true(times[1] ~= nil and math.abs(late + times[1] - 0.125) <= TICK_SECONDS,
+    "the next hit at 125 ms, on the roll's grid, not 31.25 ms after the late one: " .. tostring(times[1]))
+  pattern_clock_stop()
+end)
+
+test("an error in a rolled hit stops the patterns and is raised again", function()
+  local context, S = setup()
+  pattern_clock_start()
+  S.lib.loop_roll.roll(1, 4, (key()))
+  local real_retrigger = S.lib.engine_sync.retrigger
+  S.lib.engine_sync.retrigger = function() error("rolled hit failed") end
+  context.clock.run_for(0.04)
+  S.lib.engine_sync.retrigger = real_retrigger
+  local errors = context.clock.take_errors()
+  assert_equal(#errors, 1, "one clock error")
+  assert_true(errors[1]:find("rolled hit failed", 1, true) ~= nil, "the hit's error, raised again: " .. tostring(errors[1]))
+  assert_equal(S.pattern_playing, false, "the patterns stopped")
+  assert_equal(S.lib.loop_roll.rolling(1), nil, "and the roll ended")
+end)
+
+test("the roll invariant fails on a roll clock no rolling voice owns", function()
+  local _, S = setup()
+  local invariant = h.registered_invariant("roll")
+  pattern_clock_start()
+  local real_stop = S.lib.clocks.stop
+  S.lib.clocks.stop = function() end  -- end_roll's stop of the clock dropped
+  S.lib.loop_roll.roll(1, 2, (key()))
+  S.lib.loop_roll.end_roll(1)
+  S.lib.clocks.stop = real_stop
+  h.allow_broken_invariants("the test leaves a roll clock running on purpose")
+  assert_true((invariant.check() or ""):find("voice 1", 1, true) ~= nil, "a roll clock runs with no roll")
+  pattern_clock_stop()
+end)
+
 test("a stop and cleanup end a roll", function()
   local context, S = setup()
   pattern_clock_start()
@@ -808,9 +879,10 @@ end)
 -- The machine `roll` (docs/notes/lua/loop-roll.md): voice 1, every step
 -- set, the patterns playing (step 1 played), a 128 showing roll_keys'
 -- test page (keys 1 to 4 of lines 1 and 2 roll voice 1 at their rate, held
--- by the key's still). rolling: key 1 then key 2 of line 1 pressed, so the
--- roll is key 2's at rate 2, key 1 still down
-local roll_machine = {pane = nil, log = nil}
+-- by the key's still). rolling: key 1 then key 3 of line 1 pressed, so the
+-- roll is key 3's at rate 3, key 1 still down; roll_machine.before: the
+-- hits logged when the state was entered
+local roll_machine = {pane = nil, log = nil, before = 0}
 
 local function roll_state(kind)
   return function(context)
@@ -819,17 +891,20 @@ local function roll_state(kind)
     roll_machine.log = hit_log(S)
     roll_machine.pane = roll_keys(context, S)
     pattern_clock_start()
-    if kind == "rolling" then roll_machine.pane.press(1, 1, 1); roll_machine.pane.press(2, 1, 1) end
+    if kind == "rolling" then roll_machine.pane.press(1, 1, 1); roll_machine.pane.press(3, 1, 1) end
+    roll_machine.before = #roll_machine.log
   end
 end
 
--- The row's check: rolling at rate, its first hit at once
+-- The row's check: rolling at rate, its first hit at once (one rolled
+-- hit since the state was entered)
 local function rolls_at(rate)
   return function()
     local S = local_value("S")
     assert_equal(S.lib.loop_roll.rolling(1), rate, "rolling at " .. rate)
-    local last = roll_machine.log[#roll_machine.log]
-    assert_true(last.rolled == true and math.abs(last.beat - clock.get_beats()) < 1e-9, "its first hit at once")
+    local log = roll_machine.log
+    assert_equal(#log, roll_machine.before + 1, "one hit since the state")
+    assert_true(log[#log].rolled == true and math.abs(log[#log].beat - clock.get_beats()) < 1e-9, "its first hit at once")
   end
 end
 
@@ -876,7 +951,7 @@ h.transition_table({
   events = {
     ["a rate set"] = function() roll_machine.pane.press(2, 2, 1) end,
     ["another rate"] = function() roll_machine.pane.press(4, 1, 1) end,
-    ["the key's release"] = function() roll_machine.pane.press(2, 1, 0) end,
+    ["the key's release"] = function() roll_machine.pane.press(3, 1, 0) end,
     ["an earlier key's release"] = function() roll_machine.pane.press(1, 1, 0) end,
     ["a page change"] = function() roll_machine.pane.show(local_value("S").constants.GRID_PAGES.patterns) end,
     ["an unplug"] = function(context) context.grid.unplug(1) end,
@@ -902,11 +977,11 @@ h.transition_table({
     {"rolling", "a rate set", "rolling", check = rolls_at(2)},
     {"rolling", "another rate", "rolling", check = rolls_at(4)},
     {"rolling", "the key's release", "off", check = silent_then_own},
-    {"rolling", "an earlier key's release", "rolling", check = still_rolls(2)},
+    {"rolling", "an earlier key's release", "rolling", check = still_rolls(3)},
     {"rolling", "a page change", "off", check = silent_then_own},
     {"rolling", "an unplug", "off", check = silent_then_own},
     {"rolling", "a stop", "off", check = next_hit_silent},
-    {"rolling", "a replacement", "rolling", check = still_rolls(2)},
+    {"rolling", "a replacement", "rolling", check = still_rolls(3)},
     {"rolling", "a hit that would have played", "rolling", check = own_step_silent},
   },
 })
