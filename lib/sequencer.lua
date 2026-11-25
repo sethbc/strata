@@ -1432,7 +1432,8 @@ return function(S)
   -- Every move but a repeat links its slot, the one playing too (ruling 36).
   -- periods (#1051): the chain periods that passed, 1 but after a late
   -- wake; the place moves on a move a period, and the slot it reaches is
-  -- linked once, unless every move was a repeat (those between never load)
+  -- linked once, unless every move was a repeat (those between never load).
+  -- True when it linked
   local function chain_link(periods)
     local place, linked = chain.current, false
     for _ = 1, periods or 1 do
@@ -1441,6 +1442,7 @@ return function(S)
       place, linked = slot, linked or move ~= "repeat"
     end
     if linked then load_chain_scene(place) end
+    return linked
   end
 
   -- 4b: every bar hook, in the order registered (first: the patterns'
@@ -1455,21 +1457,26 @@ return function(S)
   -- beat, moved on by the periods that passed (#1051), then, at a bar of the
   -- count (4b), the bar hooks: once however late the beat (the participant's
   -- beat, the one its clock.sync returned, moved on to the latest step that
-  -- has come), told how many bars passed (review round 1)
+  -- has come), told how many bars passed (review round 1). A link clears
+  -- what the hooks keep (the letters' waits and places), so after one the
+  -- bars counted are those from the link's own bar (#1051's review round
+  -- 1), and a late wake lands where on-time play would have
   local function at_beat(beat)
+    local linked_at = nil
     if chain.next_beat and beat >= chain.next_beat - SEQ.beat_tolerance then
       local period, periods = params:get("seq_chain_bars") * SEQ.bar_beats, 0
       while beat >= chain.next_beat - SEQ.beat_tolerance do
         chain.next_beat, periods = chain.next_beat + period, periods + 1
       end
-      chain_link(periods)
+      if chain_link(periods) then linked_at = chain.next_beat - period end
     end
     if play.next_bar and beat >= play.next_bar - SEQ.beat_tolerance then
       local bars = 0
       while beat >= play.next_bar - SEQ.beat_tolerance do
-        play.next_bar, bars = play.next_bar + SEQ.bar_beats, bars + 1
+        if not (linked_at and play.next_bar < linked_at - SEQ.beat_tolerance) then bars = bars + 1 end
+        play.next_bar = play.next_bar + SEQ.bar_beats
       end
-      play.run_bar_hooks(false, bars)
+      if bars > 0 then play.run_bar_hooks(false, bars) end
     end
   end
 
@@ -1480,7 +1487,9 @@ return function(S)
   -- bar's first step plays; the functions run in the order registered.
   -- bars is how many bars of the count passed since the last call: 1, but
   -- after a late wake that skipped bars (the call is made once for them
-  -- all, at the latest). Never while the patterns are stopped
+  -- all, at the latest), counted from the bar of a chain link made then
+  -- (#1051: the link cleared what came before). Never while the patterns
+  -- are stopped
   function M.on_bar(fn)
     if type(fn) ~= "function" then error("on_bar: a hook is a function", 2) end
     table.insert(play.bar_hooks, fn)

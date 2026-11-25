@@ -1306,17 +1306,16 @@ end)
 -- than one chain period moves the chain on by the periods that passed,
 -- from the beat clock.sync returned, and links once, to the scene its
 -- place has reached; every other participant waking on that beat finds
--- the next link ahead. Four scenes, each lighting its own step on the
--- voices given, chained a bar each; the patterns start and run 0.5 s, then
--- run(context, S) moves the clocks on. The places the links loaded, in
--- order, and the place after
+-- the next link ahead. Four scenes, each lighting every step of the
+-- voices given at its own level (10 + its slot), chained a bar each; the patterns start and run 0.5 s, then
+-- run(context, S, linked) moves the clocks on (linked: the places linked
+-- so far). The places the links loaded, in order, and the place after
 local function chain_run(voices, run)
   local context, S = setup()
   local seq = S.lib.sequencer
   for slot = 1, 4 do
     for _, voice_idx in ipairs(voices) do
-      clear_pattern(voice_idx)
-      seq.set_level(voice_idx, slot, 15)
+      for step = 1, S.constants.PATTERN_LENGTH do seq.set_level(voice_idx, step, 10 + slot) end
     end
     capture_scene(slot)
   end
@@ -1329,7 +1328,7 @@ local function chain_run(voices, run)
     linked[#linked + 1] = tostring((seq.chain_place()))
     return apply_block(...)
   end
-  run(context, S)
+  run(context, S, linked)
   S.lib.pattern_letters.apply_block = apply_block
   local slot = seq.chain_place()
   pattern_clock_stop()
@@ -1351,9 +1350,33 @@ test("a late wake past three chain periods links once, to scene 4 (probe, #1051)
 end)
 
 test("two voices waking on the same late beat link once", function()
-  local linked, slot = chain_run({1, 2}, late_resume(2, 6.0))
+  local heard = {}
+  local linked, slot = chain_run({1, 2}, function(context, S, links)
+    -- each first hit of voices 1 and 2 from the late resume on: its
+    -- step, its beat, its level (its scene's) and the links made by then
+    local late = false
+    S.register_step_output({name = "chain probe", play = function(event)
+      if late and event.first and (event.voice == 1 or event.voice == 2) then
+        heard[#heard + 1] = {voice = event.voice, step = event.step, beat = event.beat, links = #links,
+          level = event.level}
+      end
+    end})
+    context.clock.advance_until(S.pattern_clocks[2], function()
+      late = true
+      context.set_time(util.time() + 6.0)
+    end)
+    context.clock.run_for(0.01)
+  end)
   assert_equal(linked, "4", "one link for both voices, to scene 4")
   assert_equal(slot, 4, "on scene 4")
+  assert_equal(#heard, 2, "each voice played once on the late beat")
+  assert_true(heard[1].voice ~= heard[2].voice, "voices 1 and 2 both played")
+  assert_equal(heard[1].step, heard[2].step, "the same step")
+  assert_near(heard[1].beat, heard[2].beat, 1e-9, "on the same beat")
+  assert_true(heard[1].beat > 12, "the late beat, past the third link's bar: " .. heard[1].beat)
+  assert_equal(heard[1].links, 1, "the first played after the one link")
+  assert_equal(heard[2].links, 1, "the second found the next link already ahead: no second link")
+  assert_equal(heard[1].level + heard[2].level, 2 * 14, "both play scene 4's pattern")
 end)
 
 test("an on-time chain links each period as before", function()

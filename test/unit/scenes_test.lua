@@ -5281,8 +5281,9 @@ end
 
 -- Scene 2 holds shape 2; shape 1 plays with A waiting on voices 2 and 3;
 -- then scene 2 is recalled over `seconds`, voice 2 let go of when it
--- fades. Each voice's whole before the recall, scene 2's and after
-local function recall_over_shapes(seconds)
+-- fades (by release_voice, or by let_go(S) when given). Each voice's
+-- whole before the recall, scene 2's and after
+local function recall_over_shapes(seconds, let_go)
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   for voice_idx = 2, 3 do pattern_shape(S, voice_idx, 2) end
@@ -5298,7 +5299,11 @@ local function recall_over_shapes(seconds)
   assert_equal(before[2].waiting, "A", "voice 2's A waits for the bar")
   assert_true(first_difference(before[2], scene[2]) ~= nil, "voice 2 plays another pattern than scene 2's")
   recall_scene(2, seconds)
-  if seconds > 0 then assert_true(S.lib.scenes.release_voice(2), "voice 2 let go") end
+  if let_go then
+    let_go(S)
+  elseif seconds > 0 then
+    assert_true(S.lib.scenes.release_voice(2), "voice 2 let go")
+  end
   context.clock.run_for(seconds + 0.2)
   assert_true(not S.scene_transition_active, "landed")
   assert_equal(S.current_scene, 2, "scene 2 current")
@@ -5317,6 +5322,24 @@ test("a released voice keeps its levels, steps, lanes and letters through a fade
   assert_equal(table.concat(changed, "; "), "", "voice 2 kept as it was")
 end)
 
+-- The player's own path: a voice preset loaded into voice 2 while the fade
+-- runs lets go of it (lib/voice_presets.lua calls release_voice)
+test("a voice preset loaded during a fade keeps the voice's whole pattern", function()
+  local before, _, after = recall_over_shapes(0.5, function(S)
+    local presets = S.lib.voice_presets
+    params:set("v5_grain_size", 0.27)
+    assert_true(presets.save(5, 1, "five"), "a preset of voice 5")
+    assert_true(presets.load(2, 1), "loaded into voice 2 during the fade")
+    assert_true(S.SCENE_TRANSITION.released[2], "the load let go of voice 2")
+  end)
+  local changed = {}
+  for _, part in ipairs({"levels", "steps", "lanes", "letters", "waiting"}) do
+    changed[#changed + 1] = first_difference(after[2][part], before[2][part], "voice 2's " .. part)
+  end
+  assert_equal(table.concat(changed, "; "), "", "voice 2 kept as it was")
+  assert_near(local_value("S").voices[2].values.grain_size, 0.27, 1e-9, "voice 2 holds the preset's sound")
+end)
+
 test("a voice not released takes the scene's four", function()
   local _, scene, after = recall_over_shapes(0.5)
   for _, part in ipairs({"levels", "steps", "lanes", "letters"}) do
@@ -5332,6 +5355,32 @@ test("a recall with no fade applies every voice as before", function()
       assert_same(after[voice_idx][part], scene[voice_idx][part], "voice " .. voice_idx .. "'s " .. part)
     end
     assert_equal(after[voice_idx].waiting, nil, "voice " .. voice_idx .. ": no wait")
+  end
+end)
+
+-- #1050's review round 1, a net: every registered block but the global
+-- ones named here, applied (its default) with every voice skipped, leaves
+-- its capture as it was. A new block kept by voice that ignores skip fails
+-- by name; a new global block joins the list
+local GLOBAL_SCENE_BLOCKS = {macros = true, matrix = true, sequences = true}
+
+test("every block kept by voice leaves its voices alone when all are skipped", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice_idx = 2, 3 do pattern_shape(S, voice_idx, 1) end
+  local every_voice, checked = {}, {}
+  for voice_idx = 1, S.constants.NUM_VOICES do every_voice[voice_idx] = true end
+  for _, record in ipairs(S.registry.scene_blocks) do
+    if not GLOBAL_SCENE_BLOCKS[record.key] then
+      local before = record.capture()
+      record.apply(deep_copy(record.default()), every_voice)
+      local changed = first_difference(record.capture(), before, record.key)
+      assert_equal(changed, nil, "block " .. record.key .. " ignores skip")
+      checked[record.key] = first_difference(before, record.default()) ~= nil
+    end
+  end
+  for _, key in ipairs({"steps", "lanes", "variations"}) do
+    assert_true(checked[key], "the net holds " .. key .. " away from its default")
   end
 end)
 
