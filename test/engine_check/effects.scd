@@ -1243,7 +1243,10 @@ checkFdn = {
         var group = Group.after(context.xg), inBus = Bus.audio(server, 2), nothing = Bus.audio(server, 2);
         var outBuses = defNames.collect({ Bus.audio(server, 2) }), resultBus = Bus.control(server, 4 * defNames.size);
         // each node's own two shimmer rings (3.8: a ring left out is buffer 0)
+        // and sixteen line buffers (3.9: the FDN's lines; FreeVerb2 has no
+        // lineBuf, which the server ignores)
         var rings = defNames.collect({ 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }) });
+        var lines = defNames.collect({ engine.newReverbLines });
         var condition = Condition(false), values;
         resultBus.setAll(0);
         server.sync;
@@ -1252,7 +1255,7 @@ checkFdn = {
             Synth(\strataCheckImpulse, [\out, inBus], group, \addToTail);
             defNames.do({ arg defName, index;
                 Synth(defName, [\in, inBus, \delayIn, nothing, \out, outBuses[index], \shiftL, rings[index][0],
-                    \shiftR, rings[index][1], \mix, 1, \size, 0.8, \damp, 0.5], group, \addToTail)
+                    \shiftR, rings[index][1], \lineBuf, lines[index][0], \mix, 1, \size, 0.8, \damp, 0.5], group, \addToTail)
             });
             analysis = Synth(\strataCheckDecayTimes, [\inA, outBuses[0], \inB, outBuses[1], \out, resultBus,
                 \blocks, blocks], group, \addToTail);
@@ -1262,7 +1265,7 @@ checkFdn = {
         awaitReply.(condition, seconds * 10);
         values = readBus.(resultBus);
         group.free; server.sync;
-        ([inBus, nothing, resultBus] ++ outBuses ++ rings.flatten).do(_.free);
+        ([inBus, nothing, resultBus] ++ outBuses ++ rings.flatten ++ lines.flatten).do(_.free);
         defNames.collect({ arg defName, index;
             var above5, above35, reached, peak;
             #above5, above35, reached, peak = values.copyRange(index * 4, (index * 4) + 3);
@@ -1273,13 +1276,14 @@ checkFdn = {
     };
     var poolKB = { arg defName;
         var inBus = Bus.audio(server, 2), outBus = Bus.audio(server, 2), without, with, synth;
-        var rings = 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) });
+        var rings = 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }), lines = engine.newReverbLines;
+        server.sync;
         without = floodFit.value;
-        synth = Synth(defName, [\in, inBus, \delayIn, inBus, \out, outBus, \shiftL, rings[0], \shiftR, rings[1]],
-            engine.processGroup, \addToTail);
+        synth = Synth(defName, [\in, inBus, \delayIn, inBus, \out, outBus, \shiftL, rings[0], \shiftR, rings[1],
+            \lineBuf, lines[0]], engine.processGroup, \addToTail);
         server.sync; 0.05.wait;
         with = floodFit.value;
-        synth.free; server.sync; inBus.free; outBus.free; rings.do(_.free);
+        synth.free; server.sync; inBus.free; outBus.free; (rings ++ lines).do(_.free);
         (without - with) * probeKB
     };
     var rt60 = rt60s.([\strataReverb, \strataReverbFDN]), freeverb = rt60[0], fdn = rt60[1];

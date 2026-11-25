@@ -21,8 +21,8 @@ var failures = 0;
 // runs, and the start below is gated on this instead (#485)
 var startFailed = false;
 // The fixed order the areas run in; an absent 3.2 file is skipped
-var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \delay, \shimmer, \mix, \performance,
-    \rings, \freeze, \variation, \tuning, \loops, \record, \waveform, \positions, \modulation, \envelopes, \notes, \onsets, \types, \outrings, \soak];
+var areaOrder = [\structure, \voices, \grains, \lifecycle, \memory, \buffers, \files, \effects, \delay, \shimmer, \reverb, \mix,
+    \performance, \rings, \freeze, \variation, \tuning, \loops, \record, \waveform, \positions, \modulation, \envelopes, \notes, \onsets, \types, \outrings, \soak];
 // Areas that run only when $STRATA_ENGINE_CHECK_AREAS names them, never in
 // a full run or a CI shard: the soak (docs/notes/engine/files.md, #131)
 var onDemandAreas = [\soak];
@@ -42,8 +42,8 @@ var areas = if (missingAreas.notEmpty) {
         and: { if (requested.isEmpty) { onDemandAreas.includes(name).not } { requested.includes(name) } } })
 };
 // The run's own deadline (s): run_engine_check.sh passes 30 s less than its
-// timeout ($ENGINE_CHECK_TIMEOUT, 2700 by default), so a long soak can be given more
-var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 2670 } }.value;
+// timeout ($ENGINE_CHECK_TIMEOUT, 3000 by default), so a long soak can be given more
+var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 2970 } }.value;
 var context, engine, h, runChecks, bootFailed, portAnswered, statusResponder, booted = false;
 // The voice defs are the engine's type list (3.8: voiceTypeDefs), read once
 // the engine is built (readVoiceDefs), so a type package edits no list here
@@ -985,7 +985,7 @@ server.options.numInputBusChannels = 2;
 // explicitly so the worst-case memory check measures norns' budget.
 server.options.memSize = 8192;
 // Whatever hangs (a server.sync to a server that went away), the check ends:
-// a failed run after `deadline` s (2670 by default; CI's shards pass a timeout of 570, so 540, inside their 600 s)
+// a failed run after `deadline` s (2970 by default; CI's shards pass a timeout of 570, so 540, inside their 600 s)
 SystemClock.sched(deadline, {
     ("FAIL engine check did not finish within % s".format(deadline)).postln;
     ("ENGINE CHECK FAILED: timed out after % failures".format(failures)).postln;

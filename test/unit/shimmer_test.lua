@@ -200,10 +200,13 @@ end)
 -- Synth.head, tail, before, after and replace (the def second),
 -- Synth.basicNew (with the next newMsg's arguments) and an s_new
 -- written out (its message list). A site that names one of the three defs
--- passes \shiftL and \shiftR (and \bufL and \bufR for \strataDelay, #807)
--- in its arguments, or in the list variable it passes, assigned earlier in
--- its file; a site whose def is a variable and whose arguments name a
--- reverb's \delayIn or a delay's \bufL with its \feedback does too
+-- passes \shiftL and \shiftR (and \bufL and \bufR for \strataDelay, #807;
+-- \lineBuf, the first of its sixteen line buffers, for \strataReverbFDN,
+-- #819) in its arguments, or in the list variable it passes, assigned
+-- earlier in its file; a site whose def is a variable and whose arguments
+-- name a delay's \bufL with its \feedback passes the rings, and one whose
+-- arguments name a reverb's \delayIn (it may start the FDN) the rings and
+-- \lineBuf
 local function engine_check_sources()
   local files = {}
   for _, pattern in ipairs({"lib/engine/*.sc", "test/engine_check/*.scd", "test/*.scd"}) do
@@ -215,7 +218,7 @@ local function engine_check_sources()
 end
 
 local NODE_DEFS = {strataDelay = {"\\shiftL", "\\shiftR", "\\bufL", "\\bufR"}, strataReverb = {"\\shiftL", "\\shiftR"},
-  strataReverbFDN = {"\\shiftL", "\\shiftR"}}
+  strataReverbFDN = {"\\shiftL", "\\shiftR", "\\lineBuf"}}
 
 -- The top-level arguments of an argument text (commas outside brackets and strings)
 local function split_arguments(text)
@@ -288,8 +291,9 @@ local function node_site_problems(text, path)
     local def = site.def:match("^%s*\\([%w_]+)%s*$")
     local needed = def and NODE_DEFS[def]
     local variable_def = not def and site.def:match("^%s*[%a_][%w_]*%s*$")
-    if variable_def and (site.args:find("\\delayIn", 1, true)
-        or (site.args:find("\\bufL", 1, true) and site.args:find("\\feedback", 1, true))) then
+    if variable_def and site.args:find("\\delayIn", 1, true) then
+      needed = {"\\shiftL", "\\shiftR", "\\lineBuf"}
+    elseif variable_def and site.args:find("\\bufL", 1, true) and site.args:find("\\feedback", 1, true) then
       needed = {"\\shiftL", "\\shiftR"}
     end
     if needed then
@@ -319,8 +323,9 @@ end
 -- Each form that starts a node, written without the controls, is found
 -- and fails; with them it passes (Synth(, Synth.new(, Synth.head, tail,
 -- before, after and replace, Synth.basicNew with newMsg, an /s_new written
--- out); and a \strataDelay needs its line (bufL, bufR) too (#807)
-test("the node sites' test sees every form that starts a node, and a delay's line", function()
+-- out); and a \strataDelay needs its line (bufL, bufR) too (#807), a
+-- \strataReverbFDN and a variable def's reverb site its lines (lineBuf, #819)
+test("the node sites' test sees every form that starts a node, a delay's line and the FDN's lines", function()
   local forms = {
     'Synth(\\strataReverb, [\\in, a%s], g)',
     'Synth.new(\\strataReverbFDN, [\\in, a%s], g)',
@@ -336,7 +341,7 @@ test("the node sites' test sees every form that starts a node, and a delay's lin
   }
   for _, form in ipairs(forms) do
     local without = form:format("")
-    local with = form:format(", \\shiftL, x, \\shiftR, y")
+    local with = form:format(", \\shiftL, x, \\shiftR, y, \\lineBuf, z")
     local missing, sites = node_site_problems(without, "probe")
     assert_true(sites == 1 and #missing == 1, "found and failed without the rings: " .. without .. " (" .. sites .. " sites)")
     missing, sites = node_site_problems(with, "probe")
@@ -344,9 +349,15 @@ test("the node sites' test sees every form that starts a node, and a delay's lin
   end
   local missing = node_site_problems('Synth(\\strataDelay, [\\in, a, \\shiftL, x, \\shiftR, y], g)', "probe")
   assert_equal(#missing, 1, "a delay without its line fails")
+  missing = node_site_problems('Synth(\\strataReverbFDN, [\\in, a, \\shiftL, x, \\shiftR, y], g)', "probe")
+  assert_equal(#missing, 1, "an FDN without its lines fails")
+  missing = node_site_problems('Synth(def, [\\in, a, \\delayIn, b, \\shiftL, x, \\shiftR, y], g)', "probe")
+  assert_equal(#missing, 1, "a reverb site whose def is a variable fails without the lines")
+  missing = node_site_problems('Synth(def, [\\in, a, \\delayIn, b, \\shiftL, x, \\shiftR, y, \\lineBuf, z], g)', "probe")
+  assert_equal(#missing, 0, "and passes with them")
 end)
 
-test("every node of the delay and reverb defs passes its shimmer rings (shiftL, shiftR), a delay its line", function()
+test("every node of the delay and reverb defs passes its shimmer rings (shiftL, shiftR), a delay its line, the FDN its lines", function()
   local problems, literal, indirect = {}, 0, 0
   for _, path in ipairs(engine_check_sources()) do
     local file = assert(io.open(path, "r")); local text = h.stubs.strip_sc_comments(file:read("*a")); file:close()

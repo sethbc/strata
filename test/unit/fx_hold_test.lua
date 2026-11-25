@@ -360,11 +360,6 @@ test("the reverb is offered no freeze on either tier (the freeze is cut from 3.8
     fx_hold.toggle("reverb"); fx_hold.release("reverb")
     assert_equal(#context.engine_calls, 0, "toggle and release of the reverb send nothing on " .. tier)
   end
-  local spec = h.stubs.engine_spec_from_source(h.engine_sources())
-  assert_true(not h.stubs.engine_signatures_from_source(h.engine_sources()).setReverbFreeze,
-    "the engine has no setReverbFreeze")
-  assert_true(spec.synthdef_controls.strataReverbFDN ~= nil and not spec.synthdef_controls.strataReverbFDN.frozen,
-    "and the FDN no frozen control")
 end)
 
 -- 4a's review: one answer to "would toggle freeze or release this effect

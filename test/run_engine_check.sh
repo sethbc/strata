@@ -68,7 +68,7 @@ case ${STRATA_ENGINE_CHECK_ONE_SCLANG:-} in
   *) echo "STRATA_ENGINE_CHECK_ONE_SCLANG must be 1 or empty, got \"$STRATA_ENGINE_CHECK_ONE_SCLANG\"" >&2; exit 2 ;;
 esac
 # checked here, before any shard of a full run starts (each would refuse it)
-sclang_timeout=${ENGINE_CHECK_TIMEOUT:-2700}
+sclang_timeout=${ENGINE_CHECK_TIMEOUT:-3000}
 case $sclang_timeout in
   ''|*[!0-9]*) echo "ENGINE_CHECK_TIMEOUT must be a number of seconds, got \"$sclang_timeout\"" >&2; exit 2 ;;
 esac
@@ -205,11 +205,11 @@ YAML
 # sclang never exits by itself when engine_check.scd or the class library
 # fails to compile: it waits at its prompt, holding the caller's lock (and
 # CI's job) for good. So the run is wrapped in timeout (sclang_timeout
-# seconds: a full run of every area takes about 30 minutes (3.14.1 and 3.13, 1788 s of areas, the figures in the workflow's comment), the check's own deadline
-# is 30 s less (2670 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
+# seconds: a full run of every area takes about 31 minutes (3.14.1 and 3.13, 1884 s of areas, the figures in the workflow's comment), the check's own deadline
+# is 30 s less (2970 s by default, passed as STRATA_ENGINE_CHECK_DEADLINE, so a
 # long soak given a longer ENGINE_CHECK_TIMEOUT gets a longer deadline too;
-# the default, 2700 s, is 1.51 times those 1788 s (CI's run 44395161831,
-# and the checks since), so a full run in one sclang has 882 s of room
+# the default, 3000 s, is 1.59 times those 1884 s (CI's run 44395161831,
+# and the checks since; 2700 s until 3.9's reverb area, #819), so a full run in one sclang has 1086 s of room
 # under the deadline at CI's
 # speed, #816, and a docs test holds the default at 1.5 times the
 # workflow's sum),

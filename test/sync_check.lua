@@ -214,6 +214,7 @@ end
 -- name per line: a release whose engine lands a command before its caller
 -- adds it here, and the caller's change removes it.
 sync_check.PENDING_COMMANDS = {
+  "setReverbFreeze",
 }
 
 -- lua_sources: { { path = "strata.lua" | "lib/...", text = source }, ... },
