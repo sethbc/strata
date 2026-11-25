@@ -1,3 +1,0 @@
-### Changed
-- Tests and notes only, nothing a player hears or sees: the order in which the MIDI modules hear a device arrive, leave, get claimed or released and get moved in SYSTEM > DEVICES, and what a MIDI out note does at each of those, are now tables a test checks; the ii bus, crow, the controllers, nb, OSC and MIDI out's zones each have a self-check the tests run; and the notes list the seven start and cleanup flags of the outside-device modules.
-- The controllers (an E16 or a fader box) ignore a rig setting that changes after the script has ended, where they would have taken their MIDI port back. Nothing changes a rig setting that late today, so no player met it (#972).

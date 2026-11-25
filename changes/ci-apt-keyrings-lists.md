@@ -1,2 +1,0 @@
-### Changed
-- CI's check of the workflow also refuses a write into apt's keyrings (`/usr/share/keyrings/`, gpg's keyring or home folder there or under `/etc/apt/`) or lists (`/var/lib/apt/lists/`), a change into those folders, and `APT::Key::`, `Acquire::gpgv` and `Acquire::Min-ValidTime` settings. It now sees a write past `sudo -h <host>`, through an abbreviated long option, or relative to a folder a `cd`, `pushd` or `popd` entered (#1024).
