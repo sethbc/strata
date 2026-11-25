@@ -995,6 +995,13 @@ local function way_out(way, order)
   assert_true(#engine_notes(context) > 0, where .. ": and in the engine")
   assert_true(S.lib.conditions.fill(), where .. ": fill held")
   assert_equal(#context.calls_named("stopFastEnv"), 0, where .. ": the route plays")
+  -- gs-1b: the running pulse voices with steps, which the patterns' stop opens
+  local opened = {}
+  for voice = 1, S.constants.NUM_VOICES do
+    if S.voices[voice].active and S.lib.sequencer.step_mode(voice) == "pulse" and S.lib.sequencer.has_set_step(voice) then
+      opened[voice - 1] = 0
+    end
+  end
   local before = #context.engine_calls
   way.run(context, S, state)
   if way.cleanup then
@@ -1004,9 +1011,16 @@ local function way_out(way, order)
     -- steps (gs-1b: its seqGate 0, which reaches none either), are the only calls
     for index = before + 1, #context.engine_calls do
       local call = context.engine_calls[index]
-      assert_true(call.name == "voiceOff" or (call.name == "setGrainParam" and (call.args[2]:find("^region") ~= nil
-        or call.args[2] == "seqGate") and call.args[3] == 0),
-        "cleanup sends only its voiceOffs, the own region's clear and a pulse voice's opening (got " .. call.name .. ")")
+      local opening = call.name == "setGrainParam" and call.args[2] == "seqGate" and call.args[3] == 0
+        and opened[call.args[1]] ~= nil
+      if opening then opened[call.args[1]] = opened[call.args[1]] + 1 end
+      assert_true(call.name == "voiceOff" or opening or (call.name == "setGrainParam" and call.args[2]:find("^region") ~= nil
+        and call.args[3] == 0), "cleanup sends only its voiceOffs, the own region's clear and a running pulse voice's "
+        .. "opening (got " .. call.name .. ")")
+    end
+    assert_true(next(opened) ~= nil, "cleanup: a running pulse voice with steps to open")
+    for engine_voice, count in pairs(opened) do
+      assert_equal(count, 1, "cleanup: the stop opens running pulse voice " .. (engine_voice + 1) .. " once")
     end
     assert_equal(extra_slots(S), 0, "cleanup: no slice note held")
     assert_notes_ended(context, "cleanup")
