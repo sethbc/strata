@@ -137,16 +137,22 @@ end)
 
 test("a skipped tick moves the loop's own step", function()
   local context, S = setup()
-  S.lib.loop_roll.set_loop(1, 5, 8, (key()))
+  local still, release = key()
+  S.lib.loop_roll.set_loop(1, 5, 8, still)
   pattern_clock_start()
   local late = S.lib.sequencer.SEQ.division_beats[params:get("v1_seq_division")] * S.lib.params_setup.beat_seconds_now()
   context.clock.advance_until(S.pattern_clocks[1], function() context.set_time(util.time() + late) end)
   assert_equal(S.lib.sequencer.sounding_step(1), 7, "tick 2 skipped (the loop's 6), tick 3 plays the loop's 7")
   -- the harness wakes the clock once more at the late time, taking no tick
-  -- (as without a loop): run to tick 4's time
-  local at = util.time()
-  repeat tick(context, S) until util.time() > at + 1e-9
-  assert_equal(S.lib.sequencer.sounding_step(1), 8, "and the loop goes on from there: 8 at tick 4")
+  -- (as without a loop): run to the next tick's time
+  local function next_tick()
+    local at = util.time()
+    repeat tick(context, S) until util.time() > at + 1e-9
+    return S.lib.sequencer.sounding_step(1)
+  end
+  assert_equal(next_tick(), 8, "and the loop goes on from there: 8 at tick 4")
+  release()
+  assert_equal(next_tick(), 5, "let go after the late wake, tick 5 plays the voice's own step 5")
   pattern_clock_stop()
 end)
 
@@ -235,14 +241,20 @@ test("a pulse voice looped over empty steps is silent", function()
   for step = 9, 12 do S.lib.sequencer.set_level(1, step, 0) end
   params:set("v1_seq_gate", option_index("v1_seq_gate", "pulse"))
   S.lib.loop_roll.set_loop(1, 9, 12, (key()))
+  local function gates()
+    local sent = {}
+    for _, call in ipairs(context.engine_calls) do
+      if call.name == "setGrainParam" and call.args[1] == 0 and call.args[2] == "seqGate" then sent[#sent + 1] = call.args[3] end
+    end
+    return sent
+  end
   pattern_clock_start()
+  local at_start = gates()
+  assert_equal(at_start[#at_start], 1, "the start sends seqGate 1: the rule counts the steps inside the length")
+  context.clear_engine_calls()
   for _ = 1, 8 do tick(context, S) end
   assert_equal(retriggers(context), 0, "no retrigger")
-  local gates = {}
-  for _, call in ipairs(context.engine_calls) do
-    if call.name == "setGrainParam" and call.args[1] == 0 and call.args[2] == "seqGate" then gates[#gates + 1] = call.args[3] end
-  end
-  assert_equal(gates[#gates], 1, "seqGate's last send is 1: the rule counts the steps inside the length")
+  for _, value in ipairs(gates()) do assert_true(value ~= 0, "no seqGate 0 after the start: the gate stays 1") end
   pattern_clock_stop()
 end)
 

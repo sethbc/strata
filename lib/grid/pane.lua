@@ -156,9 +156,9 @@ return function(S)
       if type(y) ~= "number" or y < 1 or y > NUM_VOICES then return nil end
       return at(x, y)
     end
-    -- a pattern key: position x - offset of the width shown, so a level
-    -- follows 16 keys, or 8 on a half. 3.9 (3a): `second` is "level" (nil,
-    -- the default) or a function second(voice, held step, step, x, y) for
+    -- a pattern key: position x - offset of the width shown (16 keys, or 8
+    -- on a half). 3.9 (3a, 5a): `second` is nil (a second key does
+    -- nothing) or a function second(voice, held step, step, x, y) for
     -- the voice's second key before the hold fires, given the held key's
     -- own pane place (this press's x, y, which the core never sees)
     function pane.step_key(x, y, z, voice_idx, step, second)

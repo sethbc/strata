@@ -413,7 +413,6 @@ end)
 -- lands on"
 test("a paste ends the pasted voice's step gestures", function()
   local context = load_strata(); finish_startup(context)
-  h.level_side_one()  -- 3.9 (5a): the core's level gesture on side 1, which now loops
   local S = local_value("S")
   local pages = S.constants.GRID_PAGES
   local steps = grid_pane(context, "256 top")
@@ -440,10 +439,11 @@ test("a paste ends the pasted voice's step gestures", function()
   small.press(14, 3, 0); small.press(6, 3, 0)
   assert_equal(S.patterns[3][14], 15, "and its new key toggles step 14")
   assert_equal(S.patterns[3][6], copied[6], "and its held step's release toggles nothing")
-  -- the other voice's gesture still works
+  -- the other voice's gesture still works (3.9's 5a: its second key loops)
   steps.press(16, 2, 1)
-  assert_equal(S.patterns[2][6], 15, "voice 2's held step takes key 16's level")
-  assert_equal(S.patterns[2][16], 0, "and the level key does not toggle")
+  local lo, hi = S.lib.loop_roll.loop(2)
+  assert_equal(lo, 6, "voice 2's held step loops"); assert_equal(hi, 16, "to key 16")
+  assert_equal(S.patterns[2][16], 0, "and the second key does not toggle")
   steps.press(16, 2, 0); steps.press(6, 2, 0)
   assert_equal(small.led(6, 3), math.max(S.patterns[3][6], 1), "the 16x8 shows the pasted step (an empty one at 1: its presses picked voice 3)")
 end)
