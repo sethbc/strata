@@ -282,12 +282,69 @@ return function(S)
 
   -- Close the step editor if the key at (x, y) on the port opened it and
   -- it is still open for that port (S.lib.pages_seq.step_editor()), so a
-  -- stale key never closes an editor opened elsewhere since
+  -- stale key never closes an editor opened elsewhere since. The key is
+  -- forgotten after the close, so the step view's end (M.end_step_view,
+  -- which the close calls) still reads which pane it was on
   local function close_step_editor_of(port, x, y)
     if not opened_step_editor(port, x, y) then return end
-    step_editor.key = nil
     local open = S.lib.pages_seq.step_editor()
     if open and open.port == port then S.lib.pages_seq.close_step_editor(port) end
+    step_editor.key = nil
+  end
+
+  -- 3.9 (3c): the step view (design section 4, "A held step shows its
+  -- values"): a pane showing the patterns page's side 2 draws bars for the
+  -- step the editor shows, while the editor is open from a key of the
+  -- port. It is computed, never recorded: from step_editor.key, SEQ's open
+  -- editor and what the panes show, so it ends with the editor however the
+  -- editor ends and with its pane's page or side
+  local STEP_VIEW = {page = GRID_PAGES.patterns, side = 2}
+
+  local function shows_lane_side(port, pane)
+    return M.page(port, pane) == STEP_VIEW.page and M.side(port, pane) == STEP_VIEW.side
+  end
+
+  -- {voice, step, pane} of the port's step view, or nil: the step editor
+  -- open from a key of this port (step_editor.key) and still that port's
+  -- (S.lib.pages_seq.step_editor(), whose voice and step it gives), and a
+  -- pane of the port showing patterns' side 2: the key's own pane if it
+  -- does (a 128's, a 64's, a 256's pane whose line 1 was held), else the
+  -- first other one (the other pane of a 256)
+  function M.step_view(port)
+    local key = step_editor.key
+    if key == nil or key.port ~= port then return nil end
+    local open = S.lib.pages_seq.step_editor()
+    local layout = M.layout_of(port)
+    if open == nil or open.port ~= port or layout == nil or layout.pane_at == nil then return nil end
+    local pane = layout.pane_at(key.x, key.y)
+    if pane == nil or not shows_lane_side(port, pane) then
+      pane = nil
+      for index = 1, layout.panes do
+        if shows_lane_side(port, index) then
+          pane = index
+          break
+        end
+      end
+    end
+    if pane == nil then return nil end
+    return {voice = open.voice, step = open.step, pane = pane}
+  end
+
+  -- The step view's start or end on the port: its pane's keys end but the
+  -- editor's key (end_pane_keys' spare), as a side change ends them.
+  -- Nothing without a view. The caller repaints once the view is what it
+  -- will be (open_step_editor; close_step_editor after it forgets its editor)
+  local function end_view_keys(port, view)
+    if view == nil then return end
+    M.end_pane_keys(port, view.pane, step_editor.key)
+  end
+
+  -- The step editor of the port is closing (S.lib.pages_seq's
+  -- close_step_editor calls it before it forgets its editor, and repaints
+  -- the grids after: K2, the modal stack's close_all, the key's gesture
+  -- ending through close_step_editor_of): the step view, if any, ends
+  function M.end_step_view(port)
+    end_view_keys(port, M.step_view(port))
   end
 
   -- End the step gesture of the key at (x, y) on the port: its pending
@@ -338,15 +395,19 @@ return function(S)
   -- nothing at its release, takes no level and closes a step editor it
   -- opened), its pending hold is stopped and its role forgotten. The keys
   -- stay held; a strip key (pane_at nil) and the other pane's are never
-  -- touched, so fill, a tempo repeat and NV go on
-  function M.end_pane_keys(port, pane)
+  -- touched, so fill, a tempo repeat and NV go on. 3.9 (3c): a key given
+  -- as `spare` ({x, y}: the step editor's key as the step view starts or
+  -- ends on its own pane) keeps all of it: its step entry, so the editor
+  -- it opened stays open
+  function M.end_pane_keys(port, pane, spare)
     local layout = M.layout_of(port)
     if layout == nil or layout.pane_at == nil then return end
     local function each_key(tables, fn)
       local keys = {}
       for x, rows in pairs(tables[port] or {}) do
         for y in pairs(rows) do
-          if layout.pane_at(x, y) == pane then keys[#keys + 1] = {x, y} end
+          local spared = spare ~= nil and spare.x == x and spare.y == y
+          if layout.pane_at(x, y) == pane and not spared then keys[#keys + 1] = {x, y} end
         end
       end
       for _, key in ipairs(keys) do fn(key[1], key[2]) end
@@ -446,11 +507,18 @@ return function(S)
   -- editor for its voice and step (SEQ's S.lib.pages_seq.open_step_editor,
   -- which pushes it as the screen's modal owner) and note the key as the
   -- one that opened it. The key is consumed, so its release toggles
-  -- nothing; it closes the editor instead
+  -- nothing; it closes the editor instead. 3.9 (3c): a second open (SEQ
+  -- pops the first editor itself) ends the first one's step view, and the
+  -- new one's starts, each ending its pane's other keys
   local function open_step_editor(port, x, y, voice_idx, step)
+    local before = step_editor.key
+    local before_view = before and M.step_view(before.port)
     if not S.lib.pages_seq.open_step_editor(voice_idx, step, port) then return end
+    if before_view then end_view_keys(before.port, before_view) end
     step_editor.key = {port = port, x = x, y = y}
     M.consume(port, x, y)
+    end_view_keys(port, M.step_view(port))
+    grid_redraw()
   end
 
   -- A pattern key (3.4, design §8.7). Pressed, the key becomes the voice's

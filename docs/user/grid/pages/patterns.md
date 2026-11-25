@@ -7,7 +7,7 @@ Two sides: side 1 is seven lines of sixteen steps, one line per voice (line 1 vo
 - **Tap a key** to turn its step on or off: the step changes when you let go, not when you press
 - **A press picks the voice** for side 2: the picked voice's line shows it, its empty steps lit at 1 up to its length (past it they stay dark, so the length shows). The pick is the grid's (both panes of a 16×16 share it) and is not the screen's selected voice
 - **Hold a step and press another key on its line** to set the held step's level: that key's share of 15 along the keys shown (key 16 = 15, key 8 = 8; on an 8×8's half, key 8 = 15, key 4 = 8). Every further key sets it again while the first stays down; none of them toggles its own step
-- **Hold a step for 0.3 s** to open the step editor for it on the screen ([SEQ](../../pages/seq.md)), and let go to close it; the step is not toggled. The key lights nothing more while the hold runs: it looks like a press until the editor opens
+- **Hold a step for 0.3 s** to open the step editor for it on the screen ([SEQ](../../pages/seq.md)), and let go to close it; the step is not toggled. Where the grid shows side 2, that pane shows the step as bars meanwhile ([The step view](#the-step-view)). The key lights nothing more while the hold runs: it looks like a press until the editor opens
 - **What it shows**: a step at its level (15 for steps set by hand), the step that just played at 15 if set and 4 if empty, the same step SEQ shows; a set step past the voice's length dims to 1, an empty one stays dark (the picked voice's at 1 inside its length). A voice in `move` lights each set step at its value A (4 with none)
 
 ## Side 2: the picked voice's lanes
@@ -34,3 +34,23 @@ line 7  PU MV AC LN T1 T2 T3 T4 B  V1 V2 V3 V4 V5 V6 V7
 On the 8×8, side 2's left half holds the mode keys, LN and the targets and its right half B and the voices, so B and the targets are never shown together: on an 8×8, set value B's target in PARAMETERS (the voice's **seq move B**).
 
 Where it sits: rows 1-7 of the [16×8](../128h.md) and either pane of the [16×16](../256.md) (the bottom pane's lines on rows 9-15), down columns 1-7 of the [8×16](../128v.md) (each line down its column), and a half at a time on the [8×8](../64.md). Each voice plays its own length and division ([Sequencer](../../sequencer.md)).
+
+## The step view
+
+Hold a step key for 0.3 s (any key of side 1, or line 1 of side 2) and the step editor opens on the screen. Where the grid shows side 2, that pane becomes the step view while the editor is open: on a 16×16 with side 2 on the other pane, that pane; on a 16×8, an 8×16 or an 8×8 holding line 1 of side 2, the pane under your finger. Where no side 2 is shown, nothing on the grid changes: a pane never turns into bars under a finger that came to tap steps.
+
+```
+line 1  level    ■ ■ ■ ■ ■ ■ ■ ■ . . . . . . . .   lit up to the step's level
+line 2  value A
+line 3  value B
+line 4  chance   ■ ■ ■ ■ ■ ■ ■ ■ . . . . . . . .   key 8 = 53 %
+line 5  repeats
+line 6  gate
+line 7  (dark)
+```
+
+- **Each line is a bar** for the held step (the step the editor shows: ALT+E2 there moves both), lit from key 1 up to its value's key and dark beyond. An empty value A, B or gate is dark; a set step with no chance of its own is lit all the way (100 %)
+- **Press a key of a bar** to set that value from the key's place, as a second key does on side 2 (on an 8×8, along the eight keys of the half shown). The screen's row shows the new value at once, and an edit on the screen shows on the bars. A value A or B given to a step that is off turns it on at 15
+- **Press the last lit key of a lane's bar** to clear it: value A and B to none, chance to 100 %, repeats to one hit, gate to the voice's own. The level's bar never clears
+- **A lane with a length of its own** is dark and its keys do nothing: its cells belong to no step (edit them on side 2)
+- **It ends with the editor**: let the step key go, press K2, change that pane's page or side, or change the page of the pane the key is on. Keys held on the pane when the view starts or ends do nothing more, as at a side change; the step key stays held (after K2 its release toggles nothing). Holding a cell of lines 2-6 opens nothing
