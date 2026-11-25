@@ -5852,8 +5852,11 @@ do
   -- (stopped after the start-up) in each mode, with its only step 12 set
   -- (hit) or none, the patterns playing or stopped, the voice running (on)
   -- or stopped (off), a state named "<mode>/<hit|none>/<playing|stopped>/
-  -- <on|off>". Each event changes one of those: a level through each of
-  -- the five writers and a toggle, the length cut below step 12, the
+  -- <on|off>". Each event changes one of those: a level through a toggle
+  -- and through the grid's level gesture (SEQ's encoder, level and reset
+  -- rows and the arc's ring end in the same set_level call: "each of the
+  -- five writers of a level asks the rule" and the scan pin their routing,
+  -- review round 1), the length cut below step 12, the
   -- patterns started and stopped, each mode chosen, the pattern replaced
   -- with step 12 or empty, a pass played (2 s, sixteen 1/16 steps: a
   -- stopped voice with a hit is started by it), the voice started and
@@ -5885,11 +5888,11 @@ do
   function GATE.model(state, event)
     local mode, hit, playing, running = GATE.parse(state)
     local before, was_running, was_mode = GATE.answer(mode, hit, playing), running, mode
-    if event == "toggle" or event == "SEQ E3" or event == "level row" or event == "arc ring" then
+    if event == "toggle" then
       hit = not hit
     elseif event == "grid level" or event == "replaced, a step" then
       hit = true
-    elseif event == "reset row" or event == "length cut" or event == "replaced, none" then
+    elseif event == "length cut" or event == "replaced, none" then
       hit = false
     elseif event == "start" then
       playing = true
@@ -5911,24 +5914,6 @@ do
       sent = after
     end
     return GATE.name(mode, hit, playing, running), sent
-  end
-
-  -- SEQ shown, voice 3 selected and the cursor on step 12
-  function GATE.on_seq()
-    h.show_page("SEQ")
-    local S = local_value("S")
-    S.lib.ui_keys.select_voice_by(GATE.voice - S.selected_voice)
-    S.cursors.seq_step = GATE.step
-  end
-
-  -- An event that turns step 12 off when it is set and full when it is not,
-  -- by write(context, d)
-  function GATE.flip(write)
-    return function(context)
-      local S = local_value("S")
-      local top = S.constants.MAX_STEP_LEVEL
-      write(context, S.patterns[GATE.voice][GATE.step] > 0 and -top or top)
-    end
   end
 
   local gate_states, gate_events, gate_rows = {}, {}, {}
@@ -5954,23 +5939,6 @@ do
     context.grid.press(1, GATE.step, GATE.voice, 1); context.grid.press(1, 14, GATE.voice, 1)
     context.grid.press(1, 14, GATE.voice, 0); context.grid.press(1, GATE.step, GATE.voice, 0)
   end
-  gate_events["SEQ E3"] = GATE.flip(function(_, d)
-    GATE.on_seq()
-    enc(3, d)
-  end)
-  gate_events["level row"] = GATE.flip(function(_, d)
-    local_value("S").lib.pages_seq.turn_step(GATE.voice, GATE.step, "level", d)
-  end)
-  gate_events["reset row"] = function(context)
-    GATE.on_seq()
-    edit_view_on_level(context)
-    alt_k2_hold(context)
-  end
-  gate_events["arc ring"] = GATE.flip(function(context, d)
-    context.arc.plug(1)
-    GATE.on_seq()
-    context.arc.turn(1, 2, d * 100)
-  end)
   gate_events["length cut"] = function() params:set("v" .. GATE.voice .. "_seq_length", GATE.cut_length) end
   gate_events["start"] = function() pattern_clock_start() end
   gate_events["stop"] = function() pattern_clock_stop() end
