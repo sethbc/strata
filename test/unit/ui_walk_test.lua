@@ -4,7 +4,11 @@
 -- K3 down and up, E1 to E3), the norns menu opening and closing, each
 -- modal owner opened from its page and closed, the grid's step editor
 -- pushed over whatever is up and popped, SCENES' name entry finished and
--- canceled, BUFFER's file selector opened and canceled, and time passing.
+-- canceled, BUFFER's file selector opened and canceled, and time passing;
+-- since the grid sequencer's 6b, the step editor's rows 3.9's 6a added
+-- turned (the floor, the targets, the lane lengths, the letter, the
+-- values), and its letter row switching the letter, the editor kept open
+-- at its own switch and closed by the bar's (the patterns playing).
 -- Every invariant is checked after each op, and so are the walk's own
 -- rules: a key that is physically up has no press mark anywhere, and a
 -- press mark names the page shown. The end check (the controller's
@@ -26,6 +30,9 @@ local WALK = {
   quiet_seconds = 3,
   close_tries = 12,
   last_field = 99,  -- BUFFER's field cursor clamps it to its last field, slices
+  play_key = 1,     -- the 128h's strip: play
+  start_seconds = 1,  -- a start armed for the next beat has started
+  bar_seconds = 2.2,  -- past a bar at 120 BPM
   -- the owners each opened from its page by K3 on its row (the step
   -- editor is the grid's)
   owners = {"zones", "picker", "scale", "factory", "slice", "io_detail"},
@@ -210,6 +217,91 @@ local function pop_step_editor(state)
   if not state.held_step then return end
   state.pane.press(state.held_step[1], state.held_step[2], 0)
   state.held_step = nil
+end
+
+---------------------------------------------------------------------------
+-- SEQ's rows of the grid sequencer's rework (3.9's 6a) in the step editor:
+-- E2 to the row (from the first, length), E3 turned; the letter row's
+-- turn switches the letter (at once with the patterns stopped, inside the
+-- editor's own replacement, so the editor stays open; waiting for the bar
+-- while they play)
+---------------------------------------------------------------------------
+
+-- Each new row's place below length (E2's selectable rows) and the word
+-- its E3 hint shows (the five lane rows share LANE_HINT's)
+local NEW_ROWS = {
+  {4, "floor"}, {5, "move A"}, {6, "move B"}, {7, "lane len"}, {8, "lane len"}, {9, "lane len"},
+  {10, "lane len"}, {11, "lane len"}, {12, "letter"}, {21, "val A"}, {22, "val B"},
+}
+local LETTER_ROW = NEW_ROWS[9]
+
+-- The step editor is on top and has the keys and encoders
+local function editor_has_controls(state)
+  return where_input_goes(state) == "script" and not state.context.textentry.open
+    and state.S.lib.ui_modal.top() == state.S.lib.pages_seq.step_editor_owner
+end
+
+-- E2 to a new row of the editor: false (a problem noted) if its hint does
+-- not name it
+local function editor_row(state, row)
+  local S = state.S
+  let_go(state, 1)
+  hardware_enc(state, 2, -WALK.last_field)
+  hardware_enc(state, 2, row[1])
+  local hints = S.lib.pages_seq.step_editor_owner.hints(false)
+  if hints:find("E3:" .. row[2], 1, true) then return true end
+  state.problems[#state.problems + 1] = "E2 to the editor's " .. row[2] .. " row shows " .. hints
+  return false
+end
+
+-- The step editor pushed first when no grid key holds it (an owner up
+-- over it, or the menu, leaves the op to a later step)
+local function editor_up(state, random)
+  if not state.held_step and page_has_controls(state) then push_step_editor(state, random) end
+  return editor_has_controls(state)
+end
+
+local function turn_new_row(state, random)
+  if not editor_up(state, random) then return end
+  if not editor_row(state, NEW_ROWS[random(#NEW_ROWS)]) then return end
+  local amount = random(3)
+  hardware_enc(state, 3, random(2) == 1 and amount or -amount)
+  state.counts.turned_new_row = state.counts.turned_new_row + 1
+end
+
+-- The letter row turned one: with the patterns stopped the letter
+-- switches at once and the editor stays open; while they play it waits,
+-- and the bar's switch closes the editor
+-- (one time in two the grid's play key is tapped first and the start
+-- waited for: the bar's switch then closes the editor, its key still down)
+local function switch_letter(state, random)
+  if not editor_up(state, random) then return end
+  if random(2) == 1 then
+    state.pane.tap(WALK.play_key, state.S.constants.NUM_VOICES + 1)
+    if state.S.lib.sequencer.play_state() == "armed" then state.context.clock.run_for(WALK.start_seconds) end
+    if not editor_has_controls(state) then return end
+  end
+  if not editor_row(state, LETTER_ROW) then return end
+  local S, letters = state.S, state.S.lib.pattern_letters
+  local voice = S.lib.pages_seq.step_editor().voice
+  local current, waiting, playing = letters.current(voice), letters.waiting(voice), S.pattern_playing
+  local first = (waiting or current) == letters.LETTERS[1]
+  hardware_enc(state, 3, (first or random(2) == 1) and 1 or -1)
+  if not playing and letters.current(voice) ~= current then
+    state.counts.letter_switched_in_editor = state.counts.letter_switched_in_editor + 1
+    if S.lib.ui_modal.top() ~= S.lib.pages_seq.step_editor_owner then
+      state.problems[#state.problems + 1] = "the step editor closed at its own letter switch"
+    end
+  elseif playing and letters.waiting(voice) ~= waiting then
+    state.counts.letter_waited_in_editor = state.counts.letter_waited_in_editor + 1
+    -- the bar: the letter waited for plays, and its switch (the
+    -- sequencer's, not the editor's) closes the editor
+    local waited = letters.waiting(voice)
+    state.context.clock.run_for(WALK.bar_seconds)
+    if waited and letters.current(voice) == waited and S.lib.pages_seq.step_editor() then
+      state.problems[#state.problems + 1] = "the step editor stayed open at the bar's switch to " .. waited
+    end
+  end
 end
 
 ---------------------------------------------------------------------------
@@ -440,14 +532,14 @@ end
 ---------------------------------------------------------------------------
 
 local COUNTERS = {"menu_took_release", "released_under_cover", "name_finished", "name_canceled", "selector_canceled",
-  "selector_took_input", "opened_step_editor"}
+  "selector_took_input", "opened_step_editor", "turned_new_row", "letter_switched_in_editor", "letter_waited_in_editor"}
 for _, kind in ipairs(WALK.owners) do COUNTERS[#COUNTERS + 1] = "opened_" .. kind end
 
 local function new_state(context)
   local counts = {}
   for _, counter in ipairs(COUNTERS) do counts[counter] = 0 end
   return {context = context, S = local_value("S"), down = {}, press_went = {}, press_top = {}, owners = {},
-    counts = counts, pane = h.grid_pane(context, "128h")}
+    counts = counts, pane = h.grid_pane(context, "128h"), problems = {}}
 end
 
 -- The end check's controls: each of its assertions names the fault it is
@@ -541,6 +633,8 @@ h.walk({
     {4, "close owner", close_owner},
     {3, "push step editor", push_step_editor},
     {3, "pop step editor", pop_step_editor},
+    {3, "turn a new SEQ row", turn_new_row},
+    {2, "switch the letter", switch_letter},
     {2, "open name entry", open_name_entry},
     {3, "finish name entry", finish_name_entry},
     {3, "cancel name entry", cancel_name_entry},
@@ -548,7 +642,13 @@ h.walk({
     {3, "cancel file selector", cancel_file_selector},
     {4, "time", function(state, random) state.context.clock.run_for(0.04 + 0.01 * random(56)) end},
   },
-  after = function(state) return stale_marks(state) end,
+  -- the walk's rules, and what an op of its own found
+  after = function(state)
+    local problems = stale_marks(state)
+    for _, problem in ipairs(state.problems) do problems[#problems + 1] = problem end
+    state.problems = {}
+    return problems
+  end,
   finish = end_check,
   reached = COUNTERS,
   counts = function(state) return state.counts end,
