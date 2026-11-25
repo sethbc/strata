@@ -37,8 +37,8 @@ return function(S)
   -- The randomize undo, one for the whole script (#557): S.undo = {page,
   -- section, voice (nil off a voice's page), values = {[param_id] = the
   -- value before the randomize}, ids = the values' ids in the order the
-  -- randomize set them, pattern = {voice, steps} (a pattern spec's old steps)
-  -- or nil, until_time = util.time() at which it expires}, or nil; 3.9
+  -- randomize set them, pattern = {voice, steps, values_a} (a pattern
+  -- spec's old steps and their values A) or nil, until_time = util.time() at which it expires}, or nil; 3.9
   -- (#922, #927) adds three holds: patterns = {[voice] = levels} and steps =
   -- {[voice] = {[step] = attributes}} (a chain start's, hold_patterns; its
   -- per-voice chain keys in values and ids), sequence = {n, values} (a
@@ -135,14 +135,19 @@ return function(S)
     undo_clock = undo_handle.id
   end
 
-  -- A pattern spec: randomize_pattern(voice), its old steps held
+  -- A pattern spec: randomize_pattern(voice), its old steps held, and
+  -- (fx2, #1054) each step's value A, which a randomize in move gives the
+  -- steps it turns on: values_a = {[step] = va}, nil where a step had none
   local function randomize_pattern_spec(spec)
     local voice_idx = spec.pattern
-    local steps = {}
-    for step, level in ipairs(S.patterns[voice_idx]) do steps[step] = level end
+    local steps, values_a = {}, {}
+    for step, level in ipairs(S.patterns[voice_idx]) do
+      steps[step] = level
+      values_a[step] = S.lib.sequencer.step_attr(voice_idx, step, "va")
+    end
     clear_undo()
     write_as_undo(function() randomize_pattern(voice_idx) end)
-    hold_undo(spec, {}, {}, {voice = voice_idx, steps = steps})
+    hold_undo(spec, {}, {}, {voice = voice_idx, steps = steps, values_a = values_a})
     request_redraw()
     grid_redraw()
     return true
@@ -367,7 +372,13 @@ return function(S)
       local routing = undo.routing
       if routing then S.lib.matrix.set_routing(routing.k, routing.source, routing.dest) end
       for _, param_id in ipairs(undo.ids) do set_randomized_param(param_id, undo.values[param_id]) end
-      if undo.pattern then S.lib.sequencer.replace_pattern(undo.pattern.voice, undo.pattern.steps) end
+      if undo.pattern then
+        local pattern = undo.pattern
+        S.lib.sequencer.replace_pattern(pattern.voice, pattern.steps)
+        for step in ipairs(pattern.steps) do
+          S.lib.sequencer.set_step_attr(pattern.voice, step, "va", pattern.values_a[step])
+        end
+      end
       if undo.patterns then
         for voice_idx = 1, NUM_VOICES do
           S.lib.sequencer.replace_whole(voice_idx, {levels = undo.patterns[voice_idx], steps = undo.steps[voice_idx],

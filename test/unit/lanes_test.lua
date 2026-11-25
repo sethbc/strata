@@ -240,6 +240,94 @@ test("a morph that switches the source ends the held value", function()
   pattern_clock_stop()
 end)
 
+-- fx2 (#1047, the maintainer's rule): every set of a held param the
+-- sequencer does not make ends the held value, as a hand edit does
+test("OSC's /param on a held pitch value ends it, and the set freq plays (#1047)", function()
+  local context, S = setup()
+  params:set("v1_source", S.constants.SOURCE_SYNTH)
+  set_step(S, 1, {va = 15})
+  pattern_clock_start()
+  assert_equal(S.lib.sequencer.held_value(1, "pitch"), 15, "held")
+  context.osc.receive("/param/v1_freq", {300})
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 300, 1e-9, "the engine plays 300 Hz")
+  assert_equal(S.lib.sequencer.held_value(1, "pitch"), nil, "and the value has ended")
+  pattern_clock_stop()
+end)
+
+-- Two scenes alike but for voice 1's position (0.8 in scene 2), set apart
+-- before the patterns start; then step 1's value 15 held
+local function scenes_apart(S)
+  set_step(S, 1, {va = 15})
+  params:set("v1_buf_pos", 0.8)
+  capture_scene(2)
+  params:set("v1_buf_pos", OWN_POSITION)
+  capture_scene(1)
+  pattern_clock_start()
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 15, "held")
+end
+
+test("a morph moving a held position ends the value, and the morph's position plays (#1047)", function()
+  local context, S = setup()
+  scenes_apart(S)
+  params:set("morph", 0.25)
+  context.clock.run_for(0.15)
+  assert_near(params:get("v1_buf_pos"), 0.35, 1e-6, "the morph moved the position a quarter of the way")
+  assert_equal(S.lib.sequencer.held_value(1, "position"), nil, "and ended the value")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_buf_pos"), params:get("v1_buf_pos"), 1e-9, "the morph's is heard")
+  pattern_clock_stop()
+end)
+
+test("a transition's write of a held position ends the value at its first step (#1047)", function()
+  local _, S = setup()
+  scenes_apart(S)
+  recall_scene(2, 20)  -- its first step runs at once
+  assert_true(local_value("scene_transition_active"), "the fade runs")
+  assert_true(params:get("v1_buf_pos") > OWN_POSITION, "its first step moved the position")
+  assert_equal(S.lib.sequencer.held_value(1, "position"), nil, "and ended the value")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_buf_pos"), params:get("v1_buf_pos"), 1e-9, "the fade's is heard")
+  pattern_clock_stop()
+end)
+
+test("a voice's stop and start, and its sync, end no held value: the start plays it (#1047)", function()
+  local context, S = setup()
+  set_step(S, 1, {va = 15})
+  pattern_clock_start()
+  toggle_voice(1)
+  assert_true(not S.voices[1].active, "stopped")
+  context.clear_engine_calls()
+  toggle_voice(1)
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 15, "held through the start")
+  assert_near(sent(context, "bufPos")[1], 1, 1e-9, "the start sends the value")
+  sync_voice_values_to_engine(1)
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 15, "and through a sync")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_buf_pos"), 1, 1e-9, "which still plays it")
+  pattern_clock_stop()
+end)
+
+-- The controller's ruling (fx2): the drift is the script's own wander, as
+-- an LFO is, and walks under a held value; a mutation step (opt-in, a
+-- turn) ends one (the held values table's rows)
+test("the drift ends no held value: a buffer voice's position, an input voice's pitch (#1047)", function()
+  local _, S = setup()
+  params:set("v1_seq_move_b", option_index("v1_seq_move_b", "pitch"))
+  params:set("v2_source", S.constants.SOURCE_INPUT)
+  for voice = 1, 2 do
+    S.lib.sequencer.set_level(voice, 1, 15); S.lib.sequencer.set_step_attr(voice, 1, "va", 15)
+  end
+  pattern_clock_start()
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 15, "voice 1 holds a position")
+  assert_equal(S.lib.sequencer.held_value(2, "pitch"), 15, "voice 2 (input) holds a pitch on its grain pitch")
+  local _, pitch = S.lib.lanes.value(2, "pitch", 15)
+  local before = {pos = params:get("v1_buf_pos"), pitch = params:get("v2_grain_pitch")}
+  for _ = 1, 3 do drift_update() end
+  assert_true(params:get("v1_buf_pos") ~= before.pos and params:get("v2_grain_pitch") ~= before.pitch, "the drift walked both")
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 15, "the position value holds")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_buf_pos"), 1, 1e-9, "and plays")
+  assert_equal(S.lib.sequencer.held_value(2, "pitch"), 15, "the pitch value holds")
+  assert_near(S.lib.engine_sync.engine_base_value("v2_grain_pitch"), pitch, 1e-9, "and plays")
+  pattern_clock_stop()
+end)
+
 -- ruling 2a-1: no grain restart hook ends a value, so the hit that starts
 -- a stopped voice keeps the value it set, and its start plays it
 test("the hit that starts a stopped voice sets its value, and the start keeps it", function()
@@ -813,6 +901,81 @@ local function then_lock_ends(check)
   end
 end
 
+-- fx2 (#1047): the param a state's voice holds its value on, and a value
+-- the sets below give it: a buffer voice's position, a synth voice's freq
+local function moved_param()
+  if voice_uses_synth(1) then return "v1_freq", 300 end
+  return "v1_buf_pos", EDITED
+end
+
+local OSC_SET_CC = 27  -- a MIDI map's CC value: 27 / 127 of the param's range
+
+-- A set that is not the sequencer's and not a hand edit, of the state's
+-- param: OSC's /param (norns' own handler), a norns MIDI map's CC
+-- (PARAMS > MAP: lua/core/menu/params.lua's set_raw), a scene's setter
+-- (S.lib.scenes.set_value: a morph's and a transition's writes), a
+-- mutation step (every mutate key of each running voice, at probability 1)
+local function osc_set(context)
+  local id, value = moved_param()
+  context.osc.receive("/param/" .. id, {value})
+end
+
+local function map_set()
+  local id = moved_param()
+  norns.pmap.data[id] = {dev = 1, ch = 1, cc = 40, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1, echo = false,
+    value = 0, accum = false}
+  norns.pmap.rev[1] = norns.pmap.rev[1] or {}
+  norns.pmap.rev[1][1] = norns.pmap.rev[1][1] or {}
+  norns.pmap.rev[1][1][40] = id
+  norns.menu_midi_event({0xb0, 40, OSC_SET_CC}, 1)
+end
+
+local function scene_set()
+  local id, value = moved_param()
+  local_value("S").lib.scenes.set_value(id, value)
+end
+
+local function mutation_step()
+  params:set("mutation_probability", 1)
+  params:set("mutation_amount", 0.5)
+  gentle_mutate()
+end
+
+-- The row's check: the held value on the param has ended, and the stored
+-- value, which the set moved, was sent last and plays
+local function stored_heard(context)
+  local id = moved_param()
+  local S = local_value("S")
+  assert_equal(S.lib.sequencer.held_value(1, "position"), nil, "no position value")
+  assert_equal(S.lib.sequencer.held_value(1, "pitch"), nil, "no pitch value")
+  local values = id == "v1_freq" and voice_sent(context, "freq") or sent(context, "bufPos")
+  assert_true(#values > 0, id .. " sent")
+  assert_near(values[#values], params:get(id), 1e-6, "the stored " .. id .. " sent last")
+  assert_near(base_value(id), params:get(id), 1e-9, "and played")
+end
+
+-- A lock over a value: the set ends the value and the lock holds its step;
+-- at its end (a hit without) the stored value the set moved plays
+local function lock_then_stored(context)
+  assert_near(base_position(), 0.6, 1e-9, "the lock holds its step")
+  next_hit(nil)(context)
+  assert_near(last_position(context), params:get("v1_buf_pos"), 1e-9, "the lock's end sends the stored position")
+  assert_near(base_position(), params:get("v1_buf_pos"), 1e-9, "and the engine starts from it")
+end
+
+-- A held key: freq follows the set, and the key still holds the own note
+local function key_follows(context)
+  stored_heard(context)
+  assert_true(key_holds_own(), "the key still holds")
+end
+
+-- The drift: the position walks under a held value, which still plays
+local function still_held(base)
+  return function()
+    assert_near(base_position(), base, 1e-9, "the engine starts from " .. base)
+  end
+end
+
 h.transition_table({
   name = "held values",
   notes = {"docs/notes/lua/lanes.md", "held values"},
@@ -842,6 +1005,11 @@ h.transition_table({
     ["chord"] = next_hit({notes = {0, 2}}),
     ["freq edit"] = function() delta_with_detent("v1_freq", 1) end,
     ["hit with a pitch lock"] = next_hit({pitch = 1.5}),
+    ["OSC set"] = osc_set,
+    ["MIDI map"] = map_set,
+    ["scene set"] = scene_set,
+    ["drift"] = function() drift_update() end,
+    ["mutation step"] = mutation_step,
   },
   state_of = function()
     local S = local_value("S")
@@ -950,6 +1118,33 @@ h.transition_table({
     {"a lock over a value", "hit with a pitch lock", "a value", check = sends(1)},
     {"a pitch value", "hit with a pitch lock", "a pitch value", check = pitch_locked(freq_sends(nil, VALUE_FREQ))},
     {"a held key", "hit with a pitch lock", "a held key", check = pitch_locked(freq_sends(nil, MIDI_FREQ))},
+    -- fx2 (#1047): every set the sequencer does not make ends a held
+    -- value on its param, as a hand edit does; the drift's do not
+    {"none", "OSC set", "none", check = stored_heard},
+    {"none", "MIDI map", "none", check = stored_heard},
+    {"none", "scene set", "none", check = stored_heard},
+    {"none", "drift", "none", check = stored_heard},
+    {"none", "mutation step", "none", check = stored_heard},
+    {"a value", "OSC set", "none", check = stored_heard},
+    {"a value", "MIDI map", "none", check = stored_heard},
+    {"a value", "scene set", "none", check = stored_heard},
+    {"a value", "drift", "a value", check = still_held(1)},
+    {"a value", "mutation step", "none", check = stored_heard},
+    {"a lock over a value", "OSC set", "none", check = lock_then_stored},
+    {"a lock over a value", "MIDI map", "none", check = lock_then_stored},
+    {"a lock over a value", "scene set", "none", check = lock_then_stored},
+    {"a lock over a value", "drift", "a lock over a value", check = still_held(0.6)},
+    {"a lock over a value", "mutation step", "none", check = lock_then_stored},
+    {"a pitch value", "OSC set", "none", check = stored_heard},
+    {"a pitch value", "MIDI map", "none", check = stored_heard},
+    {"a pitch value", "scene set", "none", check = stored_heard},
+    {"a pitch value", "drift", "a pitch value", check = freq_sends(nil, VALUE_FREQ)},
+    {"a pitch value", "mutation step", "none", check = stored_heard},
+    {"a held key", "OSC set", "a held key", check = key_follows},
+    {"a held key", "MIDI map", "a held key", check = key_follows},
+    {"a held key", "scene set", "a held key", check = key_follows},
+    {"a held key", "drift", "a held key", check = freq_sends(nil, MIDI_FREQ)},
+    {"a held key", "mutation step", "a held key", check = key_follows},
   },
 })
 

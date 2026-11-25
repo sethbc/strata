@@ -363,6 +363,35 @@ test("a side 1 key and a side 2 hits key of one voice make no gesture across the
   assert_equal(S.lib.loop_roll.loop(3), nil, "no loop")
 end)
 
+-- fx2 (#1054 item 1): a held step's entry stores no copy of its view; the
+-- core works the view out at the second key from each key's pane
+test("a held step's entry keeps no view: the second key reads it from the keys' panes", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pages = S.constants.GRID_PAGES
+  local top = grid_pane(context, "256 top")
+  top.show(pages.patterns)
+  top.press(2, 3, 1)
+  local name, step_keys, index = nil, nil, 1
+  repeat
+    name, step_keys = debug.getupvalue(S.lib.grid_core.step_key, index)
+    index = index + 1
+  until name == "step_keys" or name == nil
+  local found = 0
+  for _, columns in pairs(step_keys) do
+    for _, rows in pairs(columns) do
+      for _, entry in pairs(rows) do
+        found = found + 1
+        assert_equal(entry.view, nil, "no stored view")
+      end
+    end
+  end
+  assert_equal(found, 1, "the held step's entry")
+  top.press(12, 3, 1)
+  assert_equal(select(2, S.lib.loop_roll.loop(3)), 12, "its own view's second key still pairs: the loop to 12")
+  top.press(12, 3, 0); top.press(2, 3, 0)
+end)
+
 -- 3.9's lane side (package 3b, design section 4) --------------------------
 
 local PATTERNS_SIDE2 = 2

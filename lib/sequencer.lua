@@ -590,6 +590,23 @@ return function(S)
     values.end_held(voice_idx, function(_, held_target) return held_target ~= target end)
   end
 
+  -- fx2 (#1047, the maintainer's rule): every set of a voice param the
+  -- sequencer does not make ends the voice's held value on that param, as
+  -- a hand edit does, so the set value is heard: a morph, a transition,
+  -- OSC, a MIDI map, a mutation step, a randomize. The param's own action
+  -- calls it (lib/params_setup.lua's add_voice_param), and norns runs an
+  -- action only when the value changes, so a sync, which sends the stored
+  -- value without setting it, ends nothing. The sequencer never sets a
+  -- held param (its values and locks are base overrides). The drift's
+  -- writes (S.drift_writing) end nothing: the script's own wander walks
+  -- under the value, as an LFO never sets its destination (the
+  -- controller's ruling). A lock of the last played step on the param
+  -- keeps its step (values.end_held)
+  function M.param_set(voice_idx, param_id)
+    if S.drift_writing or not (valid_voice(voice_idx) and held_values[voice_idx]) then return end
+    values.end_held(voice_idx, function(entry) return entry.param ~= param_id end)
+  end
+
   -- A hand edit of a param ends the held value on it: the engine sync's
   -- own touch hook has cleared its override already, so the record goes
   -- with it and nothing is sent
