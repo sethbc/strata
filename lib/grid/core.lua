@@ -160,7 +160,8 @@ return function(S)
   -- set on press and cleared on release, on the port's grid.remove and in
   -- cleanup. Private to this module, per port and key: the pending hold
   -- clocks (hold_clocks), the consumed keys (consumed_keys), the step keys
-  -- the step-level gesture sees (step_keys: {voice, step, level_key, second})
+  -- the step-level gesture sees (step_keys: {voice, step, level_key, second,
+  -- fired})
   -- and each port's layout state (port_states)
   S.grid_held = {}
   local hold_clocks = {}
@@ -446,13 +447,13 @@ return function(S)
   -- steps are ever recorded as held (and later take a level).
   -- 3.9 (3a): `second` is what the held step's second key does: "level"
   -- (nil, the default) the above; or a function, second(voice, held step,
-  -- this key's step), called for a key of the voice pressed while the held
-  -- step is not yet consumed (before its hold fires), with both keys
-  -- consumed and the hold stopped as for a level. The held key's own
-  -- `second` decides. Once the held step is consumed (its hold fired, or a
-  -- second key spent it), a further key of the voice does nothing: it is
-  -- consumed, calls nothing and holds nothing. Any other `second` does
-  -- nothing
+  -- this key's step), called for every key of the voice pressed before
+  -- the held step's hold fires (a third key calls it again), with both
+  -- keys consumed and the hold stopped as for a level. The held key's own
+  -- `second` decides. Once its hold has fired (the entry's `fired`, set
+  -- whether or not the editor opened), a further key of the voice does
+  -- nothing: it is consumed, calls nothing and holds nothing. Any other
+  -- `second` does nothing
   function M.step_key(port, x, y, z, voice_idx, step, position, positions, second)
     if z ~= 1 then return end
     if not whole_number_in(voice_idx, 1, NUM_VOICES) or not whole_number_in(step, 1, PATTERN_LENGTH) then return end
@@ -461,20 +462,21 @@ return function(S)
     if second ~= "level" and type(second) ~= "function" then return end
     local held, held_x, held_y = held_step(port, voice_idx, x, y)
     if held then
-      local spent_before = M.consumed(port, held_x, held_y)
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
       stop_hold(port, held_x, held_y)
       set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, level_key = true})
       if held.second == "level" then
         S.lib.sequencer.set_level(voice_idx, held.step, M.level_for_position(position, positions))
-      elseif not spent_before then
+      elseif not held.fired then
         held.second(voice_idx, held.step, step)
       end
       return
     end
-    set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, second = second})
+    local entry = {voice = voice_idx, step = step, second = second}
+    set_key_value(step_keys, port, x, y, entry)
     M.on_hold(port, x, y, GRID_HOLD.step_edit_seconds, function()
+      entry.fired = true
       open_step_editor(port, x, y, voice_idx, step)
     end)
   end
@@ -1066,8 +1068,9 @@ return function(S)
   -- Presses and releases. A press is held (S.grid_held) before the layout
   -- sees it. A release stops the key's hold, reaches the layout unless the
   -- key was consumed, toggles a held step key's step (release_step_key),
-  -- then forgets the key (release_key), also when the layout or the toggle
-  -- raised (#620), so no key stays held. Layouts get key(port, x, y, z)
+  -- taps a held cell (release_cell_key, 3.9's 3a), then forgets the key
+  -- (release_key), also when the layout, the toggle or the tap raised
+  -- (#620), so no key stays held. Layouts get key(port, x, y, z)
   -- and return on z == 0 unless they handle releases. One repaint per key,
   -- also when the handler fails (its error, the first one, is raised once,
   -- after the repaint)
@@ -1159,9 +1162,10 @@ return function(S)
   end)
 
   -- Only a held key is a step key, is consumed, waits for a hold, has a
-  -- role, is a cell key or has a press token (3.9, 3a); the step editor's key and an open editor agree; a port has an
-  -- attached device recorded exactly while it is attached (norns' ports and
-  -- the virtual ones), and no grid is on any other port
+  -- role, is a cell key or has a press token (3.9, 3a); the step editor's
+  -- key and an open editor agree; a port has an attached device recorded
+  -- exactly while it is attached (norns' ports and the virtual ones), and
+  -- no grid is on any other port
   S.register_invariant("grid keys", function()
     for port in pairs(S.grids) do
       if not grid_port_number(port) then return "a grid is attached on port " .. tostring(port) end

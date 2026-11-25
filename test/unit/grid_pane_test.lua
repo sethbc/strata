@@ -813,6 +813,57 @@ test("a further key after the hold has fired does nothing", function()
   end
 end)
 
+-- Fix round 1: "before the hold fires" counts every key of the line while
+-- the hold has not fired, a third key included, as the level gesture and
+-- a cell's second key set again
+test("a third key before the hold calls the page's function again", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    local _, seen = key_probe(pages, "second")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first, last = shown_keys(arrangement)
+    local patterns = local_value("patterns")
+    pane.press(first, 2, 1)
+    pane.press(last, 2, 1)
+    pane.press(last, 2, 0)
+    pane.press(first + 1, 2, 1)
+    assert_equal(#seen.seconds, 2, arrangement .. ": the third key calls the function again")
+    assert_equal(table.concat(seen.seconds[2], " "), table.concat({2, first, first + 1, first, 2}, " "),
+      arrangement .. ": for the same held step, with the third key's step")
+    context.clock.run_for(0.35)
+    assert_equal(h.shown_step_editor(), nil, arrangement .. ": no editor opens")
+    pane.press(first + 1, 2, 0); pane.press(first, 2, 0)
+    assert_equal(patterns[2][first] + patterns[2][first + 1] + patterns[2][last], 0, arrangement .. ": nothing toggles")
+  end
+end)
+
+test("after a hold whose editor did not open, no key calls the page's function", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local S = S_table()
+    local pages = PAGES()
+    local _, seen = key_probe(pages, "second")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first, last = shown_keys(arrangement)
+    local patterns = local_value("patterns")
+    local open = S.lib.pages_seq.open_step_editor
+    S.lib.pages_seq.open_step_editor = function() return false end  -- the editor refuses
+    pane.press(first, 3, 1)
+    context.clock.run_for(0.35)
+    S.lib.pages_seq.open_step_editor = open
+    assert_equal(h.shown_step_editor(), nil, arrangement .. ": the hold fired and no editor opened")
+    pane.press(last, 3, 1)
+    assert_equal(#seen.seconds, 0, arrangement .. ": a key after it calls nothing")
+    pane.press(last, 3, 0)
+    assert_equal(patterns[3][last], 0, arrangement .. ": and its release toggles nothing")
+    pane.press(first, 3, 0)
+    assert_equal(#seen.seconds, 0, arrangement .. ": still nothing called")
+  end
+end)
+
 test("the default second key still sets the level", function()
   for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
     local context = load_bare()
@@ -948,6 +999,33 @@ test("still is true while the press is down and false after its release, a page 
     assert_true(not page_pane.still(off, 2)(), arrangement .. ": a place off the pane is never still")
     context.grid.unplug(1)
   end
+end)
+
+-- Fix round 1: docs/notes/lua/grid/keys.md's claim that the 64's chooser
+-- opening (end_pane_keys of pane 1) ends a still and a held cell
+test("the 64's chooser opening ends a press's still and a held cell", function()
+  local context = load_bare()
+  local pages = PAGES()
+  local probe = probe_grid_page(pages.fx, {sides = 2})
+  local stills, taps = {}, {}
+  probe.press = function(pane, x, y, z)
+    if z == 1 and y == 2 then stills[#stills + 1] = pane.still(x, y) end
+    if y == 3 then pane.cell_key(x, y, z, "line 3", x, function(index) taps[#taps + 1] = index end, function() end) end
+  end
+  local small = grid_pane(context, "64 left")
+  small.show(pages.fx)
+  small.press(4, 2, 1)
+  small.press(5, 3, 1)
+  assert_true(stills[1](), "the press's still is true")
+  assert_equal(core().held_cell(1, 5, 3), "line 3", "and the cell is held")
+  small.press(STRIP.chooser, STRIP.line, 1)
+  context.clock.run_for(0.6)
+  assert_equal(small.led(STRIP.chooser, STRIP.line), 15, "the chooser shows")
+  assert_true(not stills[1](), "the chooser's opening ends the still")
+  assert_equal(core().held_cell(1, 5, 3), nil, "and the held cell")
+  small.press(STRIP.chooser, STRIP.line, 0)
+  small.press(5, 3, 0); small.press(4, 2, 0)
+  assert_equal(#taps, 0, "the cell's release taps nothing")
 end)
 
 -- Step 5: every key of every registered page -----------------------------
