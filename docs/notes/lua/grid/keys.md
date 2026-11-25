@@ -4,6 +4,7 @@
 - **A pane's change ends a held cell as it ends a held step**: `end_pane_keys` (a page, side or half change, the 64's chooser opening) and `forget_port` (an unplug, a rotation, a plug, cleanup) drop the cell entries of the keys they reach, so the key's release taps nothing and its line takes no value from it. A pattern's replacement leaves a held cell (its lane values are no step gesture).
 - **`still` carries a token of its own press, never the press time or a role**: every press puts a fresh token at the key (`press_tokens`), and `still(port, x, y)` (the pane's `pane.still(x, y)`) compares the token it read with the key's. The harness clock does not move between a release and the next press, so a press time would be true again for a later press; a role string is true again for a later press in the same role. A pattern's replacement never ends a still: a loop and a roll outlive a replacement and end with their key (3.9's 5a, 5b).
 - **Only a held key is a cell key or has a press token**: the `grid keys` invariant (`docs/notes/lua/grid-core.md`, Machines) walks both tables with the other per-key ones.
+- **The step view is computed, never recorded** (3.9's 3c): `step_view(port)` reads `step_editor.key`, `S.lib.pages_seq.step_editor()` and what the panes show, so it ends with the editor however the editor ends. Its start (`open_step_editor`, a second open ending the first's) and its end (`end_step_view`, which `close_step_editor` calls before it forgets its editor, then repaints the grids) end the view pane's keys through `end_pane_keys(port, pane, spare)`, sparing the editor's key: that key keeps its step entry and consumed mark, so the editor stays open and the `grid keys` invariant's #930 clause holds. `close_step_editor_of` forgets `step_editor.key` only after the close, so the end still reads the pane.
 
 ## Machines
 
@@ -78,6 +79,54 @@
 | `gone` | `pattern replaced` | `gone` | nothing more to end |
 | `gone` | `unplug` | `up` | the port is forgotten |
 
+### step view
+- **State:** derived, with no record (design section 7): `step_view(port)` is `{voice, step, pane}` exactly while the step editor is open from a key of that port (`step_editor.key`, still that port's editor, whose voice and step it gives) and a pane of the port shows the patterns page's side 2: the key's own pane if it does, else the first other one. The table follows a 256 on port 1: the top pane shows patterns' side 1, where the key (5, 1) is voice 1's step 5; the bottom pane shows side 2 (`closed`, `open`) or side 1 (`closed, no side 2`, `editor`). The bar key is (8, 4) of the bottom pane: chance's key 8 in the view. `editor` is the editor open with no view.
+- **Invariant:** none: the view is read from the editor's key, the open editor and the panes, so no state of its own can disagree with them; the `grid keys` invariant checks the editor's key.
+- **Test:** `test/unit/grid_pages_patterns_test.lua`: "step view: every cell is decided" and its rows; on every arrangement, "a held step opens the editor, and the step view where the port shows side 2", "with no side 2 shown the hold opens the editor alone and the pane stays the page", "a bar key sets the step's value and the screen's row shows it", "the last key of a bar clears it", "K2 closes the editor and the view with the key still down", "the key's release closes both; the pane is the page again", "entering the view ends that pane's other held keys and leaves the opening key held", "a free lane's bar is dark and its keys set nothing" and "a lane cell held 0.3 s opens nothing"; `test/unit/grid_core_test.lua`'s "step_view is nil with no editor, an editor no key of the port opened, and no side 2 shown (3.9's 3c)" and "end_pane_keys spares the key it is given (3.9's 3c)".
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `closed` | `hold` | `open` | the editor opens and the bottom pane is the view: line 7 dark |
+| `closed` | `release` | `closed` | nothing held |
+| `closed` | `K2` | `closed` | K2 reaches the page |
+| `closed` | `key's pane page` | `closed` | the top pane shows voices |
+| `closed` | `view's pane page` | `closed, no side 2` | the bottom pane shows voices |
+| `closed` | `view's pane side` | `closed, no side 2` | the bottom pane shows side 1 |
+| `closed` | `unplug` | `closed, no side 2` | no grid shows anything |
+| `closed` | `replacement` | `closed` | nothing held |
+| `closed` | `bar key` | `closed` | a chance cell's tap: cell 8 takes 53, step 5 nothing |
+| `closed, no side 2` | `hold` | `editor` | the editor alone; the panes stay their pages |
+| `closed, no side 2` | `release` | `closed, no side 2` | nothing held |
+| `closed, no side 2` | `K2` | `closed, no side 2` | K2 reaches the page |
+| `closed, no side 2` | `key's pane page` | `closed, no side 2` | the top pane shows voices |
+| `closed, no side 2` | `view's pane page` | `closed, no side 2` | the bottom pane shows voices |
+| `closed, no side 2` | `view's pane side` | `closed` | the bottom pane shows side 2 |
+| `closed, no side 2` | `unplug` | `closed, no side 2` | the port is forgotten |
+| `closed, no side 2` | `replacement` | `closed, no side 2` | nothing held |
+| `closed, no side 2` | `bar key` | `closed, no side 2` | a side 1 tap: voice 4's step 8 on |
+| `editor` | `hold` | `editor` | a press with no release before it reopens the editor; the release toggles nothing |
+| `editor` | `release` | `closed, no side 2` | the editor closes; nothing toggles |
+| `editor` | `K2` | `closed, no side 2` | the editor closes; the key's release toggles nothing |
+| `editor` | `key's pane page` | `closed, no side 2` | the key's gesture ends and the editor closes |
+| `editor` | `view's pane page` | `editor` | the bottom pane shows voices |
+| `editor` | `view's pane side` | `open` | the bottom pane shows side 2: the view starts |
+| `editor` | `unplug` | `closed, no side 2` | the port is forgotten; the editor closes |
+| `editor` | `replacement` | `closed, no side 2` | the editor closes; the key's release toggles nothing |
+| `editor` | `editor's replacement` | `editor` | ruling 71: the editor stays open |
+| `editor` | `bar key` | `editor` | a side 1 tap: voice 4's step 8 on, step 5's chance untouched |
+| `open` | `hold` | `open` | the editor reopens and the view with it; the release toggles nothing |
+| `open` | `release` | `closed` | both end: the bottom pane is the lane side again |
+| `open` | `K2` | `closed` | both end with the key down: the lane side again; the release toggles nothing |
+| `open` | `key's pane page` | `closed` | the key's gesture ends, so the editor and the view: the lane side again |
+| `open` | `view's pane page` | `editor` | the view ends with its pane's page; the editor stays |
+| `open` | `view's pane side` | `editor` | the same; side 2 shown again, the view is back |
+| `open` | `unplug` | `closed, no side 2` | the port is forgotten; both end |
+| `open` | `replacement` | `closed` | both end: the lane side again; the release toggles nothing |
+| `open` | `editor's replacement` | `open` | ruling 71: the editor and the view stay |
+| `open` | `bar key` | `open` | step 5's prob 53; the editor's prob row shows `53%` |
+
+`closed` and `closed, no side 2` with `editor's replacement` are impossible: the editor's own replacement runs only from its open owner's rows and keys (`run_replacement`).
+
 ## Owns
 
 3.9's package 3a added three key interfaces to the core and their pane wrappers (`docs/notes/lua/grid/pane.md`, The pane object), for the patterns page's lane side (3b), the step view (3c), the loop (5a), the roll (5b) and the perform side (5c):
@@ -85,3 +134,8 @@
 - **The step key's second key** (`step_key`'s `second`): documented with the step keys, `docs/notes/lua/grid-core.md` (Pages, held keys and holds; Machines, `grid keys`).
 - **Cell keys**: `cell_key(port, x, y, z, id, index, position, positions, on_tap, on_value)`, `held_cell(port, x, y)`. A line has at most one held cell a port, whichever pane its keys are in, as a voice has one held step (#450); the second key's `position` is its place along its own pane's shown keys (16, or 8 on a 64's half). Anything out of range (an id that is no string, an index or position outside 1..`PATTERN_LENGTH`, a callback that is no function, a key not held) does nothing.
 - **`still(port, x, y)`**: a function of no argument for the press now down at the key. A key not held gives one that is always false, and so does `pane.still` for a place the pane does not show. A page passes the function to whatever must end with its key (5a's `set_loop`, 5b's `roll`), which asks it each time it acts.
+
+3.9's package 3c added the step view's two core functions, for the patterns page (`docs/notes/lua/grid/pages/patterns.md`, The step view):
+
+- **`step_view(port)`**: `{voice, step, pane}` or nil (Machines, `step view`): nil for a port with no layout, an editor no key of the port opened (another port's, or one opened from Lua, as SEQ's layout states do) and a port showing no patterns side 2. The voice and step are the open editor's, so its ALT+E2 moves the view's step (the editor repaints the grids then).
+- **`end_step_view(port)`**: SEQ's `close_step_editor(port)` calls it before it forgets its editor (the controller's ruling 3c-1), so K2, the modal stack's `close_all` and every end of the key's gesture reach it; it ends the view pane's keys, sparing the editor's key. `end_pane_keys(port, pane, spare)` takes that key as `{x, y}`.

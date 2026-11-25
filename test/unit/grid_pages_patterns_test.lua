@@ -836,4 +836,408 @@ h.transition_table({
   },
 })
 
+-- 3.9's step view (package 3c, design section 4) ---------------------------
+
+-- A bar's lit keys light 10 (the brief's level)
+local BAR_LIT = 10
+
+-- The other pane of a 256 arrangement, or nil
+local function other_256_pane(arrangement)
+  if arrangement == "256 top" then return "256 bottom" end
+  if arrangement == "256 bottom" then return "256 top" end
+  return nil
+end
+
+-- The key that opens the view on the arrangement's pane, side 2 shown
+-- there: on a 256 voice 1's step 3 on the other pane's side 1; elsewhere
+-- side 2's hits line, its third key shown (voice 1, the picked one)
+local function view_key(context, S, pane, arrangement)
+  lane_side(S, pane)
+  local other = other_256_pane(arrangement)
+  local key = {pane = pane, x = shown_columns(pane) + 2, y = LINE.hits}
+  if other then
+    key.pane = grid_pane(context, other)
+    key.pane.show(S.constants.GRID_PAGES.patterns)
+    key.x, key.y = 3, 1
+  end
+  key.step = key.x
+  function key.press(z) key.pane.press(key.x, key.y, z) end
+  return key
+end
+
+-- Hold the view's key past the editor's hold: the view opens on the pane
+local function hold_into_view(context, S, pane, arrangement)
+  local key = view_key(context, S, pane, arrangement)
+  key.press(1)
+  context.clock.run_for(0.35)
+  return key
+end
+
+-- A line's lights along the keys shown, as one string
+local function bar(pane, line)
+  local first, last = shown_columns(pane)
+  local lights = {}
+  for x = first, last do lights[#lights + 1] = tostring(pane.led(x, line)) end
+  return table.concat(lights, " ")
+end
+
+-- The bar a value whose key is at_share(p16) shows: lit to it, dark beyond
+-- (p16 0: dark)
+local function lit_to(pane, p16)
+  local first, last = shown_columns(pane)
+  local to = p16 == 0 and first - 1 or at_share(pane, p16)
+  local lights = {}
+  for x = first, last do lights[#lights + 1] = tostring(x <= to and BAR_LIT or 0) end
+  return table.concat(lights, " ")
+end
+
+-- The last lit key of a bar, or nil
+local function last_lit(pane, line)
+  local first, last = shown_columns(pane)
+  local found
+  for x = first, last do if pane.led(x, line) == BAR_LIT then found = x end end
+  return found
+end
+
+local function k2() key(2, 1); key(2, 0) end
+
+test("a held step opens the editor, and the step view where the port shows side 2", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local core, seq = S.lib.grid_core, S.lib.sequencer
+    local key = view_key(context, S, pane, arrangement)
+    seq.set_level(1, key.step, 8)
+    seq.set_step_attr(1, key.step, "va", 8)
+    key.press(1)
+    context.clock.run_for(0.35)
+    assert_equal(shown_step_editor(), "1 " .. key.step .. " 1", arrangement .. ": the editor opens for the step")
+    local view = core.step_view(pane.port)
+    assert_true(view ~= nil, arrangement .. ": and the step view")
+    assert_equal(view.voice .. " " .. view.step .. " " .. view.pane, "1 " .. key.step .. " " .. pane.pane,
+      arrangement .. ": for the step, on the pane showing side 2")
+    assert_equal(bar(pane, LINE.hits), lit_to(pane, 8), arrangement .. ": line 1 its level, lit to key 8 at 10")
+    assert_equal(bar(pane, LINE.a), lit_to(pane, 8), arrangement .. ": line 2 its value A")
+    assert_equal(bar(pane, LINE.b), lit_to(pane, 0), arrangement .. ": line 3 dark with no value B")
+    assert_equal(bar(pane, LINE.chance), lit_to(pane, 16), arrangement .. ": a set step with no chance plays always: 100")
+    assert_equal(bar(pane, LINE.utility), lit_to(pane, 0), arrangement .. ": line 7 is dark")
+    key.press(0)
+    assert_equal(core.step_view(pane.port), nil, arrangement .. ": its release ends both")
+    assert_equal(shown_step_editor(), nil, arrangement)
+  end)
+end)
+
+test("with no side 2 shown the hold opens the editor alone and the pane stays the page", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local other = other_256_pane(arrangement)
+    if other then grid_pane(context, other).show(S.constants.GRID_PAGES.patterns) end
+    local first = shown_columns(pane)
+    local before = bar(pane, 1)
+    pane.press(first + 2, 1, 1)
+    context.clock.run_for(0.35)
+    assert_equal(shown_step_editor(), "1 " .. (first + 2) .. " 1", arrangement .. ": the editor opens")
+    assert_equal(S.lib.grid_core.step_view(pane.port), nil, arrangement .. ": no step view")
+    assert_equal(bar(pane, 1), before, arrangement .. ": the pane still shows side 1's steps")
+    pane.press(first + 2, 1, 0)
+  end)
+end)
+
+test("a bar key sets the step's value and the screen's row shows it", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local seq = S.lib.sequencer
+    local key = hold_into_view(context, S, pane, arrangement)
+    pane.tap(at_share(pane, 8), LINE.chance)
+    assert_equal(seq.step_attr(1, key.step, "prob"), 53, arrangement .. ": line 4 key 8: prob 53")
+    context.screen.clear(); redraw()
+    assert_true(h.screen_shows(context, "53%"), arrangement .. ": the step editor's prob row shows 53%")
+    assert_equal(bar(pane, LINE.chance), lit_to(pane, 8), arrangement .. ": lit to key 8")
+    pane.tap(at_share(pane, 8), LINE.hits)
+    assert_equal(S.patterns[1][key.step], 8, arrangement .. ": line 1 key 8 sets the level 8")
+    pane.tap(at_share(pane, 12), LINE.a)
+    assert_equal(seq.step_attr(1, key.step, "va"), 11, arrangement .. ": line 2 key 12: value A 11")
+    pane.tap(at_share(pane, 16), LINE.b)
+    assert_equal(seq.step_attr(1, key.step, "vb"), 15, arrangement .. ": line 3 key 16: value B 15")
+    pane.tap(at_share(pane, 8), LINE.repeats)
+    assert_equal(seq.step_attr(1, key.step, "ratchet"), 2, arrangement .. ": line 5 key 8: 2 repeats")
+    pane.tap(at_share(pane, 8), LINE.gate)
+    local spec = params:lookup_param("v1_seq_gate_length").controlspec
+    assert_true(math.abs(seq.step_attr(1, key.step, "gate") - spec:map(7 / 14)) < 1e-9,
+      arrangement .. ": line 6 key 8: the eighth gate")
+    assert_equal(bar(pane, LINE.gate), lit_to(pane, 8), arrangement .. ": lit to key 8")
+    for x = 1, 16 do
+      if pane.shows(x, LINE.utility) then pane.tap(x, LINE.utility) end
+    end
+    assert_equal(seq.step_mode(1), "pulse", arrangement .. ": line 7's keys do nothing")
+    assert_equal(S.lib.grid_pages_patterns.voice(pane.port), 1, arrangement .. ": not even a voice pick")
+    -- the screen's edits show on the bars at once, and the editor's step
+    -- (ALT+E2) is the view's
+    enc(3, -2)
+    assert_equal(bar(pane, LINE.hits), lit_to(pane, 6), arrangement .. ": E3 on the editor's level shows at once")
+    _G.key(1, 1); enc(2, 1); _G.key(1, 0)  -- the script's key (this test's `key` is the grid's)
+    assert_equal(S.lib.grid_core.step_view(pane.port).step, key.step + 1, arrangement .. ": ALT+E2 moves the view's step")
+    assert_equal(bar(pane, LINE.hits), lit_to(pane, 0), arrangement .. ": and the bars show it at once")
+    key.press(0)
+  end)
+end)
+
+test("the last key of a bar clears it", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local seq = S.lib.sequencer
+    local key = hold_into_view(context, S, pane, arrangement)
+    for _, case in ipairs({{LINE.a, "va"}, {LINE.b, "vb"}, {LINE.chance, "prob"}, {LINE.repeats, "ratchet"},
+        {LINE.gate, "gate"}}) do
+      local line, attr = case[1], case[2]
+      pane.tap(at_share(pane, 8), line)
+      assert_true(seq.step_attr(1, key.step, attr) ~= nil, arrangement .. ": " .. attr .. " set")
+      pane.tap(last_lit(pane, line), line)
+      assert_equal(seq.step_attr(1, key.step, attr), nil, arrangement .. ": " .. attr .. "'s own last key clears it")
+    end
+    assert_equal(bar(pane, LINE.a), lit_to(pane, 0), arrangement .. ": value A dark once cleared")
+    pane.tap(at_share(pane, 8), LINE.hits)
+    pane.tap(last_lit(pane, LINE.hits), LINE.hits)
+    assert_equal(S.patterns[1][key.step], 8, arrangement .. ": the level's own key sets it again, never clears")
+    key.press(0)
+  end)
+end)
+
+test("K2 closes the editor and the view with the key still down", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local seq = S.lib.sequencer
+    local key = hold_into_view(context, S, pane, arrangement)
+    local bar_x = at_share(pane, 8)
+    pane.press(bar_x, LINE.a, 1)  -- a bar key held across the view's end
+    k2()
+    assert_equal(shown_step_editor(), nil, arrangement .. ": K2 closes the editor")
+    assert_equal(S.lib.grid_core.step_view(pane.port), nil, arrangement .. ": and the view")
+    pane.press(bar_x, LINE.a, 0)
+    assert_equal(seq.step_attr(1, bar_x, "va"), nil, arrangement .. ": the held bar key is spent: it taps nothing")
+    key.press(0)
+    assert_equal(seq.step_attr(1, key.step, "va"), 8, arrangement .. ": the bar key set value A before K2")
+    assert_equal(S.patterns[1][key.step], 15, arrangement .. ": which turned the step on; the key's release toggled nothing")
+    show_half_of(S, pane, arrangement, KEY.ln)
+    assert_equal(pane.led(KEY.ln, LINE.utility), 4, arrangement .. ": the pane is the lane side again")
+  end)
+end)
+
+test("the key's release closes both; the pane is the page again", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local key = hold_into_view(context, S, pane, arrangement)
+    assert_equal(bar(pane, LINE.utility), lit_to(pane, 0), arrangement .. ": the view's line 7 is dark")
+    key.press(0)
+    assert_equal(shown_step_editor(), nil, arrangement .. ": the release closes the editor")
+    assert_equal(S.lib.grid_core.step_view(pane.port), nil, arrangement .. ": and the view")
+    assert_equal(S.patterns[1][key.step], 0, arrangement .. ": and toggles nothing")
+    show_half_of(S, pane, arrangement, KEY.ln)
+    assert_equal(pane.led(KEY.ln, LINE.utility), 4, arrangement .. ": the pane is the lane side again")
+  end)
+end)
+
+test("entering the view ends that pane's other held keys and leaves the opening key held", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local seq = S.lib.sequencer
+    local key = view_key(context, S, pane, arrangement)
+    local cell = shown_columns(pane) + 5
+    pane.press(cell, LINE.b, 1)  -- a held cell of the pane the view takes
+    key.press(1)
+    context.clock.run_for(0.35)
+    assert_true(S.lib.grid_core.step_view(pane.port) ~= nil, arrangement .. ": the view opens")
+    pane.press(cell, LINE.b, 0)
+    assert_equal(seq.step_attr(1, cell, "vb"), nil, arrangement .. ": the held cell was ended: its release taps nothing")
+    assert_equal(shown_step_editor(), "1 " .. key.step .. " 1", arrangement .. ": the opening key still holds the editor")
+    pane.tap(at_share(pane, 8), LINE.a)
+    assert_equal(seq.step_attr(1, key.step, "va"), 8, arrangement .. ": and the view")
+    key.press(0)
+    assert_equal(shown_step_editor(), nil, arrangement .. ": its release closes the editor")
+    assert_equal(S.patterns[1][key.step], 15, arrangement .. ": value A turned it on; the release toggled nothing")
+  end)
+end)
+
+test("a free lane's bar is dark and its keys set nothing", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local seq = S.lib.sequencer
+    local key = view_key(context, S, pane, arrangement)
+    seq.set_step_attr(1, key.step, "prob", 53)
+    S.lib.lanes.set_length(1, "chance", 5)
+    key.press(1)
+    context.clock.run_for(0.35)
+    assert_equal(bar(pane, LINE.chance), lit_to(pane, 0), arrangement .. ": a free lane's line is dark")
+    pane.tap(at_share(pane, 16), LINE.chance)
+    assert_equal(seq.step_attr(1, key.step, "prob"), 53, arrangement .. ": and its keys set nothing")
+    key.press(0)
+  end)
+end)
+
+test("a lane cell held 0.3 s opens nothing", function()
+  lane_side_arrangement(function(context, S, pane, arrangement)
+    local first = shown_columns(pane)
+    for line = LINE.a, LINE.gate do
+      pane.press(first, line, 1)
+      context.clock.run_for(0.35)
+      assert_equal(shown_step_editor(), nil, arrangement .. ": line " .. line .. " opens no editor")
+      assert_equal(S.lib.grid_core.step_view(pane.port), nil, arrangement .. ": and no view")
+      pane.press(first, line, 0)
+    end
+  end)
+end)
+
+-- The step view's table (docs/notes/lua/grid/keys.md, ### step view), on a
+-- 256 on port 1: the top pane shows patterns' side 1, where the key (5, 1)
+-- is voice 1's step 5; the bottom pane shows side 2 in "closed" and "open"
+-- (the view's pane), side 1 in the other two states. The bar key is (8, 4)
+-- of the bottom pane: chance's key 8 in the view
+local VIEW = {key_x = 5, key_y = 1, step = 5, bar_x = 8, bar_y = LINE.chance}
+local function view_panes(context)
+  return grid_pane(context, "256 top"), grid_pane(context, "256 bottom")
+end
+local function view_state()
+  local S = local_value("S")
+  local editor, view = shown_step_editor(), S.lib.grid_core.step_view(1)
+  if view then
+    if editor ~= "1 " .. VIEW.step .. " 1" or view.pane ~= 2 or view.voice ~= 1 or view.step ~= VIEW.step then
+      return "a view of " .. view.voice .. " " .. view.step .. " on pane " .. view.pane .. ", the editor " .. tostring(editor)
+    end
+    return "open"
+  end
+  if editor == "1 " .. VIEW.step .. " 1" then return "editor" end
+  if editor then return "the editor of " .. editor end
+  return S.lib.grid_core.any_page(S.constants.GRID_PAGES.patterns, PATTERNS_SIDE2) and "closed" or "closed, no side 2"
+end
+local function view_enter(bottom_side, hold)
+  return function(context)
+    local S = local_value("S")
+    local top, bottom = view_panes(context)
+    top.show(S.constants.GRID_PAGES.patterns)
+    bottom.show(S.constants.GRID_PAGES.patterns, bottom_side)
+    if hold then top.press(VIEW.key_x, VIEW.key_y, 1); context.clock.run_for(0.35) end
+  end
+end
+local function set_page_of(pane_index, page, side)
+  local S = local_value("S")
+  S.lib.grid_core.set_page(1, S.constants.GRID_PAGES[page], pane_index, side)
+end
+local VIEW_EVENTS = {
+  ["hold"] = function(context)
+    local top = view_panes(context)
+    top.press(VIEW.key_x, VIEW.key_y, 1); context.clock.run_for(0.35)
+  end,
+  ["release"] = function(context) context.grid.press(1, VIEW.key_x, VIEW.key_y, 0) end,
+  ["K2"] = k2,
+  ["key's pane page"] = function() set_page_of(1, "voices") end,
+  ["view's pane page"] = function() set_page_of(2, "voices") end,
+  ["view's pane side"] = function() set_page_of(2, "patterns", 3 - local_value("S").lib.grid_core.side(1, 2)) end,
+  ["unplug"] = function(context) context.grid.unplug(1) end,
+  ["replacement"] = function()
+    local S = local_value("S")
+    local steps = {}
+    for step = 1, #S.patterns[1] do steps[step] = S.patterns[1][step] end
+    S.lib.sequencer.replace_pattern(1, steps)
+  end,
+  -- the editor's euclid row's fill (E2 up from its level row, then E3):
+  -- its own replacement (ruling 71)
+  ["editor's replacement"] = function() enc(2, -2); enc(3, 4) end,
+  ["bar key"] = function(context) local _, bottom = view_panes(context); bottom.tap(VIEW.bar_x, VIEW.bar_y) end,
+}
+-- The bottom pane draws the lane side again: LN lit 4 on its utility line
+local function bottom_is_lane_side(context)
+  local _, bottom = view_panes(context)
+  assert_equal(bottom.led(KEY.ln, LINE.utility), 4, "the bottom pane is the lane side again")
+end
+local function bottom_is_view(context)
+  local _, bottom = view_panes(context)
+  assert_equal(bottom.led(KEY.ln, LINE.utility), 0, "the bottom pane is the step view: line 7 dark")
+end
+-- The key's release toggles nothing (it opened the editor)
+local function key_toggles_nothing(context)
+  context.grid.press(1, VIEW.key_x, VIEW.key_y, 0)
+  assert_equal(local_value("S").patterns[1][VIEW.step], 0, "the key's release toggles nothing")
+end
+local function step_prob(prob)
+  assert_equal(local_value("S").lib.sequencer.step_attr(1, VIEW.step, "prob"), prob, "step 5's prob")
+end
+local function voice_4_tapped()
+  assert_equal(local_value("S").patterns[4][VIEW.bar_x], 15, "a side 1 tap: voice 4's step 8 on")
+end
+local NO_EDITOR_REPLACEMENT = "the editor's own replacement runs only from its open owner's rows and keys (run_replacement)"
+h.transition_table({
+  name = "step view",
+  notes = {"docs/notes/lua/grid/keys.md", "step view"},
+  states = {
+    ["closed"] = view_enter(PATTERNS_SIDE2, false),
+    ["closed, no side 2"] = view_enter(1, false),
+    ["editor"] = view_enter(1, true),
+    ["open"] = view_enter(PATTERNS_SIDE2, true),
+  },
+  events = VIEW_EVENTS,
+  state_of = view_state,
+  rows = {
+    {"closed", "hold", "open", check = bottom_is_view},
+    {"closed", "release", "closed"},
+    {"closed", "K2", "closed"},
+    {"closed", "key's pane page", "closed"},
+    {"closed", "view's pane page", "closed, no side 2"},
+    {"closed", "view's pane side", "closed, no side 2"},
+    {"closed", "unplug", "closed, no side 2"},
+    {"closed", "replacement", "closed"},
+    {"closed", "bar key", "closed", check = function()
+      assert_equal(local_value("S").lib.sequencer.step_attr(1, VIEW.bar_x, "prob"), 53, "a chance cell's tap: cell 8 takes 53")
+      step_prob(nil)
+    end},
+    {"closed, no side 2", "hold", "editor"},
+    {"closed, no side 2", "release", "closed, no side 2"},
+    {"closed, no side 2", "K2", "closed, no side 2"},
+    {"closed, no side 2", "key's pane page", "closed, no side 2"},
+    {"closed, no side 2", "view's pane page", "closed, no side 2"},
+    {"closed, no side 2", "view's pane side", "closed"},
+    {"closed, no side 2", "unplug", "closed, no side 2"},
+    {"closed, no side 2", "replacement", "closed, no side 2"},
+    {"closed, no side 2", "bar key", "closed, no side 2", check = voice_4_tapped},
+    {"editor", "hold", "editor", check = key_toggles_nothing},
+    {"editor", "release", "closed, no side 2", check = function()
+      assert_equal(local_value("S").patterns[1][VIEW.step], 0, "the release toggles nothing")
+    end},
+    {"editor", "K2", "closed, no side 2", check = key_toggles_nothing},
+    {"editor", "key's pane page", "closed, no side 2", check = key_toggles_nothing},
+    {"editor", "view's pane page", "editor"},
+    {"editor", "view's pane side", "open", check = bottom_is_view},
+    {"editor", "unplug", "closed, no side 2"},
+    {"editor", "replacement", "closed, no side 2", check = key_toggles_nothing},
+    {"editor", "editor's replacement", "editor"},
+    {"editor", "bar key", "editor", check = function()
+      step_prob(nil)
+      voice_4_tapped()
+    end},
+    {"open", "hold", "open", check = function(context)
+      bottom_is_view(context)
+      key_toggles_nothing(context)
+    end},
+    {"open", "release", "closed", check = bottom_is_lane_side},
+    {"open", "K2", "closed", check = function(context)
+      bottom_is_lane_side(context)
+      key_toggles_nothing(context)
+    end},
+    {"open", "key's pane page", "closed", check = function(context)
+      bottom_is_lane_side(context)
+      key_toggles_nothing(context)
+    end},
+    {"open", "view's pane page", "editor"},
+    {"open", "view's pane side", "editor", check = function()
+      set_page_of(2, "patterns", PATTERNS_SIDE2)
+      assert_equal(view_state(), "open", "side 2 shown again: the view again, the editor still open")
+    end},
+    {"open", "unplug", "closed, no side 2"},
+    {"open", "replacement", "closed", check = function(context)
+      bottom_is_lane_side(context)
+      key_toggles_nothing(context)
+    end},
+    {"open", "editor's replacement", "open", check = bottom_is_view},
+    {"open", "bar key", "open", check = function(context)
+      step_prob(53)
+      context.screen.clear(); redraw()
+      assert_true(h.screen_shows(context, "53%"), "the editor's prob row shows it")
+    end},
+  },
+  impossible = {
+    {"closed", "editor's replacement", NO_EDITOR_REPLACEMENT},
+    {"closed, no side 2", "editor's replacement", NO_EDITOR_REPLACEMENT},
+  },
+})
+
 end

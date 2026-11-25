@@ -2481,4 +2481,40 @@ test("a pane's page changes count a page or side change, never a half change (3.
   assert_equal(core.page_changes(2, 1), top, "the top pane's count is its own")
 end)
 
+-- 3.9's step view (3c): computed from the step editor's key and SEQ's open
+-- editor, never recorded
+test("step_view is nil with no editor, an editor no key of the port opened, and no side 2 shown (3.9's 3c)", function()
+  local context = load_strata(); finish_startup(context)
+  local core, pages = grid_core(), PAGES()
+  local pages_seq = local_value("S").lib.pages_seq
+  context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 16)
+  core.set_page(1, pages.patterns, 2, 2)
+  assert_equal(core.step_view(1), nil, "no editor open")
+  pages_seq.open_step_editor(1, 5, 1)
+  assert_equal(core.step_view(1), nil, "an editor opened from Lua, with no key")
+  pages_seq.close_step_editor(1)
+  context.grid.press(2, 5, 1, 1); context.clock.run_for(0.35)
+  assert_equal(shown_step_editor(), "1 5 2", "port 2's key opened it")
+  assert_equal(core.step_view(1), nil, "port 1 shows side 2, but the editor is port 2's")
+  assert_equal(core.step_view(2), nil, "port 2 shows no side 2")
+  assert_equal(core.step_view(99), nil, "a port that is no grid port")
+  core.set_page(2, pages.patterns, 2, 2)
+  local view = core.step_view(2)
+  assert_equal(view and (view.voice .. " " .. view.step .. " " .. view.pane), "1 5 2",
+    "port 2's pane showing side 2 is the view, the editor still open")
+  context.grid.press(2, 5, 1, 0)
+  assert_equal(core.step_view(2), nil, "the release ends it")
+end)
+
+test("end_pane_keys spares the key it is given (3.9's 3c)", function()
+  local context = load_strata(); finish_startup(context)
+  local patterns = local_value("patterns")
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 5, 1, 1); context.grid.press(1, 6, 2, 1)
+  grid_core().end_pane_keys(1, 1, {x = 5, y = 1})
+  context.grid.press(1, 5, 1, 0); context.grid.press(1, 6, 2, 0)
+  assert_equal(patterns[1][5], 15, "the spared key is still a step key: its release toggles")
+  assert_equal(patterns[2][6], 0, "the other key's gesture ended")
+end)
+
 end

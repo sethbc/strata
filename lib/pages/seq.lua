@@ -919,6 +919,7 @@ return function(S)
     if editor == nil then return end
     if n == 2 and S.alt_held then
       editor.step = util.clamp(editor.step + d, 1, PATTERN_LENGTH)
+      grid_redraw()  -- 3.9 (3c): the grid's step view shows the editor's step
     else
       edit_enc(views.editor, n, d)
     end
@@ -1014,9 +1015,11 @@ return function(S)
   -- since stays): the page shows again
   function M.close_step_editor(port)
     if editor == nil or editor.port ~= port then return end
+    S.lib.grid_core.end_step_view(port)  -- 3.9 (3c): the grid's step view ends with it
     editor = nil
     forget_arc_ticks()
     S.lib.ui_modal.pop(editor_owner)
+    grid_redraw()  -- 3.9 (3c): and the grids no longer show it
   end
 
   -- {voice, step, port} of the open step editor (a copy), or nil

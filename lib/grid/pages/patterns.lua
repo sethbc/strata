@@ -290,17 +290,21 @@ return function(S)
     value_turns_on(voice_idx, lane, cell)
   end
 
+  -- Set a step's cell from a key's position and keep the value as the
+  -- port's last for the lane (a second key of side 2; a bar of the step view)
+  local function set_and_remember(port, voice_idx, lane, cell, position, positions)
+    local value = M.set_from_position(voice_idx, lane, cell, position, positions)
+    if value == nil then return end
+    local state = page_state(port, true)
+    state.last = state.last or {}
+    state.last[lane] = value
+  end
+
   local function press_cell(pane, voice_idx, lane, x, y, z)
     local port = pane.port
     pane.cell_key(x, y, z, "patterns " .. voice_idx .. " " .. lane, x,
       function(cell) tap_cell(port, voice_idx, lane, cell) end,
-      function(cell, position, positions)
-        local value = M.set_from_position(voice_idx, lane, cell, position, positions)
-        if value == nil then return end
-        local state = page_state(port, true)
-        state.last = state.last or {}
-        state.last[lane] = value
-      end)
+      function(cell, position, positions) set_and_remember(port, voice_idx, lane, cell, position, positions) end)
   end
 
   -- The hits line's second key: the held step's level (value A in move)
@@ -411,6 +415,71 @@ return function(S)
     draw_utility(pane, led, voice_idx, armed)
   end
 
+  -- The step view (3.9's 3c) --------------------------------------------------
+  -- While S.lib.grid_core.step_view(port) names this pane (the step editor
+  -- open from a key of the port; computed, never recorded), lines 1-6 are
+  -- bars of the editor's step: its level and its cells in the five lanes
+  -- (LANE_SIDE.lines' order), each lit `lit` from the first key shown to
+  -- its value's key (value_key), dark beyond; a free lane's line, a lane
+  -- with no value and line 7 are dark. A press on key x of a line sets the
+  -- value from x as side 2's second key does; on a lane's own last key it
+  -- clears the cell (value A and B none, chance 100, repeats 1, gate the
+  -- voice's); line 1 sets the level only, a free lane's and line 7's keys
+  -- nothing
+  local STEP_VIEW = {lit = 10}
+
+  -- The view, if it is this pane's
+  function STEP_VIEW.of(pane)
+    local view = S.lib.grid_core.step_view(pane.port)
+    if view and view.pane == pane.index then return view end
+    return nil
+  end
+
+  -- A bar's value: the step's level (nil while it is off); a lane's cell as
+  -- side 2 shows it (shown_value); nil for a free lane
+  function STEP_VIEW.value(voice_idx, lane, step)
+    if lane == "hits" then
+      local level = S.patterns[voice_idx][step]
+      return level > 0 and level or nil
+    end
+    if S.lib.lanes.length(voice_idx, lane) then return nil end
+    return shown_value(voice_idx, lane, step)
+  end
+
+  -- The position a value reaches: the first of 1..positions whose value
+  -- (value_for_position) is at least it, the last for one above them all
+  function STEP_VIEW.value_key(voice_idx, lane, value, positions)
+    for position = 1, positions do
+      if M.value_for_position(voice_idx, lane, position, positions) >= value then return position end
+    end
+    return positions
+  end
+
+  function STEP_VIEW.draw(pane, led, view)
+    for y, lane in ipairs(LANE_SIDE.lines) do
+      local value = STEP_VIEW.value(view.voice, lane, view.step)
+      local to = value and STEP_VIEW.value_key(view.voice, lane, value, pane.width) or 0
+      for position = 1, to do led(pane.offset + position, y, STEP_VIEW.lit) end
+    end
+  end
+
+  function STEP_VIEW.press(pane, view, x, y, z)
+    local lane = LANE_SIDE.lines[y]
+    if z ~= 1 or lane == nil or not pane.shows(x) then return end
+    local voice_idx, step, position = view.voice, view.step, x - pane.offset
+    if lane == "hits" then
+      S.lib.sequencer.set_level(voice_idx, step, S.lib.grid_core.level_for_position(position, pane.width))
+      return
+    end
+    if S.lib.lanes.length(voice_idx, lane) then return end
+    local value = shown_value(voice_idx, lane, step)
+    if value ~= nil and STEP_VIEW.value_key(voice_idx, lane, value, pane.width) == position then
+      S.lib.sequencer.set_step_attr(voice_idx, step, S.lib.lanes.STEP_KEYS[lane], nil)
+      return
+    end
+    set_and_remember(pane.port, voice_idx, lane, step, position, pane.width)
+  end
+
   -- Side 1 -------------------------------------------------------------------
 
   -- The picked voice's empty steps inside its length light picked_empty;
@@ -437,14 +506,22 @@ return function(S)
     press = function(pane, x, y, z)
       if y < 1 or y > NUM_VOICES or x < 1 or x > PATTERN_LENGTH then return end
       if pane.side == LANE_SIDE.side then
-        press_lanes(pane, x, y, z)
+        local view = STEP_VIEW.of(pane)
+        if view then
+          STEP_VIEW.press(pane, view, x, y, z)
+        else
+          press_lanes(pane, x, y, z)
+        end
         return
       end
       if z == 1 then M.pick(pane.port, y) end
       pane.step_key(x, y, z, y, x)
     end,
     redraw = function(pane, led)
-      if pane.side == LANE_SIDE.side then
+      local view = pane.side == LANE_SIDE.side and STEP_VIEW.of(pane)
+      if view then
+        STEP_VIEW.draw(pane, led, view)
+      elseif pane.side == LANE_SIDE.side then
         draw_lanes(pane, led)
       else
         draw_steps(pane, led)
