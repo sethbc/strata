@@ -529,7 +529,7 @@ end)
 local C4 = 261.6255653005986
 local OWN_FREQ = 220
 local VALUE_FREQ = OWN_FREQ * 2 ^ (7 / 12)  -- level 15 with the scale off: seven semitones up
-local MIDI_NOTE = 64
+local MIDI_NOTE = 62  -- 293.66 Hz: apart from the value's 329.63 Hz (fix round 1, finding 1)
 local MIDI_FREQ = 440 * 2 ^ ((MIDI_NOTE - 69) / 12)
 
 -- Voice 1 made a synth voice at 220 Hz (the scale off: a degree is a semitone)
@@ -607,11 +607,28 @@ test("a pitch value resends scaleNote once", function()
   local context, S = setup()
   synth_voice(S)
   set_step(S, 1, {va = 15}); set_step(S, 2); set_step(S, 3)
+  -- fix round 1 (finding 3): a second value, a chord over it and its
+  -- end, a pitch lock and its end (on the grain pitch: freq stays)
+  set_step(S, 4, {va = 10}); set_step(S, 5, {notes = {2}}); set_step(S, 6)
+  set_step(S, 7, {pitch = 1.5}); set_step(S, 8)
   context.clear_engine_calls()
   pattern_clock_start()
   tick(context, S); tick(context, S)
   assert_equal(S.lib.sequencer.sounding_step(1), 3, "step 3 played")
   assert_sends(context, "scaleNote", {57 + 7}, "the value's note, once")
+  local steps = {
+    {4, {57 + 2}, "a second value moves it, once"},
+    {5, {57 + 4}, "a chord's note 2 on the value: degree 4, once"},
+    {6, {57 + 2}, "the chord ends: the value comes back, once"},
+    {7, {}, "a pitch lock leaves freq: nothing"},
+    {8, {}, "and its end: nothing"},
+  }
+  for _, case in ipairs(steps) do
+    context.clear_engine_calls()
+    tick(context, S)
+    assert_equal(S.lib.sequencer.sounding_step(1), case[1], "step " .. case[1] .. " played")
+    assert_sends(context, "scaleNote", case[2], "step " .. case[1] .. ": " .. case[3])
+  end
   context.clear_engine_calls()
   pattern_clock_stop()
   assert_sends(context, "scaleNote", {57}, "the stop: the voice's own, once")
@@ -764,6 +781,27 @@ local function chord_under_key(context)
   assert_equal(local_value("S").lib.sequencer.held_value(1, "pitch"), nil, "no value")
 end
 
+-- Fix round 1 (finding 2): a hand edit of freq (an encoder's detent): the
+-- edit's own action sends under any override, then its touch ends it, so
+-- the stored freq, moved off where it was, is sent last and played
+local function freq_edited(from)
+  return function(context)
+    local stored = params:get("v1_freq")
+    assert_true(math.abs(stored - from) > 1e-3, "the detent moved freq off " .. from)
+    freq_sends(stored)(context)
+    assert_equal(local_value("S").lib.sequencer.held_value(1, "pitch"), nil, "no value")
+  end
+end
+
+-- Fix round 1 (finding 4): a pitch lock on a synth voice is on the grain
+-- pitch: freq stays where check leaves it, and the lock is played
+local function pitch_locked(check)
+  return function(context)
+    check(context)
+    assert_near(base_value("v1_grain_pitch"), 1.5, 1e-9, "the grain pitch lock plays")
+  end
+end
+
 -- Fix round 1 (finding 3): the row's check, then the lock followed to its
 -- end (a hit without), which brings no value back: 0.2 is sent and played
 local function then_lock_ends(check)
@@ -802,6 +840,8 @@ h.transition_table({
     ["MIDI key"] = function(context) midi_key(context, "note_on") end,
     ["MIDI release"] = function(context) midi_key(context, "note_off") end,
     ["chord"] = next_hit({notes = {0, 2}}),
+    ["freq edit"] = function() delta_with_detent("v1_freq", 1) end,
+    ["hit with a pitch lock"] = next_hit({pitch = 1.5}),
   },
   state_of = function()
     local S = local_value("S")
@@ -899,6 +939,17 @@ h.transition_table({
     {"a held key", "MIDI key", "a held key", check = freq_sends(nil, MIDI_FREQ)},
     {"a held key", "MIDI release", "none", check = freq_sends(nil, MIDI_FREQ)},
     {"a held key", "chord", "a held key", check = chord_under_key},
+    -- fix round 1 (findings 2 and 4): a hand edit of freq, a pitch lock
+    {"none", "freq edit", "none", check = sends(nil, OWN_POSITION)},
+    {"a value", "freq edit", "a value", check = sends(nil, 1)},
+    {"a lock over a value", "freq edit", "a lock over a value", check = sends(nil, 0.6)},
+    {"a pitch value", "freq edit", "none", check = freq_edited(VALUE_FREQ)},
+    {"a held key", "freq edit", "a held key", check = freq_edited(MIDI_FREQ)},
+    {"none", "hit with a pitch lock", "none", check = sends(nil, OWN_POSITION)},
+    {"a value", "hit with a pitch lock", "a value", check = sends(nil, 1)},
+    {"a lock over a value", "hit with a pitch lock", "a value", check = sends(1)},
+    {"a pitch value", "hit with a pitch lock", "a pitch value", check = pitch_locked(freq_sends(nil, VALUE_FREQ))},
+    {"a held key", "hit with a pitch lock", "a held key", check = pitch_locked(freq_sends(nil, MIDI_FREQ))},
   },
 })
 

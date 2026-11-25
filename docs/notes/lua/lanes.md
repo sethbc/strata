@@ -18,7 +18,7 @@
 - **Invariant:** none of its own: `step holds` (`docs/notes/lua/sequencer.md`) holds it: stopped, no voice holds a value, and every held value's param has a base override (its own, or a lock's over it), so a record never outlives its value.
 - **Test:** `test/unit/lanes_test.lua`: "held values: none + hit with a value" (one test a row), and the named tests beside them ("a value ends at a stop, a hand edit, ...", "a lock wins for its step and the value comes back", "a length cut past a lock but not past the value brings the value back", "a jump ends a held position value: ...", "a morph that switches the source ends the held value", and 2b's "pitch level 8 is the voice's own pitch, ...", "a pitch value resends scaleNote once", "a pitch value gives way to a held MIDI key and comes back at the next hit that sets it", "on a synth voice a pitch lock adds to a pitch value; on an input voice it wins"; `test/unit/sequencer_test.lua`'s "a chord sits on a held pitch value" and "a value of +7 under a note of +14 plays degree 14").
 
-Each state is a fresh script: voice 1 reading buffer 1 at position 0.2, length 8, steps 1 to 4 set and played (step 3 with `va` 15 for `a value`, and step 4 with a position lock of 0.6 for `a lock over a value`). The hits are step 5's: `hit with a value` (`va` 8, position 0.5), `hit without` (no value, no lock: in `a lock over a value`, the lock's end), `hit with a lock` (0.6), `held back` (`va` 8 at a chance of 0). The ends: `stop`, `hand edit` (an encoder's detent on `v1_buf_pos`: 0.21), `replace`, `target change` (A to size), `mode change` (to accent), `source switch` (buffer 2), `type switch`, `empty pass` (from step 4 the steps turned off one by one, a tick apart, the value's own step 3 first, then the wrap), `length cut` (to 2). A source or type switch syncs the running voice, which sends the position it starts from again. Each row checks the position sent last and the one the engine starts from; the four rows where a value ends under a lock also follow the lock to its end (a hit without), which sends 0.2. 2b's states make voice 1 a synth voice at 220 Hz instead (the scale off, so a degree is a semitone): `a pitch value` is step 3's `va` 15 there, 329.63 Hz (seven up), and `a held key` is that and then MIDI note 64 down on voice 1's channel (329.63 Hz too, the key's own pitch, now the stored freq). Its events: `MIDI key` (note 64 down), `MIDI release` (note 64 up: in the default latch mode the note sounds on, its key up, so it no longer keeps the own note), `chord` (step 5 with notes 0 and 2). Their rows check the freq sent last and the one the engine plays; `hit with a value` there is level 8, the voice's own 220 Hz.
+Each state is a fresh script: voice 1 reading buffer 1 at position 0.2, length 8, steps 1 to 4 set and played (step 3 with `va` 15 for `a value`, and step 4 with a position lock of 0.6 for `a lock over a value`). The hits are step 5's: `hit with a value` (`va` 8, position 0.5), `hit without` (no value, no lock: in `a lock over a value`, the lock's end), `hit with a lock` (0.6), `held back` (`va` 8 at a chance of 0). The ends: `stop`, `hand edit` (an encoder's detent on `v1_buf_pos`: 0.21), `replace`, `target change` (A to size), `mode change` (to accent), `source switch` (buffer 2), `type switch`, `empty pass` (from step 4 the steps turned off one by one, a tick apart, the value's own step 3 first, then the wrap), `length cut` (to 2). A source or type switch syncs the running voice, which sends the position it starts from again. Each row checks the position sent last and the one the engine starts from; the four rows where a value ends under a lock also follow the lock to its end (a hit without), which sends 0.2. 2b's states make voice 1 a synth voice at 220 Hz instead (the scale off, so a degree is a semitone): `a pitch value` is step 3's `va` 15 there, 329.63 Hz (seven up), and `a held key` is that and then MIDI note 62 down on voice 1's channel (293.66 Hz, the key's own pitch, now the stored freq: apart from the value's, so a value left under the key shows). Its events: `MIDI key` (note 62 down), `MIDI release` (note 62 up: in the default latch mode the note sounds on, its key up, so it no longer keeps the own note), `chord` (step 5 with notes 0 and 2), `freq edit` (an encoder's detent on `v1_freq`) and `hit with a pitch lock` (step 5 with a `pitch` lock of 1.5, which on a synth or buffer voice is the grain pitch's, not freq's). Their rows check the freq sent last and the one the engine plays; `hit with a value` there is level 8, the voice's own 220 Hz.
 
 | State | Event | Next | Effect |
 |---|---|---|---|
@@ -83,7 +83,7 @@ Each state is a fresh script: voice 1 reading buffer 1 at position 0.2, length 8
 | `a pitch value` | `type switch` | `none` | 220 Hz (then the sync's) |
 | `a pitch value` | `empty pass` | `none` | 220 Hz at the wrap |
 | `a pitch value` | `length cut` | `none` | 220 Hz |
-| `a pitch value` | `MIDI key` | `a held key` | the value gives way: the key's 329.63 Hz |
+| `a pitch value` | `MIDI key` | `a held key` | the value gives way: the key's 293.66 Hz |
 | `a pitch value` | `MIDI release` | `a pitch value` | nothing sent: no key was down |
 | `a pitch value` | `chord` | `a pitch value` | the chord sits on it: note 0 at 329.63 Hz, note 2 an extra note at 66 |
 | `a held key` | `hit with a value` | `a held key` | nothing sent: the value gives way, nothing recorded |
@@ -95,13 +95,23 @@ Each state is a fresh script: voice 1 reading buffer 1 at position 0.2, length 8
 | `a held key` | `replace` | `a held key` | nothing sent |
 | `a held key` | `target change` | `a held key` | nothing sent |
 | `a held key` | `mode change` | `a held key` | nothing sent |
-| `a held key` | `source switch` | `a held key` | the sync's 329.63 Hz |
-| `a held key` | `type switch` | `a held key` | the sync's 329.63 Hz |
+| `a held key` | `source switch` | `a held key` | the sync's 293.66 Hz |
+| `a held key` | `type switch` | `a held key` | the sync's 293.66 Hz |
 | `a held key` | `empty pass` | `a held key` | nothing sent |
 | `a held key` | `length cut` | `a held key` | nothing sent |
 | `a held key` | `MIDI key` | `a held key` | nothing sent |
 | `a held key` | `MIDI release` | `none` | nothing sent: the value does not come back |
 | `a held key` | `chord` | `a held key` | no freq sent: the chord's first note gives way |
+| `none` | `freq edit` | `none` | no position sent |
+| `a value` | `freq edit` | `a value` | no position sent: another param |
+| `a lock over a value` | `freq edit` | `a lock over a value` | no position sent |
+| `a pitch value` | `freq edit` | `none` | the value ends: the edited freq sent last and played |
+| `a held key` | `freq edit` | `a held key` | the edited freq sent last and played |
+| `none` | `hit with a pitch lock` | `none` | no position sent |
+| `a value` | `hit with a pitch lock` | `a value` | no position sent: it stays at 1 |
+| `a lock over a value` | `hit with a pitch lock` | `a value` | the position lock's end: the value comes back, 1 |
+| `a pitch value` | `hit with a pitch lock` | `a pitch value` | no freq sent: the lock adds on the grain pitch, 1.5 |
+| `a held key` | `hit with a pitch lock` | `a held key` | no freq sent: the grain pitch's 1.5 |
 
 ## Owns
 
