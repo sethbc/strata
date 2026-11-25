@@ -136,14 +136,16 @@ return function(S)
   -- outputs skipped until the next start; play.started: a voice started
   -- since the last redraw; play.reset_beat: a division reset's bar;
   -- play.retired: [id] = true for each clock ended but left to finish at its
-  -- next wake (end_clock);
+  -- next wake (end_clock); 4b's play.next_bar: the beat of the next bar of
+  -- the count while the patterns play (nil while stopped), and
+  -- play.bar_hooks: the functions on_bar registered, in order;
   -- overrides: per voice, the param ids its last played step overrides;
   -- last_played: per voice, that step; gate_sent: per voice, the
   -- gateSeconds sent last; chords: per voice, the notes its last played
   -- step plays through S.lib.notes (owner "seq", key k: the step's k-th
   -- note), {note_id, count, pitches, values} (step_chord), or nil
   local play = {voices = {}, transport = {}, failed = {}, started = false, reset_beat = nil, offset = 0,
-    generation = 0, retired = {}}
+    generation = 0, retired = {}, next_bar = nil, bar_hooks = {}}
   local overrides, last_played, gate_sent, chords = {}, {}, {}, {}
   -- 3.7 (design §3.5, ruling 32): per voice, the own region its last played
   -- step set (a voice set to one, or off), and the slice its step's first
@@ -1429,13 +1431,35 @@ return function(S)
     if slot and move ~= "repeat" then load_chain_scene(slot) end
   end
 
+  -- 4b: every bar hook, in the order registered (first: the patterns'
+  -- start, its own bar)
+  function play.run_bar_hooks(first)
+    for _, fn in ipairs(play.bar_hooks) do fn(first) end
+  end
+
   -- Whatever falls on a beat before its steps: a chain link due then (the
-  -- first participant to reach it links, for all)
+  -- first participant to reach it links, for all), then, at a bar of the
+  -- count (4b), the bar hooks, once a bar however late the beat
   local function at_beat(beat)
     if chain.next_beat and beat >= chain.next_beat - SEQ.beat_tolerance then
       chain.next_beat = chain.next_beat + params:get("seq_chain_bars") * SEQ.bar_beats
       chain_link()
     end
+    if play.next_bar and beat >= play.next_bar - SEQ.beat_tolerance then
+      while beat >= play.next_bar - SEQ.beat_tolerance do play.next_bar = play.next_bar + SEQ.bar_beats end
+      play.run_bar_hooks(false)
+    end
+  end
+
+  -- 3.9 grid sequencer (4b): fn(first) is called at each bar of the
+  -- sequencer's own count (the chain's: every SEQ.bar_beats from the
+  -- patterns' start), the patterns' first beat included (first true
+  -- there), after a chain link due on that bar has loaded and before the
+  -- bar's first step plays; the functions run in the order registered.
+  -- Never while the patterns are stopped
+  function M.on_bar(fn)
+    if type(fn) ~= "function" then error("on_bar: a hook is a function", 2) end
+    table.insert(play.bar_hooks, fn)
   end
 
   -- A voice's step ------------------------------------------------------
@@ -1950,6 +1974,10 @@ return function(S)
       S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, chain_link)
       chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
     end
+    -- 4b (ruling 4b-2): the start's own bar, after its chain link and
+    -- before the voices' clocks play their first steps
+    play.next_bar = beat + SEQ.bar_beats
+    play.run_bar_hooks(true)
     for voice_idx = 1, NUM_VOICES do M.restart_voice(voice_idx, beat) end
     S.pattern_clock = clock.run(transport_clock, beat)
   end
@@ -1968,7 +1996,8 @@ return function(S)
     S.pattern_playing = false
     S.pattern_sounding_step = nil
     end_clocks(false)
-    play.reset_beat, chain.next_beat = nil, nil
+    play.reset_beat, chain.next_beat, play.next_bar = nil, nil, nil
+    S.lib.pattern_letters.end_waits()  -- 4b: a stop clears every waiting letter
     end_all_overrides()
     if was_playing then stop_outputs() end
     modes.send_moved(answers)

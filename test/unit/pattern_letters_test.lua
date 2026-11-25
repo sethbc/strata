@@ -310,4 +310,444 @@ test("the block refuses a slot with a level of 16 or an unknown step key", funct
   refused(function() block[1].shape = 1 end, function() block[1].shape = nil end, "an unknown voice key")
 end)
 
+-- 4b: switching on the bar, and the order -----------------------------------
+
+-- A bar at 120 BPM (four beats), in seconds
+local BAR_SECONDS = 2.0
+-- Each letter's step 1 level: voice 1's A, B and C hold step 1 alone at
+-- its own level, so a hit's level says which letter played it
+local LEVEL = {A = 15, B = 7, C = 3}
+
+-- Voice 1's letters A, B and C used, each its step 1 at its level, A playing
+local function three_letters(S)
+  local letters, seq = S.lib.pattern_letters, S.lib.sequencer
+  seq.set_level(1, 1, LEVEL.A)
+  for _, letter in ipairs({"B", "C"}) do
+    letters.switch_now(1, letter)
+    seq.set_level(1, 1, LEVEL[letter])
+  end
+  letters.switch_now(1, "A")
+end
+
+-- The levels of voice 1's step 1 hits, in order: a step output (the
+-- registry stays open) that hears every hit
+local function step_one_levels(S)
+  local heard = {}
+  S.register_step_output({name = "letter probe", play = function(event)
+    if event.voice == 1 and event.first and event.step == 1 then heard[#heard + 1] = event.level end
+  end})
+  return heard
+end
+
+test("a tap waits for the bar; the letter plays from the bar's first step", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  local heard = step_one_levels(S)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  assert_equal(letters.waiting(1), "B", "B waits")
+  assert_equal(letters.current(1), "A", "A plays on")
+  context.clock.run_for(BAR_SECONDS - 0.5 - 0.01)
+  assert_equal(letters.current(1), "A", "still A just before the bar")
+  context.clock.run_for(0.02)
+  assert_equal(letters.current(1), "B", "B from the bar")
+  assert_equal(letters.waiting(1), nil, "nothing waits")
+  assert_equal(table.concat(heard, " "), "15 7", "bar 1's step 1 was A's, bar 2's B's")
+  pattern_clock_stop()
+end)
+
+test("a bar's switch repaints the grid once, with the bar's step", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  context.clock.run_for(BAR_SECONDS - 0.5 - 0.01)
+  local count, real_grid_redraw = 0, grid_redraw
+  grid_redraw = function(...) count = count + 1; return real_grid_redraw(...) end
+  context.clock.run_for(0.02)
+  grid_redraw = real_grid_redraw
+  assert_equal(letters.current(1), "B", "B from the bar")
+  assert_equal(count, 1, "one repaint for the bar's step, the switch's included")
+  pattern_clock_stop()
+end)
+
+test("a second tap on the waiting letter switches at once", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "C")
+  letters.switch(1, "B")
+  assert_equal(letters.waiting(1), "B", "another letter replaces the one waiting")
+  letters.switch(1, "B")
+  assert_equal(letters.current(1), "B", "B at once")
+  assert_equal(letters.waiting(1), nil, "nothing waits")
+  assert_equal(S.patterns[1][1], LEVEL.B, "B's pattern")
+  letters.switch(1, "C")
+  letters.switch(1, "B")
+  assert_equal(letters.waiting(1), nil, "the playing letter cancels the wait")
+  context.clock.run_for(BAR_SECONDS)
+  assert_equal(letters.current(1), "B", "B plays on past the bar")
+  pattern_clock_stop()
+end)
+
+test("with the patterns stopped a tap switches at once", function()
+  local _, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  letters.switch(1, "C")
+  assert_equal(letters.current(1), "C", "C at once")
+  assert_equal(letters.waiting(1), nil, "nothing waits")
+  assert_equal(S.patterns[1][1], LEVEL.C, "C's pattern")
+  letters.switch(0, "A"); letters.switch(1, "E")
+  assert_equal(letters.current(1), "C", "a bad voice or letter does nothing")
+  assert_equal(letters.waiting(0), nil)
+end)
+
+test("an order A A B A plays four bars from the patterns' start and starts again", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  letters.switch(1, "B")  -- B plays, so A at the first bar is the order's own
+  local heard = step_one_levels(S)
+  letters.set_order(1, {"A", "A", "B", "A"})
+  local order, on = letters.order(1)
+  assert_equal(table.concat(order, " "), "A A B A", "the order")
+  assert_equal(on, true, "set_order turns it on")
+  assert_equal(letters.current(1), "B", "nothing switches before a bar")
+  pattern_clock_start()
+  assert_equal(letters.current(1), "A", "bar 1 is A: the start's own bar")
+  context.clock.run_for(6 * BAR_SECONDS + 0.01)
+  assert_equal(table.concat(heard, " "), "15 15 7 15 15 15 7", "A A B A, then A A B")
+  pattern_clock_stop()
+  -- a start again takes the first entry, wherever the order was
+  context.clock.run_for(BAR_SECONDS)
+  heard[#heard + 1] = 0
+  pattern_clock_start()
+  context.clock.run_for(2 * BAR_SECONDS + 0.01)
+  assert_equal(table.concat(heard, " "), "15 15 7 15 15 15 7 0 15 15 7", "from its first entry")
+  pattern_clock_stop()
+  -- a bad order is refused, and leaves the order as it was
+  letters.set_order(1, {"A", "E"}); letters.set_order(1, {"A", "A", "A", "A", "A", "A", "A", "A", "A"})
+  letters.set_order(1, "A"); letters.set_order(0, {"A"})
+  order = letters.order(1)
+  assert_equal(table.concat(order, " "), "A A B A", "refused")
+  order[1] = "D"
+  assert_equal(letters.order(1)[1], "A", "order gives a copy")
+end)
+
+test("an order of one letter never replaces the pattern", function()
+  local context, S = setup()
+  local letters, seq = S.lib.pattern_letters, S.lib.sequencer
+  three_letters(S)
+  local replaced, replace_pattern = 0, seq.replace_pattern
+  seq.replace_pattern = function(...)
+    replaced = replaced + 1
+    return replace_pattern(...)
+  end
+  letters.set_order(1, {"A"})
+  pattern_clock_start()
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 5, 1, 1); context.clock.run_for(0.35)
+  assert_true(shown_step_editor() ~= nil, "a held step opened the step editor")
+  context.clock.run_for(2 * BAR_SECONDS)
+  assert_equal(replaced, 0, "no replace_pattern at a bar")
+  assert_true(shown_step_editor() ~= nil, "the step editor stays open")
+  assert_equal(letters.current(1), "A")
+  context.grid.press(1, 5, 1, 0)
+  pattern_clock_stop()
+  seq.replace_pattern = replace_pattern
+end)
+
+test("turning an order on clears a waiting letter", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  local heard = step_one_levels(S)
+  letters.set_order(1, {"C"})
+  letters.set_order_on(1, false)
+  local _, on = letters.order(1)
+  assert_equal(on, false, "set_order_on off")
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  assert_equal(letters.waiting(1), "B", "B waits")
+  letters.set_order_on(1, true)
+  assert_equal(letters.waiting(1), nil, "the order cleared it")
+  context.clock.run_for(BAR_SECONDS)
+  assert_equal(letters.current(1), "C", "the bar takes the order's first entry")
+  assert_equal(table.concat(heard, " "), "15 3", "A, then C")
+  pattern_clock_stop()
+end)
+
+test("a switch by hand turns the order off", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  letters.set_order(1, {"B"})
+  pattern_clock_start()
+  assert_equal(letters.current(1), "B", "the order's first bar")
+  context.clock.run_for(0.5)
+  letters.switch(1, "C")
+  local order, on = letters.order(1)
+  assert_equal(on, false, "the order is off")
+  assert_equal(table.concat(order, " "), "B", "and kept")
+  assert_equal(letters.waiting(1), "C", "C waits")
+  context.clock.run_for(2 * BAR_SECONDS)
+  assert_equal(letters.current(1), "C", "C from the bar, and on: the order walks no more")
+  -- a tap of the playing letter turns it off too
+  letters.set_order_on(1, true)
+  letters.switch(1, "C")
+  _, on = letters.order(1)
+  assert_equal(on, false, "a tap of the playing letter")
+  -- an empty order cannot be on
+  letters.set_order(1, {})
+  order, on = letters.order(1)
+  assert_equal(#order, 0, "no order")
+  assert_equal(on, false, "an empty order is off")
+  letters.set_order_on(1, true)
+  _, on = letters.order(1)
+  assert_equal(on, false, "and is never turned on")
+  pattern_clock_stop()
+end)
+
+test("a chain link wins over a waiting letter on the same bar", function()
+  local context, S = setup()
+  local letters, seq = S.lib.pattern_letters, S.lib.sequencer
+  three_letters(S)
+  capture_scene(1)
+  local heard = step_one_levels(S)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
+  params:set("seq_chain_bars", 1)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  seq.set_level(1, 1, 9)  -- A edited: the scene's own A has 15
+  letters.switch(1, "B")
+  assert_equal(letters.waiting(1), "B", "B waits")
+  context.clock.run_for(BAR_SECONDS - 0.5 + 0.01)
+  assert_equal(letters.waiting(1), nil, "the link cleared the wait")
+  assert_equal(letters.current(1), "A", "the scene's letter")
+  assert_equal(table.concat(heard, " "), "15 15", "the scene's A played at the bar, not B nor the edit")
+  pattern_clock_stop()
+end)
+
+test("a recall clears a wait, before or after the bar's hook", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  capture_scene(1)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  recall_scene(1)
+  assert_equal(letters.waiting(1), nil, "the recall cleared the wait")
+  context.clock.run_for(BAR_SECONDS)
+  assert_equal(letters.current(1), "A", "A plays on past the bar")
+  pattern_clock_stop()
+end)
+
+test("a stop clears a wait", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  pattern_clock_stop()
+  assert_equal(letters.waiting(1), nil, "nothing waits")
+  assert_equal(letters.current(1), "A", "A")
+  pattern_clock_start()
+  assert_equal(letters.current(1), "A", "a start finds no wait")
+  context.clock.run_for(BAR_SECONDS)
+  assert_equal(letters.current(1), "A", "nor a bar")
+  pattern_clock_stop()
+end)
+
+test("the pattern letters invariant fails on a letter waiting while the patterns are stopped", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  local invariant = h.registered_invariant("pattern letters")
+  three_letters(S)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  assert_equal(invariant.check(), nil, "it holds: B waits while they play")
+  S.pattern_playing = false  -- as though a stop had left the wait
+  h.allow_broken_invariants("the test breaks the pattern letters invariant on purpose")
+  assert_true((invariant.check() or ""):find("voice 1", 1, true) ~= nil, "a wait while stopped")
+  S.pattern_playing = true
+  pattern_clock_stop()
+  assert_equal(invariant.check(), nil, "the stop cleared it")
+end)
+
+-- The machine `pattern letters` (docs/notes/lua/pattern-letters.md): voice
+-- 1's letters A, B and C used (step 1 at 15, 7 and 3), A playing, scene 1
+-- captured then (its order none, off), then the order B C set and turned
+-- off, then A's step 16 set (the scene's A lacks it). A state is the
+-- patterns stopped or playing (started, then half a second), the order
+-- turned on (after the start: A plays, its first entry not yet taken) and
+-- a letter waiting (C, switched to while they play)
+local function letters_state(playing, waiting, order_on)
+  return function(context)
+    local S = local_value("S")
+    local letters, seq = S.lib.pattern_letters, S.lib.sequencer
+    three_letters(S)
+    capture_scene(1)
+    letters.set_order(1, {"B", "C"})
+    letters.set_order_on(1, false)
+    seq.set_level(1, 16, 15)
+    if playing then
+      pattern_clock_start()
+      context.clock.run_for(0.5)
+    end
+    if order_on then letters.set_order_on(1, true) end
+    if waiting then letters.switch(1, "C") end
+    context.letters = letters
+  end
+end
+
+local function letters_state_of()
+  local S = local_value("S")
+  local letters = S.lib.pattern_letters
+  local _, on = letters.order(1)
+  if not S.pattern_playing then return on and "stopped/order" or "stopped" end
+  if letters.waiting(1) then return "playing/waiting" end
+  return on and "playing/order" or "playing"
+end
+
+-- A row's check: voice 1 plays letter (step 1 holds its level), and the
+-- letter waiting
+local function plays(letter, waiting)
+  return function()
+    local S = local_value("S")
+    assert_equal(S.lib.pattern_letters.current(1), letter, "voice 1 plays " .. letter)
+    assert_equal(S.patterns[1][1], LEVEL[letter], letter .. "'s pattern")
+    assert_equal(S.lib.pattern_letters.waiting(1), waiting, "waiting: " .. tostring(waiting))
+  end
+end
+
+-- The scene's own A plays (its step 16 off), and its order, none, is off
+local function scene_plays()
+  local S = local_value("S")
+  plays("A")()
+  assert_equal(S.patterns[1][16], 0, "the scene's A")
+  local order, on = S.lib.pattern_letters.order(1)
+  assert_equal(#order, 0, "the scene's order")
+  assert_equal(on, false)
+end
+
+local function order_is(text, on_wanted)
+  return function()
+    local order, on = local_value("S").lib.pattern_letters.order(1)
+    assert_equal(table.concat(order, " "), text, "the order")
+    assert_equal(on, on_wanted, "on")
+  end
+end
+
+local function both(first, second)
+  return function() first(); second() end
+end
+
+local NO_WAIT = "no letter waits: a tap while the patterns are stopped switches at once, and a stop clears a wait"
+  .. " (switch, end_waits)"
+local ORDER_WAIT = "no letter waits while an order is on: turning one on clears a wait, and a tap turns it off"
+  .. " (switch, set_order, set_order_on)"
+local NO_CHAIN = "the chain links only while the patterns play: chain.next_beat is nil while they are stopped"
+  .. " (pattern_clock_stop, chain_switched; a start's own link is the start)"
+
+h.transition_table({
+  name = "pattern letters",
+  notes = {"docs/notes/lua/pattern-letters.md", "pattern letters"},
+  states = {
+    stopped = letters_state(false, false, false),
+    ["stopped/order"] = letters_state(false, false, true),
+    playing = letters_state(true, false, false),
+    ["playing/waiting"] = letters_state(true, true, false),
+    ["playing/order"] = letters_state(true, false, true),
+  },
+  events = {
+    ["tap playing"] = function(context) context.letters.switch(1, context.letters.current(1)) end,
+    ["tap another"] = function(context) context.letters.switch(1, "B") end,
+    ["tap waiting"] = function(context) context.letters.switch(1, "C") end,
+    ["a bar"] = function(context) context.clock.run_for(BAR_SECONDS - 0.5 + 0.01) end,
+    stop = function() pattern_clock_stop() end,
+    start = function() pattern_clock_start() end,
+    set_order = function(context) context.letters.set_order(1, {"C", "B"}) end,
+    ["order on"] = function(context) context.letters.set_order_on(1, true) end,
+    ["order off"] = function(context) context.letters.set_order_on(1, false) end,
+    ["chain link"] = function(context)
+      params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1); params:set("seq_chain_bars", 1)
+      params:set("seq_chain", 1)
+      context.clock.run_for(BAR_SECONDS - 0.5 + 0.01)
+    end,
+    recall = function() recall_scene(1) end,
+  },
+  state_of = letters_state_of,
+  rows = {
+    {"stopped", "tap playing", "stopped", check = plays("A")},
+    {"stopped", "tap another", "stopped", check = plays("B")},
+    {"stopped", "a bar", "stopped", check = plays("A")},
+    {"stopped", "stop", "stopped", check = plays("A")},
+    {"stopped", "start", "playing", check = plays("A")},
+    {"stopped", "set_order", "stopped/order", check = both(plays("A"), order_is("C B", true))},
+    {"stopped", "order on", "stopped/order", check = both(plays("A"), order_is("B C", true))},
+    {"stopped", "order off", "stopped", check = plays("A")},
+    {"stopped", "recall", "stopped", check = scene_plays},
+    {"stopped/order", "tap playing", "stopped", check = both(plays("A"), order_is("B C", false))},
+    {"stopped/order", "tap another", "stopped", check = both(plays("B"), order_is("B C", false))},
+    {"stopped/order", "a bar", "stopped/order", check = plays("A")},
+    {"stopped/order", "stop", "stopped/order", check = plays("A")},
+    {"stopped/order", "start", "playing/order", check = plays("B")},
+    {"stopped/order", "set_order", "stopped/order", check = both(plays("A"), order_is("C B", true))},
+    {"stopped/order", "order on", "stopped/order", check = plays("A")},
+    {"stopped/order", "order off", "stopped", check = both(plays("A"), order_is("B C", false))},
+    {"stopped/order", "recall", "stopped", check = scene_plays},
+    {"playing", "tap playing", "playing", check = plays("A")},
+    {"playing", "tap another", "playing/waiting", check = plays("A", "B")},
+    {"playing", "a bar", "playing", check = plays("A")},
+    {"playing", "stop", "stopped", check = plays("A")},
+    {"playing", "start", "playing", check = plays("A")},
+    {"playing", "set_order", "playing/order", check = both(plays("A"), order_is("C B", true))},
+    {"playing", "order on", "playing/order", check = plays("A")},
+    {"playing", "order off", "playing", check = plays("A")},
+    {"playing", "chain link", "playing", check = scene_plays},
+    {"playing", "recall", "playing", check = scene_plays},
+    {"playing/waiting", "tap playing", "playing", check = plays("A")},
+    {"playing/waiting", "tap another", "playing/waiting", check = plays("A", "B")},
+    {"playing/waiting", "tap waiting", "playing", check = plays("C")},
+    {"playing/waiting", "a bar", "playing", check = plays("C")},
+    {"playing/waiting", "stop", "stopped", check = plays("A")},
+    {"playing/waiting", "start", "playing", check = plays("C")},
+    {"playing/waiting", "set_order", "playing/order", check = both(plays("A"), order_is("C B", true))},
+    {"playing/waiting", "order on", "playing/order", check = both(plays("A"), order_is("B C", true))},
+    {"playing/waiting", "order off", "playing/waiting", check = plays("A", "C")},
+    {"playing/waiting", "chain link", "playing", check = scene_plays},
+    {"playing/waiting", "recall", "playing", check = scene_plays},
+    {"playing/order", "tap playing", "playing", check = both(plays("A"), order_is("B C", false))},
+    {"playing/order", "tap another", "playing/waiting", check = both(plays("A", "B"), order_is("B C", false))},
+    {"playing/order", "a bar", "playing/order", check = plays("B")},
+    {"playing/order", "stop", "stopped/order", check = plays("A")},
+    {"playing/order", "start", "playing/order", check = plays("B")},
+    {"playing/order", "set_order", "playing/order", check = both(plays("A"), order_is("C B", true))},
+    {"playing/order", "order on", "playing/order", check = plays("A")},
+    {"playing/order", "order off", "playing", check = plays("A")},
+    {"playing/order", "chain link", "playing", check = scene_plays},
+    {"playing/order", "recall", "playing", check = scene_plays},
+  },
+  impossible = {
+    {"stopped", "tap waiting", NO_WAIT},
+    {"stopped/order", "tap waiting", NO_WAIT},
+    {"playing", "tap waiting", "no letter waits in this state: only a tap of another letter while the patterns play"
+      .. " makes one wait (switch)"},
+    {"playing/order", "tap waiting", ORDER_WAIT},
+    {"stopped", "chain link", NO_CHAIN},
+    {"stopped/order", "chain link", NO_CHAIN},
+  },
+})
+
 end
