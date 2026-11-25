@@ -1222,7 +1222,16 @@ test("a randomize's undo in move puts back each step's value A, so a later tap i
     if S.patterns[1][step] > 0 and step ~= 5 then turned_on = turned_on or step end
   end
   assert_true(turned_on ~= nil and seq.step_attr(1, turned_on, "va") ~= nil, "a step turned on, with a value A")
-  assert_true(mutation.undo(), "undone")
+  local moved, sets = 0, 0
+  for step = 1, S.constants.PATTERN_LENGTH do
+    if seq.step_attr(1, step, "va") ~= (step == 5 and 4 or nil) then moved = moved + 1 end
+  end
+  local set_step_attr = seq.set_step_attr
+  seq.set_step_attr = function(...) sets = sets + 1; return set_step_attr(...) end
+  local undone = mutation.undo()
+  seq.set_step_attr = set_step_attr
+  assert_true(undone, "undone")
+  assert_equal(sets, moved, "the undo sets value A only where it moved")
   for step = 1, S.constants.PATTERN_LENGTH do
     assert_equal(S.patterns[1][step], 0, "step " .. step .. " off again")
     assert_equal(seq.step_attr(1, step, "va"), step == 5 and 4 or nil, "step " .. step .. "'s value A as it was")

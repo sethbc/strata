@@ -38,7 +38,8 @@ return function(S)
   -- section, voice (nil off a voice's page), values = {[param_id] = the
   -- value before the randomize}, ids = the values' ids in the order the
   -- randomize set them, pattern = {voice, steps, values_a} (a pattern
-  -- spec's old steps and their values A) or nil, until_time = util.time() at which it expires}, or nil; 3.9
+  -- spec's old steps and their values A) or nil, until_time = util.time()
+  -- at which it expires}, or nil; 3.9
   -- (#922, #927) adds three holds: patterns = {[voice] = levels} and steps =
   -- {[voice] = {[step] = attributes}} (a chain start's, hold_patterns; its
   -- per-voice chain keys in values and ids), sequence = {n, values} (a
@@ -375,8 +376,12 @@ return function(S)
       if undo.pattern then
         local pattern = undo.pattern
         S.lib.sequencer.replace_pattern(pattern.voice, pattern.steps)
+        -- only the steps whose value A moved: each set redraws the grids
         for step in ipairs(pattern.steps) do
-          S.lib.sequencer.set_step_attr(pattern.voice, step, "va", pattern.values_a[step])
+          local value_a = pattern.values_a[step]
+          if S.lib.sequencer.step_attr(pattern.voice, step, "va") ~= value_a then
+            S.lib.sequencer.set_step_attr(pattern.voice, step, "va", value_a)
+          end
         end
       end
       if undo.patterns then

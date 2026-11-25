@@ -922,11 +922,8 @@ end
 
 local function map_set()
   local id = moved_param()
-  norns.pmap.data[id] = {dev = 1, ch = 1, cc = 40, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1, echo = false,
-    value = 0, accum = false}
-  norns.pmap.rev[1] = norns.pmap.rev[1] or {}
-  norns.pmap.rev[1][1] = norns.pmap.rev[1][1] or {}
-  norns.pmap.rev[1][1][40] = id
+  norns.pmap.new(id)
+  norns.pmap.assign(id, 1, 1, 40)
   norns.menu_midi_event({0xb0, 40, OSC_SET_CC}, 1)
 end
 
