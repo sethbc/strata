@@ -346,8 +346,10 @@ end)
 
 -- The plan's ruling 27: 3.8's package 3a measured the high tier's reverb
 -- freeze and cut it (its level and its tail did not hold within 1 dB), so
--- the reverb is offered no freeze on either tier and has no record, param
--- or command: 4a's and 4b's reverb freeze paths read offered("reverb")
+-- Lua offers the reverb no freeze on either tier and has no record or
+-- param for it: 4a's and 4b's reverb freeze paths read offered("reverb").
+-- 3.9's engine has the freeze (setReverbFreeze, #819); its Lua side, which
+-- changes this test, is the reverb freeze's second package
 test("the reverb is offered no freeze on either tier (the freeze is cut from 3.8)", function()
   for _, tier in ipairs({"standard", "high"}) do
     local context, S, fx_hold = loaded()
