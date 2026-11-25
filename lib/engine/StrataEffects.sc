@@ -3,7 +3,8 @@
 // it filters before the effects), the delay and the reverb as returns at
 // their levels, the master sum and output, their
 // commands (setFilter, setReverb, setMasterDrift, setBypass, setShimmer; the
-// delay's line, def and setDelay are in StrataDelay.sc), 3.8's shimmer
+// delay's line, def and setDelay are in StrataDelay.sc; the FDN's lines and
+// setReverbFreeze in StrataReverb.sc), 3.8's shimmer
 // (shimmerShift, its four rings, the reverbs' loops) and the chain at the
 // tail of the engine group. The bypass frees the delay or the reverb and
 // re-creates it when lifted. See docs/notes/engine/effects.md and
@@ -54,6 +55,8 @@
         state[\bypassed] = IdentityDictionary[\delay -> false, \reverb -> false];
         state[\pendingFrees] = IdentityDictionary.new;
         this.allocDelayLine;
+        // the high tier's reverb lines (StrataReverb.sc), after the tier is set
+        this.allocReverbLines;
         // shimmer's four mono rings (3.8 design §7.4): the delay's left and
         // right, the reverb's left and right. Ordinary RAM (256 KB,
         // fixedBufferBytes counts them), allocated once: bufnums never change
@@ -275,10 +278,13 @@
         // loop (shimmerLoop, on the reverb's two rings shiftL and shiftR,
         // times shimmer 0-1, lagged fxMixLag; shimmerRatio 0.5-4) back into
         // FreeVerb2's input; an exact 0 at shimmer 0, so the def is the one
-        // before, bit for bit. The send and the output pass zeroBadValues
+        // before, bit for bit. The send and the output pass zeroBadValues.
+        // frozen does nothing (3.9: the freeze is the FDN's alone); it is a
+        // control so both reverb defs keep the same ones (the kept defaults
+        // are read from this def)
         SynthDef(\strataReverb, {
             arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0,
-                shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2;
+                shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2, frozen=0;
             var sent = ((In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
                 * this.liftFade(fadeIn)).collect({ arg channel; this.zeroBadValues(channel) });
             var sig = sent + LocalIn.ar(2);
@@ -290,9 +296,9 @@
 
         // The high tier's reverb, a feedback delay network of core UGens, with
         // the same input (through liftFade), controls and return as
-        // \strataReverb: four allpass diffusers per channel, eight DelayL
-        // lines (fdnLineSeconds, scaled by size; the LocalIn/LocalOut block
-        // is taken off each) mixed by a Householder matrix (lossless), each
+        // \strataReverb: four allpass diffusers per channel, eight lines
+        // (fdnLineSeconds, scaled by size; the LocalIn/LocalOut block is
+        // taken off each) mixed by a Householder matrix (lossless), each
         // damped by a OnePole (damp, as FreeVerb's per pass) and fed back at
         // a gain that gives FreeVerb's decay per second at size (0.7 + 0.28 x
         // size per 1378 samples, FreeVerb's mean comb). Two lines' lengths
@@ -300,35 +306,57 @@
         // are tapped from alternate lines. Every delay is sized by a constant.
         // 3.8's shimmer loop (as \strataReverb's) takes channels 8 and 9 of
         // its one LocalIn, widened to ten, and enters before the diffusers;
-        // the send and the output pass zeroBadValues
+        // the send and the output pass zeroBadValues.
+        // 3.9's lines and freeze (#819; StrataReverb.sc,
+        // docs/notes/engine/reverb.md): each line is two buffers from lineBuf
+        // (which every Synth(\strataReverbFDN) passes, since a bufnum left at
+        // 0 is buffer 0), read on the same time by a BufDelayL (interpolated)
+        // and a BufDelayN (whole samples). frozen (0 or 1): hold, a linear
+        // ramp over reverbFreezeSeconds that reaches 1 exactly, closes the
+        // input after the diffusers (so shimmer's loop too), crossfades the
+        // loop to the whole-sample reads with no damping and takes every
+        // line's gain to the max of hold (exactly 1: the matrix is lossless);
+        // the taps keep the interpolated reads at the live damping, so damp
+        // shades a frozen tail without touching its loop. The size and the
+        // two drifts are held while frozen (Gate before the lag;
+        // fdnHeldDrift glides back after). At frozen 0 every new product is
+        // times an exact 1 or plus an exact 0: 3.8.0's def, bit for bit
         SynthDef(\strataReverbFDN, {
             arg in, delayIn, out, mix=0.43, size=0.8, damp=0.5, delayToReverb=1, fadeIn=0,
-                shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2;
-            var room = size.clip(0, 1).lag(0.1), damping = damp.clip(0, 1).lag(0.1) * 0.4;
+                shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2, lineBuf=0, frozen=0;
+            var hold = Slew.kr(frozen.clip(0, 1), this.reverbFreezeRate, this.reverbFreezeRate);
+            var open = 1 - (frozen.clip(0, 1) > 0);
+            var room = Gate.kr(size.clip(0, 1), open).lag(0.1), damping = damp.clip(0, 1).lag(0.1) * 0.4;
             var sig = ((In.ar(in, 2) + (In.ar(delayIn, 2) * delayToReverb.clip(0, 1).lag(this.fxMixLag)))
                 * this.liftFade(fadeIn)).collect({ arg channel; this.zeroBadValues(channel) });
             var feedbackBase = 0.7 + (0.28 * room), reference = 1378 * SampleDur.ir;
-            var drift = [0, 0, LFNoise1.kr(0.31) * 0.0006, 0, 0, 0, LFNoise1.kr(0.43) * 0.0005, 0];
+            var drift = [0, 0, this.fdnHeldDrift(LFNoise1.kr(0.31) * 0.0006, open), 0, 0, 0,
+                this.fdnHeldDrift(LFNoise1.kr(0.43) * 0.0005, open), 0];
             var lengths = this.fdnLineSeconds * (0.6 + (0.4 * room)) + drift;
-            var diffused, feedback, lines, sum, wet;
+            var diffused, feedback, lines, loop, taps, sum, wet;
             feedback = LocalIn.ar(10);
             diffused = (sig + feedback.copyRange(8, 9)).collect({ arg channel, side;
                 this.fdnDiffuserSeconds[side].inject(channel, { arg each, time;
                     AllpassN.ar(each, time, time, time * 19)
-                })
+                }) * (1 - hold)
             });
             lines = 8.collect({ arg index;
-                // each line's own maximum (its size-1 length plus the drift's
-                // room), so a short line never takes the longest one's memory
-                var line = DelayL.ar((diffused[index % 2] * 0.25) + feedback[index], this.fdnLineSeconds[index] + 0.002,
-                    lengths[index] - ControlDur.ir);
-                OnePole.ar(line, damping)
+                // each line read twice on the same time, from its two buffers
+                // (lineBuf + 2 x index and the next: StrataReverb.sc): the
+                // loop's read and damping, and the tap's
+                var input = (diffused[index % 2] * 0.25) + feedback[index], time = lengths[index] - ControlDur.ir;
+                var interpolated = BufDelayL.ar(lineBuf + (2 * index), input, time);
+                var whole = BufDelayN.ar(lineBuf + (2 * index) + 1, input, time);
+                [OnePole.ar(interpolated + ((whole - interpolated) * hold), damping * (1 - hold)),
+                    OnePole.ar(interpolated, damping)]
             });
-            sum = lines.sum * (2 / 8);
-            wet = [lines[0] + lines[2] + lines[4] + lines[6], lines[1] + lines[3] + lines[5] + lines[7]]
+            loop = lines.collect({ arg pair; pair[0] });
+            taps = lines.collect({ arg pair; pair[1] });
+            sum = loop.sum * (2 / 8);
+            wet = [taps[0] + taps[2] + taps[4] + taps[6], taps[1] + taps[3] + taps[5] + taps[7]]
                 .collect({ arg channel; this.zeroBadValues(channel) });
-            LocalOut.ar(lines.collect({ arg line, index;
-                (line - sum) * (feedbackBase ** (lengths[index] / reference))
+            LocalOut.ar(loop.collect({ arg line, index;
+                (line - sum) * (feedbackBase ** (lengths[index] / reference)).max(hold)
             }) ++ this.shimmerLoop(wet, sig, [shiftL, shiftR], shimmer.clip(0, 1).lag(this.fxMixLag), shimmerRatio.clip(0.5, 4)));
             Out.ar(out, wet * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
@@ -392,6 +420,9 @@
 
         this.addDelayCommands;
 
+        // setReverbFreeze (StrataReverb.sc), called here, not inside a function
+        this.addReverbCommands;
+
         // msg: delayAmount, reverbAmount (0-1), ratio (0.5-4): the delay's
         // feedback blend and the reverb's loop, at one interval (design
         // §7.4). Kept for a bypassed effect's next node (all three, both
@@ -427,9 +458,10 @@
     // its level to 0 (the node's mix, so its return fades out over its lag
     // and nothing jumps), then frees the node after bypassFadeTime: its CPU
     // and its graph's pool memory come back (about 24 KB for the delay,
-    // 125 KB for \strataReverb, 229 KB for the FDN; the delay's line and
-    // the shimmer rings are buffers, kept: the free's bundle empties them,
-    // emptyDelayLine, emptyShimmerRings). Lifting it
+    // 125 KB for \strataReverb, 104 KB for the FDN; the delay's line, the
+    // FDN's lines and the shimmer rings are buffers, kept: the free's
+    // bundle empties them, emptyDelayLine, emptyReverbLines,
+    // emptyShimmerRings, and drops a kept freeze). Lifting it
     // inside that wait cancels the free and restores the level; lifting it
     // later creates the node again in its place, from the kept controls at
     // level 0 and with fadeIn 1 (its input rises over fxMixLag, so the new
@@ -454,7 +486,7 @@
                     synths.removeAt(key) !? { arg synth;
                         context.server.makeBundle(nil, {
                             synth.free;
-                            if (key == \delay) { this.emptyDelayLine };
+                            if (key == \delay) { this.emptyDelayLine } { this.emptyReverbLines };
                             this.emptyShimmerRings(key);
                         });
                     };
@@ -474,18 +506,18 @@
         };
     }
 
-    // The reverb node for the tier (high: the FDN), on the filtered reverb
-    // send, the delay's return and the reverb's two shimmer rings
-    // (shimmerRingsFor), writing reverbBus, from the kept controls (mix:
-    // that level instead, when given; fadeIn 1: its input fades in,
-    // liftFade)
+    // The reverb node for the tier (high: the FDN, on its lines), on the
+    // filtered reverb send, the delay's return and the reverb's two shimmer
+    // rings (shimmerRingsFor), writing reverbBus, from the kept controls,
+    // frozen among them (mix: that level instead, when given; fadeIn 1: its
+    // input fades in, liftFade)
     startReverb { arg target, addAction, mix, fadeIn = 0;
         var controls = areaState[\effects][\controls][\reverb], rings = this.shimmerRingsFor(\reverb);
         var args = [\in, this.mixBus(\reverbSendPost), \delayIn, delayBus, \out, reverbBus,
-            \shiftL, rings[0], \shiftR, rings[1],
+            \shiftL, rings[0], \shiftR, rings[1], \lineBuf, this.reverbLineBuf,
             \mix, mix ? controls[\mix], \size, controls[\size], \damp, controls[\damp],
             \delayToReverb, controls[\delayToReverb], \shimmer, controls[\shimmer],
-            \shimmerRatio, controls[\shimmerRatio], \fadeIn, fadeIn];
+            \shimmerRatio, controls[\shimmerRatio], \frozen, controls[\frozen], \fadeIn, fadeIn];
         if (tier == \high) {
             synths[\reverb] = Synth(\strataReverbFDN, args, target, addAction);
         } {
@@ -507,7 +539,7 @@
         state[\controls][\delay] = this.effectDefaults(\strataDelay, [\time, \feedback, \mix, \pingPong, \frozen,
             \shimmer, \shimmerRatio]);
         state[\controls][\reverb] = this.effectDefaults(\strataReverb, [\mix, \size, \damp, \delayToReverb,
-            \shimmer, \shimmerRatio]);
+            \shimmer, \shimmerRatio, \frozen]);
 
         // The chain at the tail of the engine group, in signal order: the
         // three master filters (dry, delay send, reverb send), the delay, the
@@ -533,10 +565,12 @@
         });
     }
 
-    // The chain's buses, the delay's line and shimmer's rings (every area's
-    // nodes are gone by now; the rings stay listed, freed)
+    // The chain's buses, the delay's line, the FDN's lines and shimmer's
+    // rings (every area's nodes are gone by now; the rings stay listed,
+    // freed)
     freeEffects {
         this.freeDelayLine;
+        this.freeReverbLines;
         (areaState[\effects][\shimmerRings] ? []).do({ arg buffer; buffer.free });
         mainBus.free;
         filterBus.free;

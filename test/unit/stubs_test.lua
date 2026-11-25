@@ -2143,6 +2143,22 @@ test("the stub rejects seqGate 2 and voiceMute 2", function()
   assert_equal(engine_spec.enumerations.voiceMute[2], 1, "voiceMute's enumeration, from the engine source")
 end)
 
+-- The two freezes take 0 or 1 (fastModIndicesValid in StrataDelay.sc and
+-- StrataReverb.sc ignores another value with one line), so the stub
+-- refuses what the engine would ignore (3.9: setReverbFreeze beside
+-- setDelayFreeze, #819)
+test("the stub refuses a freeze other than 0 or 1, the delay's and the reverb's", function()
+  local context = load_strata()
+  for _, command in ipairs({"setDelayFreeze", "setReverbFreeze"}) do
+    assert_stub_refuses("frozen 2 is outside 0..1", command, 2)
+    assert_stub_refuses("frozen -1 is outside 0..1", command, -1)
+    local calls = #context.engine_calls
+    engine[command](1)
+    engine[command](0)
+    assert_equal(#context.engine_calls, calls + 2, command .. ": 0 and 1 are taken")
+  end
+end)
+
 -- lua/core/pmap.lua and the MIDI handler of lua/core/menu/params.lua (#602)
 test("the stub's MIDI map is norns' pmap, and the menu's CC handler sets a mapped param by its type", function()
   load_strata()

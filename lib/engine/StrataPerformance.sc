@@ -244,13 +244,15 @@
     // Bytes the high tier allocates for slots of `seconds`: 8 slots x 2 mono
     // buffers, every voice's 2-channel ring and 2-channel copy ring (the
     // rings area's allocRings), the input ring (highHistorySeconds +
-    // ringGuardSeconds + 1) and the fixed buffers (fixedBufferBytes), 4-byte
-    // samples
+    // ringGuardSeconds + 1), the fixed buffers (fixedBufferBytes) and 3.9's
+    // FDN lines (two buffers of each of fdnLineFrames, StrataReverb.sc: the
+    // high tier's alone, 294912 bytes whatever the rate), 4-byte samples
     highMemoryBytes { arg seconds, sampleRate;
         ^(numBuffers * 2 * seconds * sampleRate * 4)
             + (numVoices * 2 * 2 * this.ringSeconds * sampleRate * 4)
             + (2 * (this.highHistorySeconds + this.ringGuardSeconds + 1) * sampleRate * 4)
             + this.fixedBufferBytes(sampleRate)
+            + (2 * this.fdnLineFrames.sum * 4)
     }
 
     // The sizes of 3.8's fixed buffer sets, ordinary RAM on both tiers,

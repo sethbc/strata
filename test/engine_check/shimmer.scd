@@ -211,13 +211,14 @@ bandsField = { arg values, field; values !? { values[(numWindows * fields) + fie
 
 // The one place this area starts a node of a delay or reverb def: on its
 // own buses (delayIn: a silent bus), its own two shimmer rings (shiftL,
-// shiftR: a ring left out is buffer 0, which the node would write) and,
-// for a delay, its own line (bufL, bufR); at level 1 unless controls say
-// otherwise
+// shiftR: a ring left out is buffer 0, which the node would write), for a
+// delay its own line (bufL, bufR) and for the FDN its own sixteen line
+// buffers (lineBuf, the first: 3.9; 0 for another def, which has no such
+// control); at level 1 unless controls say otherwise
 startCheckNode = { arg def, inBus, outBus, silent, buffers, controls, target;
     var line = if (delayDefs.includes(def)) { [\bufL, buffers[\line][0], \bufR, buffers[\line][1]] } { [] };
     Synth(def, [\in, inBus, \delayIn, silent, \out, outBus, \shiftL, buffers[\rings][0], \shiftR, buffers[\rings][1],
-        \mix, 1] ++ line ++ controls, target, \addToTail)
+        \lineBuf, buffers[\lines].first ? 0, \mix, 1] ++ line ++ controls, target, \addToTail)
 };
 
 // Run cases at once, in one group created in one bundle, for seconds of
@@ -241,7 +242,8 @@ runCases = { arg cases, seconds;
             resultBus: Bus.control(server, (numWindows * fields) + bandsFields),
             controlBuses: List.new,
             buffers: (rings: 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }),
-                line: if (delayDefs.includes(case[\def])) { 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) }) } { [] }))
+                line: if (delayDefs.includes(case[\def])) { 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) }) } { [] },
+                lines: if (case[\def] == \strataReverbFDN) { engine.newReverbLines } { [] }))
     });
     // each input's noise on a generator of its own: past the server's count
     // RandID falls back to the shared default generator, and the seeding
@@ -299,7 +301,7 @@ runCases = { arg cases, seconds;
         if (cases[index][\inputFrom].isNil) { each[\inBus].free };
         [each[\outBus], each[\resultBus]].do(_.free);
         each[\controlBuses].do(_.free);
-        (each[\buffers][\rings] ++ each[\buffers][\line]).do(_.free);
+        (each[\buffers][\rings] ++ each[\buffers][\line] ++ each[\buffers][\lines]).do(_.free);
     });
     silent.free; seedBus.free; server.sync;
     results

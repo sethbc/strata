@@ -742,8 +742,10 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     -- effect 0 delay, 1 reverb (the engine ignores others; Lua never sends them)
     setBypass = function(args) return range("effect", args[1], 0, 1) or range("bypassed", args[2], 0, 1) end,
     -- 3.8's delay freeze and clear (design §7.2, §7.3): frozen 0 or 1 (the
-    -- engine ignores another, with one line); the clear takes no argument
+    -- engine ignores another, with one line); the clear takes no argument;
+    -- 3.9's reverb freeze takes 0 or 1 as the delay's does (#819)
     setDelayFreeze = function(args) return range("frozen", args[1], 0, 1) end,
+    setReverbFreeze = function(args) return range("frozen", args[1], 0, 1) end,
     clearDelay = none,
     -- 3.8's shimmer (design §7.4): the amounts 0-1 and the ratio 0.5-4 are the
     -- defs' clips (argument_limits), a non-finite value the engine's line

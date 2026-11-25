@@ -110,15 +110,17 @@ check.((engine.tryPerform(\delayLine) !? { arg line; line.collect(_.numFrames).s
     "performance: the delay's lines are what the effects area allocated (% frames)".format(
         engine.tryPerform(\delayLine) !? { arg line; line.collect(_.numFrames) }));
 // The memory each length needs: slots, every voice's ring and copy ring
-// (2 x 2 mono buffers of 4 s), the input ring and the fixed buffers
+// (2 x 2 mono buffers of 4 s), the input ring, the fixed buffers and 3.9's
+// FDN lines (sixteen buffers, 73728 frames: 294912 bytes, the high tier's
+// alone)
 check.(engine.highMemoryBytes(60, 48000) == ((8 * 2 * 60 * 48000 * 4) + (7 * 2 * 2 * 4 * 48000 * 4)
-    + (2 * (60 + 4 + 1) * 48000 * 4) + 13733888), "performance: the high tier's memory per length (got %)".format(engine.highMemoryBytes(60, 48000)));
+    + (2 * (60 + 4 + 1) * 48000 * 4) + 13733888 + 294912), "performance: the high tier's memory per length (got %)".format(engine.highMemoryBytes(60, 48000)));
 // ... its voices' term is what the rings area allocates: every voice ring
 // and copy ring (scaled to 48 kHz)
 check.(((engine.areaState[\rings][\voiceL] ++ engine.areaState[\rings][\voiceR] ++ engine.areaState[\rings][\copyL]
         ++ engine.areaState[\rings][\copyR]).collect(_.numFrames).sum * 4 * 48000 / server.sampleRate)
     == (engine.highMemoryBytes(16, 48000) - (8 * 2 * 16 * 48000 * 4) - (2 * (60 + 4 + 1) * 48000 * 4)
-        - (engine.tryPerform(\fixedBufferBytes, 48000) ? 0)),
+        - (engine.tryPerform(\fixedBufferBytes, 48000) ? 0) - 294912),
     "performance: highMemoryBytes counts every voice ring and copy ring the rings area allocates");
 
 // The files it reads
