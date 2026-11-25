@@ -505,16 +505,39 @@ return function(S)
     if next(held) == nil then held_values[voice_idx] = nil end
   end
 
+  -- The step's own level on a target (the key of lane A or B, whichever
+  -- names it now), or nil
+  function values.step_level(voice_idx, step, target)
+    local attrs = S.pattern_steps[voice_idx][step] or {}
+    for _, lane in ipairs({"a", "b"}) do
+      if S.lib.lanes.target(voice_idx, lane) == target then return attrs[S.lib.lanes.MOVE.step_key[lane]] end
+    end
+    return nil
+  end
+
+  -- 2b: the pitch level a played step stands on, which its notes count
+  -- from: the step's own pitch value, unless a MIDI key down keeps the
+  -- voice's own note (the value gives way: values.take sets nothing), else
+  -- the held one; nil with neither. values.midi_keeps_own is
+  -- other_owns_slot_1, set where that is defined
+  function values.pitch_level(voice_idx, step)
+    local level = values.step_level(voice_idx, step, "pitch")
+    if level and not values.midi_keeps_own(voice_idx) then return level end
+    return M.held_value(voice_idx, "pitch")
+  end
+
   -- A played step's values (its first hit): each of lanes A and B whose
   -- target and step key are set replaces the voice's held value on that
-  -- target. Returns the params they set, param id -> value, to be sent
-  -- where no lock of the step holds them
+  -- target, but for a pitch value while a MIDI key down keeps the voice's
+  -- own note (2b: it gives way). Returns the params they set, param id ->
+  -- value, to be sent where no lock of the step holds them
   function values.take(voice_idx, step)
     local attrs = S.pattern_steps[voice_idx][step] or {}
     local fresh = {}
     for _, lane in ipairs({"a", "b"}) do
       local target = S.lib.lanes.target(voice_idx, lane)
       local level = target and attrs[S.lib.lanes.MOVE.step_key[lane]]
+      if level and target == "pitch" and values.midi_keeps_own(voice_idx) then level = nil end
       local param_id, value
       if level then param_id, value = S.lib.lanes.value(voice_idx, target, level) end
       if param_id then
@@ -696,6 +719,22 @@ return function(S)
     end
     return false
   end
+  values.midi_keeps_own = other_owns_slot_1
+
+  -- 2b: the param a note transposes (note_param) and its value at the
+  -- voice's own pitch moved by a whole number of degrees, -SEQ.max_degree
+  -- to SEQ.max_degree (degree_semitones: the tuning's steps), clamped to
+  -- the param's range, as a step's note sets it; nil out of range or not
+  -- finite
+  function M.note_value(voice_idx, degrees)
+    local semitones = M.degree_semitones(voice_idx, degrees)
+    if semitones == nil then return nil end
+    local note_id = note_param(voice_idx)
+    local low, high = param_range(note_id)
+    local value = params:get(note_id) * 2 ^ (semitones / SEQ.semitones)
+    if not finite(value) then return nil end
+    return note_id, util.clamp(value, low, high)
+  end
 
   -- Note k of a chord for S.lib.notes.play. own: the note may be the
   -- voice's own, quiet (the voices output starts and accents the voice
@@ -734,6 +773,8 @@ return function(S)
   local function end_note_override(voice_idx, note_id, lock_value)
     if lock_value ~= nil then
       set_override(voice_idx, note_id, lock_value)
+    elseif values.on_param(voice_idx, note_id) ~= nil then
+      values.release(voice_idx, note_id)  -- 2b: a held pitch value plays again
     elseif overrides[voice_idx] and overrides[voice_idx][note_id] then
       clear_override(voice_idx, note_id)
     end
@@ -744,9 +785,12 @@ return function(S)
   -- calls this when its note lands on slot 1). The step's note override
   -- ends at once, as for a first note that is not the voice's own, so MIDI's
   -- pitch plays now rather than at the next step. Nothing when the step's
-  -- first note was not the voice's own or still is
+  -- first note was not the voice's own or still is. 2b: a held pitch value
+  -- gives way first (it ends; the next hit that sets one brings it back)
   function M.own_note_taken(voice_idx)
-    local chord = valid_voice(voice_idx) and chords[voice_idx]
+    if not valid_voice(voice_idx) then return end
+    M.end_held_value(voice_idx, "pitch")
+    local chord = chords[voice_idx]
     if not (chord and chord.own) or S.lib.notes.find(voice_idx, SEQ.note_owner, 1) == 1 then return end
     chord.own = false
     end_note_override(voice_idx, chord.note_id, chord.lock_value)
@@ -762,7 +806,9 @@ return function(S)
   -- without notes). Worked out once per step, at its begin, so the hits'
   -- pitches and what the voices output plays come from the one chord
   local stepping = {}  -- per voice: the inputs of the step being begun, until its first hit's apply_step
-  local function step_inputs(voice_idx, locks, semitones)
+  -- 2b: pitch_level, the pitch value the step stands on (values.pitch_level),
+  -- gives pitch_value, its value on the note param, or nil
+  local function step_inputs(voice_idx, locks, semitones, pitch_level)
     locks = locks or {}
     local wanted, lock_ids = {}, {}  -- param id -> value: the locks, then the note
     for _, key in ipairs(SEQ.lock_keys) do
@@ -772,11 +818,16 @@ return function(S)
         lock_ids[#lock_ids + 1] = param_id
       end
     end
-    return {locks = locks, wanted = wanted, lock_ids = lock_ids, chord = step_chord(voice_idx, semitones, wanted)}
+    local pitch_value
+    if pitch_level then pitch_value = select(2, S.lib.lanes.value(voice_idx, "pitch", pitch_level)) end
+    return {locks = locks, wanted = wanted, lock_ids = lock_ids, chord = step_chord(voice_idx, semitones, wanted),
+      pitch_value = pitch_value}
   end
 
   -- A step's absolute pitches (fractional MIDI notes): its chord's, else
-  -- the voice's own pitch, both after the step's pitch lock. On an input
+  -- the voice's own pitch (a lock on the note param, else, 2b, the pitch
+  -- value the step stands on, else the stored value), both after the
+  -- step's pitch lock. On an input
   -- voice the lock is on the note's own param, so it is in the chord's base
   -- already; on a synth or buffer voice it is on v<i>_grain_pitch (a rate
   -- ratio), and every pitch moves by the lock's distance from the standing
@@ -790,7 +841,7 @@ return function(S)
         if chord.pitches[k] ~= nil then pitches[#pitches + 1] = chord.pitches[k] end
       end
     else
-      pitches[1] = value_note(voice_idx, inputs.wanted[note_id] or params:get(note_id))
+      pitches[1] = value_note(voice_idx, inputs.wanted[note_id] or inputs.pitch_value or params:get(note_id))
     end
     local pitch_id = voice_param(voice_idx, SEQ.lock_params.pitch)
     local lock = inputs.wanted[pitch_id]
@@ -813,7 +864,8 @@ return function(S)
   local function apply_step(voice_idx, event)
     -- the step's locks, wanted values and chord, worked out once at the
     -- step's begin (begin_voice_step: its events' pitches come from them)
-    local step = stepping[voice_idx] or step_inputs(voice_idx, event.locks, event.semitones)
+    local step = stepping[voice_idx]
+      or step_inputs(voice_idx, event.locks, event.semitones, values.pitch_level(voice_idx, event.step))
     stepping[voice_idx] = nil
     local locks, wanted, lock_ids, chord = step.locks, step.wanted, step.lock_ids, step.chord
     local note_id = chord and chord.note_id
@@ -1067,11 +1119,19 @@ return function(S)
   end
 
   -- The step's notes through the global scale, once per step (each hit's
-  -- event carries a copy), or nil
-  local function step_semitones(voice_idx, attrs)
+  -- event carries a copy), or nil. 2b: counted from the pitch value the
+  -- step stands on (pitch_level; 8 is the voice's own pitch), the sum
+  -- clipped to -SEQ.max_degree..SEQ.max_degree; on an input voice a pitch
+  -- lock is on the note's own param and wins for its step, so the value
+  -- adds nothing there
+  local function step_semitones(voice_idx, attrs, pitch_level)
     if not attrs.notes then return nil end
+    local offset = pitch_level and pitch_level - S.lib.lanes.MOVE.own_pitch_level or 0
+    if attrs.pitch ~= nil and note_param(voice_idx) == voice_param(voice_idx, SEQ.lock_params.pitch) then offset = 0 end
     local semitones = {}
-    for index, degree in ipairs(attrs.notes) do semitones[index] = M.degree_semitones(voice_idx, degree) end
+    for index, degree in ipairs(attrs.notes) do
+      semitones[index] = M.degree_semitones(voice_idx, util.clamp(degree + offset, -SEQ.max_degree, SEQ.max_degree))
+    end
     return semitones
   end
 
@@ -1506,9 +1566,10 @@ return function(S)
       local step_beats = division + (state.tick % 2 == 0 and swing or -swing)
       local step_seconds = step_beats * S.lib.params_setup.beat_seconds_now()
       hits = math.min(attrs.ratchet or 1, math.max(1, math.floor(step_seconds / SEQ.min_ratchet_seconds + 1e-9)))
-      spacing, semitones = step_beats / hits, step_semitones(voice_idx, attrs)
+      local pitch_level = values.pitch_level(voice_idx, step)
+      spacing, semitones = step_beats / hits, step_semitones(voice_idx, attrs, pitch_level)
       -- the chord the voices output plays and the pitches every hit carries, from one reckoning
-      local inputs = step_inputs(voice_idx, step_locks(attrs), semitones)
+      local inputs = step_inputs(voice_idx, step_locks(attrs), semitones, pitch_level)
       pitches = step_pitches(voice_idx, inputs)
       stepping[voice_idx] = inputs
       local was_active = S.voices[voice_idx].active

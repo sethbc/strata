@@ -21,7 +21,7 @@ return function(S)
   M.TARGETS = {"position", "pitch", "size", "cutoff"}
 
   -- The lanes' params, step keys and first options; the param each target
-  -- moves (pitch: package 2b's, through the note path); a move hit's light
+  -- moves (pitch: the note path's, see M.value); a move hit's light
   -- with no value A; the flash of a filter opened by choose_target
   local MOVE = {
     param = {a = "seq_move_a", b = "seq_move_b"},
@@ -29,6 +29,7 @@ return function(S)
     first = {a = "auto", b = "off"},
     moves = {position = "buf_pos", size = "grain_size", cutoff = "filter_freq"},
     no_value_light = 4,
+    own_pitch_level = 8,  -- 2b: a pitch value of 8 is the voice's own pitch; level - 8 are its degrees
     filter_open = 1,
     filter_flash = "filter on",
   }
@@ -69,11 +70,15 @@ return function(S)
   -- and its value, the level (level - 1) / 14 of the way along. Position:
   -- v<i>_buf_pos, which is a fraction of the voice's loop (0 its start, 1
   -- its end; docs/notes/engine/loops.md); size and cutoff: the param's own
-  -- scale (its controlspec's map). nil for pitch (2b's), another target
-  -- or a level out of range
+  -- scale (its controlspec's map). Pitch (2b): level - 8 degrees from the
+  -- voice's own pitch, on the param a step's note moves for its source (a
+  -- synth voice's freq, a buffer voice's rate, an input voice's grain
+  -- pitch: S.lib.sequencer.note_value). nil for another target or a level
+  -- out of range
   function M.value(voice_idx, target, level)
-    if not valid_voice(voice_idx) or MOVE.moves[target] == nil then return nil end
+    if not valid_voice(voice_idx) or (MOVE.moves[target] == nil and target ~= "pitch") then return nil end
     if type(level) ~= "number" or level ~= math.floor(level) or level < 1 or level > MAX_STEP_LEVEL then return nil end
+    if target == "pitch" then return S.lib.sequencer.note_value(voice_idx, level - MOVE.own_pitch_level) end
     local fraction = (level - 1) / (MAX_STEP_LEVEL - 1)
     local param_id = voice_param(voice_idx, MOVE.moves[target])
     if target == "position" then return param_id, fraction end
