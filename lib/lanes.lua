@@ -282,9 +282,13 @@ return function(S)
   M.valid_block = valid_block  -- 4a: a stored letter's lanes are held to it (lib/pattern_letters.lua)
 
   -- Every voice's lengths from a (valid) lanes block: a recall's, a chain
-  -- link's (lib/sequencer.lua's load_chain_scene), a chain start's undo
-  function M.apply_block(block)
-    for voice_idx = 1, NUM_VOICES do M.set_lengths(voice_idx, block[voice_idx] or {}) end
+  -- link's (lib/sequencer.lua's load_chain_scene), a chain start's undo;
+  -- but the voices in skip (a set by voice, a recall's: a fade's released
+  -- voices keep theirs, #1050)
+  function M.apply_block(block, skip)
+    for voice_idx = 1, NUM_VOICES do
+      if not (skip and skip[voice_idx]) then M.set_lengths(voice_idx, block[voice_idx] or {}) end
+    end
   end
 
   -- The lanes scene block: per voice its free lanes' lengths, by name;

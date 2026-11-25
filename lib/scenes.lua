@@ -231,7 +231,9 @@ return function(S)
   -- The registered scene blocks (S.registry.scene_blocks: {key, default =
   -- fn(), capture = fn(), validate = fn(value), apply = fn(value), discrete
   -- = true, through_zero = fn(from_value, to_value)}), read at each use,
-  -- after init; a block is data[key] of a scene. apply gets a copy of it;
+  -- after init; a block is data[key] of a scene. apply gets a copy of it,
+  -- and from apply_entries a second argument, skip (#1050): a set by voice
+  -- (often empty) of the voices a block kept by voice leaves as they are;
   -- validate and through_zero get the stored value and must not modify it
   local function scene_blocks()
     return S.registry.scene_blocks
@@ -537,15 +539,16 @@ return function(S)
   end
 
   -- Apply one entry of apply_entries' list. state holds the list's blocks by
-  -- key, the voices whose source changed and the voices due to start. A
-  -- block's apply gets a copy of the scene's value, so a module that
-  -- changes its argument never changes a saved scene
+  -- key, the voices whose source changed, the voices due to start and the
+  -- voices skipped. A block's apply gets a copy of the scene's value, so a
+  -- module that changes its argument never changes a saved scene, and the
+  -- voices skipped (#1050: a block kept by voice leaves theirs alone)
   local function apply_entry(entry, state)
     local voice_idx = entry_voice(entry)
     if entry.voice ~= nil and not voice_idx then return end  -- an entry for no voice
     if entry.kind == "block" then
       local record = state.blocks[entry.key]
-      if record then record.apply(copy_scene_default(entry.value)) end
+      if record then record.apply(copy_scene_default(entry.value), state.skip_voices) end
     elseif entry.key == "active" then
       -- a voice the scene stops is stopped first, so the engine only records
       -- its source switch instead of building a grain synth to release at
@@ -595,7 +598,9 @@ return function(S)
   -- "continuous" applies only those; any other only raises before anything
   -- is applied. opts.skip_voices (3.8, a set by voice: a fade's released
   -- voices, release_voice) drops every entry of those voices first (their
-  -- active, source, type, values, lock and pattern). Redraws are the caller's
+  -- active, source, type, values, lock and pattern), and each block's apply
+  -- is given the set, so a block kept by voice (steps, lanes, variations)
+  -- leaves those voices' parts as they are (#1050). Redraws are the caller's
   local applied_errors = {}  -- the scene-applied hooks' last printed message, by name
   function M.apply_entries(entries, opts)
     local only = opts and opts.only
@@ -616,7 +621,7 @@ return function(S)
       local voice_idx = entry_voice(entry)
       if voice_idx and entry.key ~= "pattern" then last_entry[voice_idx] = index end
     end
-    local state = {blocks = {}, source_changed = {}, type_changed = {}, start_due = {}}
+    local state = {blocks = {}, source_changed = {}, type_changed = {}, start_due = {}, skip_voices = skip_voices}
     for _, record in ipairs(scene_blocks()) do state.blocks[record.key] = record end
 
     -- the flag must not outlive an error in a param action: put it back as

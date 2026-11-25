@@ -303,14 +303,18 @@ return function(S)
   -- patterns, steps and lanes blocks. Redraws are the caller's, as for
   -- every block. 4b (ruling 4b-3): it clears every waiting letter and
   -- order's place, so a recall or a link on the bar of a wait wins,
-  -- whichever runs first
-  function M.apply_block(block)
+  -- whichever runs first. A voice in skip (a set by voice, a recall's: a
+  -- fade's released voices, #1050) keeps its letters, its wait and its
+  -- order's place
+  function M.apply_block(block, skip)
     for voice_idx = 1, NUM_VOICES do
-      live.waiting[voice_idx], live.place[voice_idx] = nil, nil
-      local entry = type(block) == "table" and block[voice_idx]
-      voices[voice_idx] = type(entry) == "table" and copy_of(entry) or fresh_voice()
-      -- an order with no letter is never on (a file's is read as off)
-      if #voices[voice_idx].order == 0 then voices[voice_idx].order_on = false end
+      if not (skip and skip[voice_idx]) then
+        live.waiting[voice_idx], live.place[voice_idx] = nil, nil
+        local entry = type(block) == "table" and block[voice_idx]
+        voices[voice_idx] = type(entry) == "table" and copy_of(entry) or fresh_voice()
+        -- an order with no letter is never on (a file's is read as off)
+        if #voices[voice_idx].order == 0 then voices[voice_idx].order_on = false end
+      end
     end
   end
 

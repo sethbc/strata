@@ -37,7 +37,7 @@ The library has 64 slots, kept in `voices.data` (one library for the device, wha
 - **Save** the voice into a slot (ALT+K3, then a name of up to twelve characters)
 - **Clear** a slot (ALT+K2 held)
 
-A quick ALT+K2 on VOICE within 5 seconds, on any row of that voice, undoes a load or a copy (one made from a grid too): it puts back the voice's sound and leaves its place (its position, pattern, mute and the rest) as it is now. Any edit of the voice's sound ends that undo. A load during a scene fade takes the voice out of the fade: the other voices land on the scene, and the loaded one keeps its new sound. A preset of a type this build does not have loads nothing. A `voices.data` that cannot be read is kept aside as `voices.data.bak` and the library starts empty; a damaged preset in a readable file is left out, and the file is kept aside the same way before the next save leaves it out for good.
+A quick ALT+K2 on VOICE within 5 seconds, on any row of that voice, undoes a load or a copy (one made from a grid too): it puts back the voice's sound and leaves its place (its position, pattern, mute and the rest) as it is now. Any edit of the voice's sound ends that undo. A load during a scene fade takes the voice out of the fade: the other voices land on the scene, and the loaded one keeps its new sound and its whole pattern (its levels, step settings, lane lengths and letters, with a letter waiting for the bar). A preset of a type this build does not have loads nothing. A `voices.data` that cannot be read is kept aside as `voices.data.bak` and the library starts empty; a damaged preset in a readable file is left out, and the file is kept aside the same way before the next save leaves it out for good.
 
 ## Synthesis Parameters
 
