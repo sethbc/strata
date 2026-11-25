@@ -418,7 +418,7 @@ test("a paste ends the pasted voice's step gestures", function()
   assert_equal(S.patterns[2][6], 15, "voice 2's held step takes key 16's level")
   assert_equal(S.patterns[2][16], 0, "and the level key does not toggle")
   steps.press(16, 2, 0); steps.press(6, 2, 0)
-  assert_equal(small.led(6, 3), S.patterns[3][6], "the 16x8 shows the pasted step")
+  assert_equal(small.led(6, 3), math.max(S.patterns[3][6], 1), "the 16x8 shows the pasted step (an empty one at 1: its presses picked voice 3)")
 end)
 
 -- Moved: the 256's "the clipboard is per grid, works on pages 2, 3 and 4
