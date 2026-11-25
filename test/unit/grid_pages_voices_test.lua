@@ -844,4 +844,318 @@ test("a voice's FZ key blinks while its set waits", function()
   end, {{KEY.freeze, 1}})
 end)
 
+
+-- 3.9 (5c, design section 4, The perform side): the page's second side,
+-- a line a voice: MU SO, the letters A-D, OR, LP, R1-R4, PU MV AC, FL
+
+local PERFORM = {mute = 1, solo = 2, first_letter = 3, order = 7, latch = 8, first_roll = 9,
+  pulse = 13, move = 14, accent = 15, fill = 16}
+local LETTER_X = {A = 3, B = 4, C = 5, D = 6}
+local STRIP_LINE, NV = 8, 1
+
+local function perform_side(S, pane)
+  pane.show(S.constants.GRID_PAGES.voices, 2)
+end
+
+-- Each arrangement that shows every key of `needs`, its pane on side 2
+local function each_perform(body, needs)
+  each_arrangement(function(context, S, pane, arrangement)
+    perform_side(S, pane)
+    body(context, S, pane, arrangement)
+  end, needs)
+end
+
+local function roll_x(rate) return PERFORM.first_roll + rate - 1 end
+
+local function every_step_set(S, voice_idx)
+  for step = 1, S.constants.PATTERN_LENGTH do S.lib.sequencer.set_level(voice_idx, step, 15) end
+end
+
+local function mode_index(S, name)
+  for index, mode in ipairs(S.lib.sequencer.SEQ.modes) do
+    if mode == name then return index end
+  end
+  error("no mode " .. name)
+end
+
+test("the lit page key flips to the perform side", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local core, page = S.lib.grid_core, S.constants.GRID_PAGES.voices
+    assert_equal(S.registry.grid_pages[page].sides, 2, "two sides")
+    if arrangement:match("^64") then
+      -- the 64 has no page keys: its chooser picks the side (column c is page c)
+      local half = core.half(pane.port, 1)
+      local column = (half == 1 and 0 or 8) + page
+      pane.press(NV, STRIP_LINE, 1)
+      context.clock.run_for(0.55)
+      pane.tap(column, 2 + half)
+      pane.press(NV, STRIP_LINE, 0)
+      assert_equal(core.view(pane.port, 1), "1:" .. page .. ":2:" .. half, arrangement .. ": the chooser's side 2")
+    else
+      local key = 2 + page
+      pane.tap(key, STRIP_LINE)
+      assert_equal(core.side(pane.port, pane.pane), 2, arrangement .. ": the lit key shows side 2")
+      assert_equal(pane.led(key, STRIP_LINE), S.constants.GRID_LEVELS.side_two, arrangement .. ": lit 10 there")
+      pane.tap(key, STRIP_LINE)
+      assert_equal(core.side(pane.port, pane.pane), 1, arrangement .. ": and side 1 again")
+    end
+  end)
+end)
+
+test("a letter's tap waits and blinks, its second tap switches", function()
+  each_perform(function(context, S, pane, arrangement)
+    local letters, LEVELS = S.lib.pattern_letters, S.lib.positions.LEVELS
+    local tick = 1 / S.constants.PLAYHEADS.update_hz
+    assert_equal(pane.led(LETTER_X.A, 2), 15, arrangement .. ": A plays: 15")
+    assert_equal(pane.led(LETTER_X.B, 2), 2, arrangement .. ": B never used: 2")
+    pattern_clock_start()
+    pane.tap(LETTER_X.B, 2)
+    assert_equal(letters.waiting(2), "B", arrangement .. ": B waits for the bar")
+    assert_equal(letters.current(2), "A", arrangement .. ": A still plays")
+    -- the key shows each phase (that the core's blink repaints it while
+    -- no step does is grid_core_test.lua's)
+    local seen, changes, last = {}, 0, pane.led(LETTER_X.B, 2)
+    for _ = 1, 4 * LEVELS.waiting_ticks do
+      context.clock.run_for(tick)
+      local led = pane.led(LETTER_X.B, 2)
+      if letters.waiting(2) == "B" then seen[led] = true end
+      if led ~= last then changes = changes + 1 end
+      last = led
+    end
+    assert_true(changes >= 3, arrangement .. ": a repaint at each phase, saw " .. changes .. " changes")
+    assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], arrangement .. ": B blinks while it waits")
+    if letters.waiting(2) ~= "B" then pane.tap(LETTER_X.B, 2) end  -- the bar took it: wait again
+    pane.tap(LETTER_X.B, 2)
+    assert_equal(letters.current(2), "B", arrangement .. ": the second tap switches at once")
+    assert_equal(letters.waiting(2), nil, arrangement .. ": nothing waits")
+    assert_equal(pane.led(LETTER_X.B, 2), 15, arrangement .. ": B plays: 15")
+    assert_equal(pane.led(LETTER_X.A, 2), 4, arrangement .. ": A used: 4")
+    assert_equal(pane.led(LETTER_X.C, 2), 2, arrangement .. ": C never used: 2")
+    assert_equal(letters.current(3), "A", arrangement .. ": the other voices keep their letter")
+    pattern_clock_stop()
+    pane.tap(LETTER_X.C, 2)
+    assert_equal(letters.current(2), "C", arrangement .. ": stopped, a tap switches at once")
+  end, {{LETTER_X.A, 1}, {LETTER_X.D, 1}})
+end)
+
+test("OR held with A A B A sets the order at its release", function()
+  each_perform(function(context, S, pane, arrangement)
+    local letters = S.lib.pattern_letters
+    pane.press(PERFORM.order, 3, 1)
+    assert_equal(pane.led(PERFORM.order, 3), 10, arrangement .. ": held: 10")
+    for _, letter in ipairs({"A", "A", "B", "A"}) do pane.tap(LETTER_X[letter], 3) end
+    local order, on = letters.order(3)
+    assert_equal(#order, 0, arrangement .. ": nothing is set while OR is down")
+    assert_equal(on, false, arrangement .. ": and no order is on")
+    assert_equal(letters.current(3), "A", arrangement .. ": a letter tapped under OR switches nothing")
+    assert_equal(letters.used(3, "B"), false, arrangement .. ": B is not used yet")
+    pane.press(PERFORM.order, 3, 0)
+    order, on = letters.order(3)
+    assert_equal(table.concat(order, " "), "A A B A", arrangement .. ": the order at the release")
+    assert_equal(on, true, arrangement .. ": and on")
+    assert_equal(pane.led(PERFORM.order, 3), 15, arrangement .. ": on: 15")
+    -- a page change before the release sets nothing
+    pane.press(PERFORM.order, 3, 1)
+    pane.tap(LETTER_X.C, 3)
+    pane.show(S.constants.GRID_PAGES.patterns)
+    pane.press(PERFORM.order, 3, 0)
+    perform_side(S, pane)
+    assert_equal(table.concat((letters.order(3)), " "), "A A B A", arrangement .. ": a hold its page change ended sets nothing")
+    -- each hold starts the order empty
+    pane.press(PERFORM.order, 3, 1)
+    pane.tap(LETTER_X.D, 3); pane.tap(LETTER_X.C, 3)
+    pane.press(PERFORM.order, 3, 0)
+    assert_equal(table.concat((letters.order(3)), " "), "D C", arrangement .. ": the next hold starts empty")
+    -- at most eight letters
+    pane.press(PERFORM.order, 3, 1)
+    for _ = 1, 10 do pane.tap(LETTER_X.B, 3) end
+    pane.press(PERFORM.order, 3, 0)
+    assert_equal(#letters.order(3), letters.VARIATIONS.max_order, arrangement .. ": eight letters at most")
+  end, {{PERFORM.order, 1}, {LETTER_X.A, 1}, {LETTER_X.D, 1}})
+end)
+
+test("OR alone turns the order on and off", function()
+  each_perform(function(context, S, pane, arrangement)
+    local letters = S.lib.pattern_letters
+    assert_equal(pane.led(PERFORM.order, 4), 2, arrangement .. ": no order: 2")
+    pane.tap(PERFORM.order, 4)
+    assert_equal(select(2, letters.order(4)), false, arrangement .. ": an empty order is never on")
+    assert_equal(pane.led(PERFORM.order, 4), 2, arrangement .. ": still 2")
+    pane.press(PERFORM.order, 4, 1); pane.tap(LETTER_X.A, 4); pane.tap(LETTER_X.B, 4); pane.press(PERFORM.order, 4, 0)
+    assert_equal(select(2, letters.order(4)), true, arrangement .. ": the hold set it on")
+    pane.tap(PERFORM.order, 4)
+    assert_equal(select(2, letters.order(4)), false, arrangement .. ": a tap turns it off")
+    assert_equal(table.concat((letters.order(4)), " "), "A B", arrangement .. ": and keeps it")
+    assert_equal(pane.led(PERFORM.order, 4), 4, arrangement .. ": an order held off: 4")
+    pane.tap(PERFORM.order, 4)
+    assert_equal(select(2, letters.order(4)), true, arrangement .. ": a tap turns it on again")
+    assert_equal(pane.led(PERFORM.order, 4), 15, arrangement .. ": on: 15")
+    pane.tap(LETTER_X.C, 4)
+    assert_equal(select(2, letters.order(4)), false, arrangement .. ": a letter tapped by hand turns it off")
+  end, {{PERFORM.order, 1}, {LETTER_X.A, 1}})
+end)
+
+test("a roll lasts as long as its key, and a page change ends it", function()
+  each_perform(function(context, S, pane, arrangement)
+    local roll = S.lib.loop_roll
+    every_step_set(S, 1)
+    pattern_clock_start()
+    local amp = params:get("v1_amp")
+    pane.press(roll_x(2), 1, 1)
+    assert_equal(roll.rolling(1), 2, arrangement .. ": R2 rolls at 2")
+    assert_equal(params:get("v1_amp"), amp, arrangement .. ": no level fader on side 2")
+    assert_equal(pane.led(roll_x(2), 1), 15, arrangement .. ": lit 15 while it rolls")
+    assert_equal(pane.led(roll_x(1), 1), 4, arrangement .. ": the other rates 4")
+    pane.press(roll_x(2), 1, 0)
+    assert_equal(roll.rolling(1), nil, arrangement .. ": its release ends it")
+    assert_equal(pane.led(roll_x(2), 1), 4, arrangement .. ": and the key is 4")
+    pane.press(roll_x(3), 5, 1)
+    assert_equal(roll.rolling(5), 3, arrangement .. ": R3 of voice 5")
+    pane.show(S.constants.GRID_PAGES.patterns)
+    assert_equal(roll.rolling(5), nil, arrangement .. ": a page change ends it")
+    pane.press(roll_x(3), 5, 0)
+    perform_side(S, pane)
+    pattern_clock_stop()
+    pane.press(roll_x(4), 1, 1)
+    assert_equal(roll.rolling(1), nil, arrangement .. ": with the patterns stopped a roll key does nothing")
+    assert_equal(pane.led(roll_x(4), 1), 4, arrangement .. ": and stays 4")
+    pane.press(roll_x(4), 1, 0)
+  end, {{roll_x(1), 1}, {roll_x(4), 1}})
+end)
+
+test("R2 down, R4 down, R2 up: R4's roll goes on; R4 up ends it", function()
+  each_perform(function(context, S, pane, arrangement)
+    local roll = S.lib.loop_roll
+    every_step_set(S, 1)
+    pattern_clock_start()
+    pane.press(roll_x(2), 1, 1)
+    pane.press(roll_x(4), 1, 1)
+    assert_equal(roll.rolling(1), 4, arrangement .. ": the last pressed rolls")
+    assert_equal(pane.led(roll_x(2), 1) .. " " .. pane.led(roll_x(4), 1), "4 15", arrangement .. ": R4 lit")
+    pane.press(roll_x(2), 1, 0)
+    assert_equal(roll.rolling(1), 4, arrangement .. ": R2's release leaves R4's roll")
+    context.clock.run_for(0.2)
+    assert_equal(roll.rolling(1), 4, arrangement .. ": which goes on")
+    pane.press(roll_x(4), 1, 0)
+    assert_equal(roll.rolling(1), nil, arrangement .. ": R4's release ends it")
+    assert_equal(pane.led(roll_x(4), 1), 4, arrangement .. ": R4 back at 4")
+    pattern_clock_stop()
+  end, {{roll_x(1), 1}, {roll_x(4), 1}})
+end)
+
+test("LP shows off, held, armed and latched, and a press does what each light says", function()
+  each_perform(function(context, S, pane, arrangement)
+    local roll = S.lib.loop_roll
+    local held = true
+    local function still() return held end
+    assert_equal(pane.led(PERFORM.latch, 2), 2, arrangement .. ": off: 2")
+    pane.tap(PERFORM.latch, 2)
+    assert_true(roll.armed(2), arrangement .. ": a press arms the latch")
+    assert_equal(pane.led(PERFORM.latch, 2), 10, arrangement .. ": armed with no loop: 10")
+    pane.tap(PERFORM.latch, 2)
+    assert_true(not roll.armed(2), arrangement .. ": a press disarms it")
+    assert_equal(pane.led(PERFORM.latch, 2), 2, arrangement .. ": off again")
+    roll.set_loop(2, 3, 6, still)
+    assert_equal(pane.led(PERFORM.latch, 2), 6, arrangement .. ": a loop held, not latched: 6")
+    pane.tap(PERFORM.latch, 2)
+    assert_true(roll.latched(2), arrangement .. ": a press latches it")
+    assert_equal(pane.led(PERFORM.latch, 2), 15, arrangement .. ": latched: 15")
+    held = false
+    grid_redraw()
+    assert_equal(pane.led(PERFORM.latch, 2), 15, arrangement .. ": it outlasts its key")
+    pane.tap(PERFORM.latch, 2)
+    assert_equal(roll.loop(2), nil, arrangement .. ": a press on a latched loop ends it")
+    assert_equal(pane.led(PERFORM.latch, 2), 2, arrangement .. ": off")
+    pane.tap(PERFORM.latch, 2)
+    held = true
+    roll.set_loop(2, 1, 4, still)
+    assert_true(roll.latched(2), arrangement .. ": an armed latch keeps the next loop")
+    assert_equal(pane.led(PERFORM.latch, 2), 15, arrangement .. ": latched: 15")
+  end, {{PERFORM.latch, 1}})
+end)
+
+test("the mode keys choose each voice's mode, and all seven modes are lit", function()
+  each_perform(function(context, S, pane, arrangement)
+    local seq, names = S.lib.sequencer, {"pulse", "move", "accent"}
+    local function wanted(voice_idx) return names[(voice_idx - 1) % #names + 1] end
+    for voice_idx = 1, S.constants.NUM_VOICES do pane.tap(PERFORM[wanted(voice_idx)], voice_idx) end
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      assert_equal(seq.step_mode(voice_idx), wanted(voice_idx), arrangement .. ": voice " .. voice_idx .. "'s mode")
+      for _, name in ipairs(names) do
+        assert_equal(pane.led(PERFORM[name], voice_idx), name == wanted(voice_idx) and 15 or 4,
+          arrangement .. ": voice " .. voice_idx .. "'s " .. name .. " key")
+      end
+    end
+    params:set("v2_seq_gate", mode_index(S, "gate"))
+    grid_redraw()
+    assert_equal(pane.led(PERFORM.pulse, 2) .. " " .. pane.led(PERFORM.move, 2) .. " " .. pane.led(PERFORM.accent, 2),
+      "8 4 4", arrangement .. ": a gate voice lights pulse at 8")
+  end, {{PERFORM.pulse, 1}, {PERFORM.accent, 1}})
+end)
+
+test("FL holds fill from any line and a release ends only its own hold", function()
+  each_perform(function(context, S, pane, arrangement)
+    local fill = S.lib.conditions.fill
+    assert_equal(pane.led(PERFORM.fill, 1), 4, arrangement .. ": fill off: 4")
+    pane.press(PERFORM.fill, 2, 1)
+    assert_true(fill(), arrangement .. ": FL on line 2 holds fill")
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      assert_equal(pane.led(PERFORM.fill, voice_idx), 15, arrangement .. ": every FL lit 15, line " .. voice_idx)
+    end
+    pane.press(PERFORM.fill, 5, 1)
+    pane.press(PERFORM.fill, 2, 0)
+    assert_true(fill(), arrangement .. ": line 2's release leaves line 5's hold")
+    context.clock.run_for(0.1)
+    assert_true(fill(), arrangement .. ": which goes on")
+    pane.press(PERFORM.fill, 5, 0)
+    assert_true(not fill(), arrangement .. ": line 5's release ends it")
+    assert_equal(pane.led(PERFORM.fill, 5), 4, arrangement .. ": 4 again")
+    -- a page change ends a hold (nothing outlives its key); a latch stays
+    pane.press(PERFORM.fill, 3, 1)
+    pane.show(S.constants.GRID_PAGES.patterns)
+    context.clock.run_for(0.1)
+    assert_true(not fill(), arrangement .. ": a page change ends the hold")
+    pane.press(PERFORM.fill, 3, 0)
+    perform_side(S, pane)
+    params:set("seq_fill", 1)
+    pane.tap(PERFORM.fill, 6)
+    assert_true(fill(), arrangement .. ": the latch stays through a release")
+  end, {{PERFORM.fill, 1}})
+end)
+
+test("mute and solo act as on side 1", function()
+  each_perform(function(context, S, pane, arrangement)
+    assert_equal(pane.led(PERFORM.mute, 1) .. " " .. pane.led(PERFORM.solo, 1), "4 4", arrangement .. ": off: 4")
+    pane.press(PERFORM.mute, 1, 1)
+    assert_equal(mute(1), 1, arrangement .. ": MU mutes at its press")
+    pane.press(PERFORM.mute, 1, 0)
+    assert_equal(mute(1), 1, arrangement .. ": the release does nothing")
+    assert_equal(pane.led(PERFORM.mute, 1), 15, arrangement .. ": muted: 15")
+    pane.tap(PERFORM.solo, 3)
+    assert_equal(solo(3), 1, arrangement .. ": SO solos voice 3")
+    assert_equal(pane.led(PERFORM.solo, 3), 15, arrangement .. ": soloed: 15")
+    params:set("v1_mute", 0)
+    assert_equal(pane.led(PERFORM.mute, 1), 4, arrangement .. ": a mute lifted elsewhere shows")
+    pane.tap(PERFORM.solo, 3)
+    assert_equal(solo(3), 0, arrangement .. ": a second tap lifts the solo")
+  end, {{PERFORM.mute, 1}})
+end)
+
+test("the 64 shows mutes, letters, OR and LP on the left half and the rolls, the mode and FL on the right", function()
+  for _, case in ipairs({{"64 left", {1, 2, 3, 4, 5, 6, 7, 8}, "4 4 15 2 2 2 2 2"},
+      {"64 right", {9, 10, 11, 12, 13, 14, 15, 16}, "4 4 4 4 15 4 4 4"}}) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    local pane = voices_pane(context, case[1])
+    perform_side(S, pane)
+    local lights = {}
+    for _, x in ipairs(case[2]) do
+      assert_true(pane.shows(x, 1), case[1] .. ": shows x " .. x)
+      lights[#lights + 1] = pane.led(x, 1)
+    end
+    assert_equal(table.concat(lights, " "), case[3], case[1] .. ": the half's keys")
+    assert_true(not pane.shows(case[1] == "64 left" and 9 or 8, 1), case[1] .. ": the other half is not shown")
+  end
+end)
+
 end

@@ -2610,4 +2610,51 @@ test("end_pane_keys spares the key it is given (3.9's 3c)", function()
   assert_equal(patterns[2][6], 0, "the other key's gesture ended")
 end)
 
+
+-- 3.9 (5c, rulings 5c-1 and 5c-2): the waits the blink counts are gated on
+-- a pane showing their key. A waiting letter (side 2 of the voices page,
+-- the perform side) repaints at the blink's phases only while a pane shows
+-- that side; a waiting freeze (FZ, side 1) only while one shows side 1.
+-- The ticks are the core's own, run by hand, so no other repaint comes in
+test("a waiting letter blinks only on the voices page's side 2, a waiting freeze only on its side 1", function()
+  local S = local_value("S")
+  local core, voices = grid_core(), PAGES().voices
+  local function repaints_over(device, ticks)
+    local before = device.refresh_count
+    for _ = 1, ticks do core.blink_tick() end
+    return device.refresh_count - before
+  end
+  local phase = 2 * core.LEVELS.waiting_ticks
+  -- a letter waits for its bar while the patterns play
+  local context = load_strata(); finish_startup(context)
+  S = local_value("S")
+  core = grid_core()
+  local device = context.grid.plug(1, 16, 8)
+  pattern_clock_start()
+  S.lib.pattern_letters.switch(2, "B")
+  assert_equal(S.lib.pattern_letters.waiting(2), "B", "B waits for the bar")
+  core.set_page(1, voices, 1, 1)
+  repaints_over(device, phase)
+  assert_equal(repaints_over(device, phase), 0, "side 1 shows no letter: no repaint")
+  core.set_page(1, voices, 1, 2)
+  repaints_over(device, 1)
+  assert_true(repaints_over(device, phase) >= 1, "side 2 shows it: a repaint at each phase")
+  pattern_clock_stop()
+  -- a freeze set waits for its bar
+  context = load_strata(); finish_startup(context)
+  S = local_value("S")
+  core = grid_core()
+  device = context.grid.plug(1, 16, 8)
+  params:set("quantize_actions", 3)  -- bar
+  context.clock.run_for((1.5 - clock.get_beats()) * clock.get_beat_sec())
+  S.lib.freeze.toggle_quantized(2)
+  assert_true(S.lib.freeze.waiting(2), "voice 2's freeze waits")
+  core.set_page(1, voices, 1, 2)
+  repaints_over(device, phase)
+  assert_equal(repaints_over(device, phase), 0, "side 2 shows no FZ: no repaint")
+  core.set_page(1, voices, 1, 1)
+  repaints_over(device, 1)
+  assert_true(repaints_over(device, phase) >= 1, "side 1 shows it: a repaint at each phase")
+end)
+
 end

@@ -8,17 +8,20 @@
 - **A refused voice copy changes nothing**: `copy` returns false (its own flash on VOICE), the mark stays and the target's key stays at 4.
 - **The level is a fader line** (`faders(pane)`: line v, `first` 9, eight keys, `v<v>_amp`, the voice's level, ruling 58) set and drawn by the pane engine alone; the page's `press` and `redraw` never see x 9-16 while the line is shown. A voice with no `v<v>_amp` param gets no line (its keys 9-16 are dark and dead).
 - **Every key, level and hold is `VOICES_PAGE`'s** (ruling D4); the numbers in the file are pane coordinates and the named levels.
-- **`signature(pane)`** is each voice's lock and the two copies' voices: the lock redraws from `toggle_lock` and the copies from the press (`grid_key`), but a scene recall's lock entry sets `S.locked` with no redraw until the recall ends, so the drift tick's follow covers it. Mute, solo and freeze have no term: their params' actions always redraw the grids (`lib/voice_mix.lua`, `lib/freeze.lua`; a test pins it).
-- **Index checks**: a press needs z 1, a whole x in 1-8 and a whole y in 1..`NUM_VOICES`; anything else does nothing. Every action takes the checked voice.
+- **`signature(pane)`** on side 1 is each voice's lock and the two copies' voices: the lock redraws from `toggle_lock` and the copies from the press (`grid_key`), but a scene recall's lock entry sets `S.locked` with no redraw until the recall ends, so the drift tick's follow covers it. Mute, solo and freeze have no term: their params' actions always redraw the grids (`lib/voice_mix.lua`, `lib/freeze.lua`; a test pins it). On side 2 it is fill and, per voice, the letter played and those used, the order and whether it is on, LP's level, the roll's rate and the mode, so a change no key repainted (a scene recall's letters, a mode set on SEQ, a loop a length cut) shows by the drift tick.
+- **Index checks**: a press needs a whole y in 1..`NUM_VOICES`; on side 1 z 1 and a whole x in 1-8, on side 2 a whole x in 1-16 (a release acts for `OR` and `FL` only); anything else does nothing. Every action takes the checked voice.
+- **Side 2 has no fader line** (`faders(pane)` is empty there), so x 9-16 reach the page's `press` and `redraw`.
+- **Nothing on the perform side outlives its key**: a roll is `S.lib.loop_roll.roll(v, rate, pane.still(x, v))`, and its key's release calls nothing: the press token goes after the page sees the release, so the roll reads as ended (`rolling` nil) once the key is up and its clock ends it at its next hit, playing nothing. A roll another key started since (another rate, another grid) asks only its own key, so a release never ends it; the rate alone cannot tell two grids' keys apart. `FL` holds fill under `"grid:<port>:<line>"` with its own `pane.still` (a page change or an unplug drops it at the next LFO step); its release ends that holder only when the key was pressed as `FL` (`press_as`). `OR`'s order being built is kept in `pane.state().orders[v]` with `OR`'s own `still` and pane, read only while that still holds; only `OR`'s release, pressed as `OR` on that pane, sets it.
+- **The waiting letter blinks through the core's blink** (`S.lib.grid_core.waiting_level()`): the core's `blink_signature` counts `"letter <v>"` while a pane shows this page's side 2 and a freeze only while one shows side 1 (`docs/notes/lua/grid-core.md`, LEDs); no param action repaints for a wait.
 
 ## Owns
 
-- `lib/grid/pages/voices.lua` (`S.lib.grid_pages_voices`): its record (`M.record`, one side, fader lines and a `signature`), registered at `GRID_PAGES.voices`, and `M.VOICES_PAGE` (`keys`, `level_first` 9, `level_keys` 8, `hold_seconds`, `levels`).
+- `lib/grid/pages/voices.lua` (`S.lib.grid_pages_voices`): its record (`M.record`, two sides, fader lines on side 1 and a `signature`), registered at `GRID_PAGES.voices`, `M.VOICES_PAGE` (`keys`, `level_first` 9, `level_keys` 8, `hold_seconds`, `levels`) and `M.PERFORM` (side 2's `keys`, `modes`, the roles `"perform order"` and `"perform fill"`, `levels`).
 - Unit tests: `test/unit/grid_pages_voices_test.lua`, on every arrangement of the pane harness that shows the keys each test needs, with the tests 0e handed on (the 256's copy and paste, clear and randomize, lock, freeze and mute keys, the 128h's and 128v's lock and freeze keys, and the solo part of `grid_core_test.lua`'s "a page change cancels the port's pending holds", as CL's and RN's holds) re-added in pane coordinates.
 
 ## Keys and LEDs (design §10.8)
 
-Line v is voice v (1-7); every key acts at its press but CL and RN, which act at their hold; a release does nothing.
+Side 1: line v is voice v (1-7); every key acts at its press but CL and RN, which act at their hold; a release does nothing.
 
 | x | Key | Press | Hold | LED |
 |---|---|---|---|---|
@@ -35,3 +38,21 @@ Line v is voice v (1-7); every key acts at its press but CL and RN, which act at
 `copy` captures the marked voice's sound at the paste, loads it into v (its type, its type's synth keys and the library's sound keys) and keeps v's place, lets go of v in a running scene fade (`S.lib.scenes.release_voice`) and holds the one undo, which ALT+K2 on VOICE on that voice puts back (`S.lib.mutation.hold_voice`). The page has no undo key.
 
 The 256's lower strip's mute keys (M1-M7, the pane engine's) and MU are one action in two places. Turned (the 128v), each voice's eight keys run down rows 1-8 of its column and its level up rows 9-16 (row 16 the minimum). On a 64 the left half (x 1-8) is the eight keys and the right half (x 9-16) the level fader across its eight keys; the copies are the port's, so a mark made on the left half is still shown after a switch to the right and back.
+
+## The perform side (side 2; 3.9's 5c, design section 4)
+
+The page's lit key pressed again (the 8×8's chooser rows 3 and 4) shows it. Line v is voice v; every key acts at its press but `OR` and `FL`, which act at their release too.
+
+| x | Key | Press | Release | LED |
+|---|---|---|---|---|
+| 1, 2 | MU, SO | as side 1's | - | 15 on, 4 |
+| 3-6 | A-D | `S.lib.pattern_letters.switch(v, letter)` (it waits for the bar while the patterns play; a second tap of the waiting letter switches at once; it turns the order off); while `OR` is held, the letter is added to the order built (up to `VARIATIONS.max_order`, eight) and nothing switches | - | the waiting letter blinks (`waiting_level()`), 15 the playing one, 4 a used one (`used`), 2 one never used |
+| 7 | OR | pressed as `"perform order"`: a new order, empty | with a letter tapped: `set_order(v, letters)` (on, from its first letter at the next bar); with none: `set_order_on(v, not on)` | 10 while held, 15 on, 4 an order kept off, 2 none |
+| 8 | LP | `S.lib.loop_roll.press_latch(v)` | - | 15 latched, 6 a loop held and not latched, 10 armed with no loop, 2 off |
+| 9-12 | R1-R4 | `roll(v, rate, pane.still(x, v))`, rate 1-4 (with the patterns stopped nothing) | nothing (the key's still ends its own roll) | 15 while `rolling(v)` is its rate, 4 |
+| 13-15 | PU, MV, AC | `S.lib.lanes.choose_mode(v, "pulse" / "move" / "accent")` | - | `S.lib.grid_pages_patterns.mode_level(v, name)`: the mode 15, the others 4, a `gate` voice's pulse 8 |
+| 16 | FL | pressed as `"perform fill"`: `hold_fill("grid:<port>:<v>", true, pane.still(x, v))` | pressed as `FL`: `hold_fill(holder, false)` | 15 while fill is on (`S.lib.conditions.fill()`, however it was turned on), 4 |
+
+Each line's `FL` has its own holder, so letting one go leaves another line's hold, the strip's FL and the latch. On the 8×8 the left half is MU, SO, the letters, `OR` and `LP` (so an order is built in one half), the right half the rolls, the mode keys and `FL`. Turned (the 128v), each voice's sixteen keys run down its column.
+
+Test: `test/unit/grid_pages_voices_test.lua`, from "the lit page key flips to the perform side" to "the 64 shows mutes, letters, OR and LP on the left half and the rolls, the mode and FL on the right", on every arrangement that shows the keys each needs; the blink's gate is `test/unit/grid_core_test.lua`'s "a waiting letter blinks only on the voices page's side 2, a waiting freeze only on its side 1".

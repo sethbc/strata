@@ -239,7 +239,9 @@ function Walk.press(state, px, py)
   -- walked yet): the 64's chooser keys of patterns' side 2 (column
   -- patterns, rows 3 and 4) are skipped, so the model never misreads
   local _, kind = Walk.layout(state)
-  if kind == "64" and model.chooser and px == S.constants.GRID_PAGES.patterns and (py == 3 or py == 4) then
+  -- (and of voices' side 2, 3.9's perform side, 5c: not walked yet either)
+  local unwalked = px == S.constants.GRID_PAGES.patterns or px == S.constants.GRID_PAGES.voices
+  if kind == "64" and model.chooser and unwalked and (py == 3 or py == 4) then
     return
   end
   local name = key_name(px, py)
@@ -576,8 +578,9 @@ OPS.page = { 2, "page", function(state, random)
   local record = S.registry.grid_pages[page]
   local side = random(record and record.sides or 1)
   -- the model knows patterns' side 1 only: 3.9's lane side (3b) is not
-  -- walked here yet (the draw is kept, so the seeds walk as before)
-  if page == S.constants.GRID_PAGES.patterns then side = 1 end
+  -- walked here yet, nor voices' perform side (5c) (the draw is kept, so
+  -- the seeds walk as before)
+  if page == S.constants.GRID_PAGES.patterns or page == S.constants.GRID_PAGES.voices then side = 1 end
   state.core.set_page(WALK.port, page, pane, side)
   if layout_kind == "64" and random(2) == 1 then state.core.set_half(WALK.port, pane, random(2)) end
   grid_redraw()

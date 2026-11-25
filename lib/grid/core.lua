@@ -749,10 +749,12 @@ return function(S)
   -- key's start always counts: PL is on the 256's, 128h's and 128v's
   -- strip and NV on the 64's, and a strip shows whatever page its panes
   -- show. Each voice's freeze key counts while a pane shows the voices
-  -- page, the scene keys' recall (its slot) while one shows the scenes
-  -- page, the cell of a voice's jump or loop (S.lib.positions.waiting_cell)
-  -- while one shows the positions page's cells. A bookmark key's wait is
-  -- positions' (its display signature, under the same rule)
+  -- page's side 1, its waiting letter (S.lib.pattern_letters.waiting,
+  -- 3.9's 5c) while one shows its side 2, the perform side, the scene
+  -- keys' recall (its slot) while one shows the scenes page, the cell of a
+  -- voice's jump or loop (S.lib.positions.waiting_cell) while one shows the
+  -- positions page's cells. A bookmark key's wait is positions' (its
+  -- display signature, under the same rule)
   local function blink_signature()
     local quantize = S.lib.quantize
     local parts = {}
@@ -760,9 +762,11 @@ return function(S)
     local scene = quantize.waiting_detail("scene")
     if scene ~= nil and M.any_page(GRID_PAGES.scenes) then parts[#parts + 1] = "scene " .. tostring(scene) end
     local cells_shown = M.any_page(GRID_PAGES.positions, 1)
-    local freeze_shown = M.any_page(GRID_PAGES.voices)
+    local freeze_shown = M.any_page(GRID_PAGES.voices, 1)
+    local letters_shown = M.any_page(GRID_PAGES.voices, 2)
     for voice_idx = 1, NUM_VOICES do
       if freeze_shown and S.lib.freeze.waiting(voice_idx) then parts[#parts + 1] = "freeze " .. voice_idx end
+      if letters_shown and S.lib.pattern_letters.waiting(voice_idx) then parts[#parts + 1] = "letter " .. voice_idx end
       local cell = cells_shown and S.lib.positions.waiting_cell(voice_idx)
       if cell then parts[#parts + 1] = "cell " .. voice_idx .. ":" .. cell end
     end
