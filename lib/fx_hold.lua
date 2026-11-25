@@ -1,19 +1,22 @@
 -- lib/fx_hold.lua
--- The effects' freezes and the delay's clear (3.8 design §7.2, §7.3;
--- S.lib.fx_hold). An fx record (S.register_fx_params), hold: delay_freeze,
--- a binary toggle that freezes the delay's loop (engine.setDelayFreeze),
--- and delay_clear, a trigger that empties it (engine.clearDelay). Neither
--- is saved in a PSET (delay_freeze's save is off; norns never writes a
--- trigger) or a scene, and neither is an LFO destination: the loop's audio
--- is in neither, as a bypass's is not. A PSET load leaves a freeze as it is
--- (plan ruling 61), unless it leaves the delay bypassed: the read hook then
--- releases it (#883). A bypass ends its effect's freeze first (the bypass
--- action, lib/voice_mix.lua, calls release), so the engine's kept freeze
--- is 0 at the lift; a freeze set while its effect is bypassed is refused,
--- the param put back to off and echoed to a mapped controller (plan
--- ruling 26). The invariant `fx hold`: the delay is never bypassed and
--- frozen. A clear releases a freeze first (#912). The functions are FX's,
--- the header's and the grids' (packages 4a, 4b): offered, frozen,
+-- The effects' freezes and the delay's clear (3.8 design §7.2, §7.3; 3.9's
+-- reverb freeze design §4, #819; S.lib.fx_hold). An fx record
+-- (S.register_fx_params), hold: delay_freeze, a binary toggle that freezes
+-- the delay's loop (engine.setDelayFreeze), delay_clear, a trigger that
+-- empties it (engine.clearDelay), and reverb_freeze, a binary toggle that
+-- freezes the high tier's reverb (engine.setReverbFreeze; it exists on both
+-- tiers, and the standard tier refuses it). None is saved in a PSET (the
+-- freezes' save is off; norns never writes a trigger) or a scene, and none
+-- is an LFO destination: the held audio is in neither, as a bypass's is
+-- not. A PSET load leaves a freeze as it is (plan ruling 61), unless it
+-- leaves its effect bypassed: the read hook then releases it (#883). A
+-- bypass ends its effect's freeze first (the bypass action,
+-- lib/voice_mix.lua, calls release), so the engine's kept freeze is 0 at
+-- the lift; a freeze set while its effect is bypassed, or not offered, is
+-- refused, the param put back to off and echoed to a mapped controller
+-- (plan ruling 26). The invariant `fx hold`: no effect is bypassed and
+-- frozen. A clear releases the delay's freeze first (#912). The functions
+-- are FX's, the header's and the grids' (packages 4a, 4b): offered, frozen,
 -- freezable, toggle, release, clear, any_frozen. See
 -- docs/notes/lua/fx-hold.md.
 
@@ -21,13 +24,21 @@ return function(S)
   local M = {}
 
   -- By effect: the freeze's param, and the clear's where it has one
-  M.FX_HOLD = {delay = {freeze_id = "delay_freeze", clear_id = "delay_clear"}}
+  M.FX_HOLD = {
+    delay = {freeze_id = "delay_freeze", clear_id = "delay_clear"},
+    reverb = {freeze_id = "reverb_freeze"},
+  }
+  -- The effects in the order the invariant and the read hook check them
+  local EFFECTS = {"delay", "reverb"}
 
   -- Whether an effect ("delay", "reverb") has a freeze here: the delay's
-  -- always, nothing else. The reverb's is cut from 3.8 (package 3a, plan
-  -- ruling 27: the high tier's FDN did not hold its level and its tail
-  -- within 1 dB; #819), so offered("reverb") is false on every tier
+  -- always, the reverb's on the high tier only (the FDN; FreeVerb2 has
+  -- none). The tier is read at each call: S.performance is set after this
+  -- module's include (lib/params_setup.lua)
   function M.offered(effect)
+    if effect == "reverb" then
+      return S.performance ~= nil and S.performance.tier == "high"
+    end
     return M.FX_HOLD[effect] ~= nil
   end
 
@@ -70,31 +81,36 @@ return function(S)
     params:set(M.FX_HOLD.delay.clear_id, 1)
   end
 
-  -- The delay bypassed and frozen at once: a bypassed delay has no node,
+  -- An effect bypassed and frozen at once: a bypassed effect has no node,
   -- and a freeze kept for it would come back at the lift (#883)
-  local function bypassed_and_frozen()
-    return S.lib.voice_mix.bypassed("delay") and M.frozen("delay")
+  local function bypassed_and_frozen(effect)
+    return S.lib.voice_mix.bypassed(effect) and M.frozen(effect)
   end
 
   S.register_invariant("fx hold", function()
-    if bypassed_and_frozen() then
-      return "the delay is bypassed and frozen (delay_bypass 1, delay_freeze 1)"
+    for _, effect in ipairs(EFFECTS) do
+      if bypassed_and_frozen(effect) then
+        return "the " .. effect .. " is bypassed and frozen (" .. S.lib.voice_mix.BYPASS[effect].param_id
+          .. " 1, " .. M.FX_HOLD[effect].freeze_id .. " 1)"
+      end
     end
   end)
 
-  -- After a PSET read: a silent read sets delay_bypass with no action, so
-  -- the bypass's release never ran. Bypass wins (#883, ruling B2): the
-  -- freeze is released through its action, so the engine hears
-  -- setDelayFreeze(0) and a mapped controller its 0. Nothing otherwise (a
-  -- read with actions has released it already)
+  -- After a PSET read: a silent read sets a bypass with no action, so the
+  -- bypass's release never ran. Bypass wins (#883, ruling B2): the freeze
+  -- is released through its action, so the engine hears the freeze's 0
+  -- and a mapped controller its 0. Nothing otherwise (a read with actions
+  -- has released it already)
   S.register_pset_hook({name = "fx_hold", read = function()
-    if bypassed_and_frozen() then M.release("delay") end
+    for _, effect in ipairs(EFFECTS) do
+      if bypassed_and_frozen(effect) then M.release(effect) end
+    end
   end})
 
-  local delay = M.FX_HOLD.delay
+  local delay, reverb = M.FX_HOLD.delay, M.FX_HOLD.reverb
   S.register_fx_params({
     name = "hold",
-    count = 2,
+    count = 3,
     add = function()
       params:add{
         type = "binary",
@@ -130,6 +146,27 @@ return function(S)
         end,
       }
       S.engine_senders[delay.clear_id] = function() engine.clearDelay() end
+      params:add{
+        type = "binary",
+        id = reverb.freeze_id,
+        name = "reverb freeze",
+        behavior = "toggle",
+        default = 0,
+        action = function(x)
+          -- refused while bypassed or on the standard tier (the design's
+          -- call 1), as the delay's freeze is while bypassed: back to off
+          -- through set_binary_param, so a mapped controller hears the 0
+          if x == 1 and (S.lib.voice_mix.bypassed("reverb") or not M.offered("reverb")) then
+            set_binary_param(reverb.freeze_id, 0)
+            return
+          end
+          send_param_to_engine(reverb.freeze_id, x)
+          request_redraw()
+          grid_redraw()
+        end,
+      }
+      params:set_save(reverb.freeze_id, false)
+      S.engine_senders[reverb.freeze_id] = function(value) engine.setReverbFreeze(value) end
     end,
   })
 

@@ -7,11 +7,12 @@
 -- the delay's clear row the clear. ALT+K3 freezes or releases the delay or
 -- reverb under the cursor (S.lib.fx_hold), never one bypassed or not
 -- offered. A bypassed effect's section row shows "byp", a frozen one's
--- "frz", and a frozen delay's time row "held" after its label. While the
--- delay is synced (S.lib.delay_sync, 3.7) its time row shows the division
--- that plays and E3 turns delay_division; E3 turns sync
--- and a freeze on and off. The reverb's freeze is reached only through
--- S.lib.fx_hold.offered("reverb") (cut from 3.8, #819: its row shows --).
+-- "frz", a frozen delay's time row and a frozen reverb's size row "held"
+-- after the label. While the delay is synced (S.lib.delay_sync, 3.7) its
+-- time row shows the division that plays and E3 turns delay_division; E3
+-- turns sync and a freeze on and off. The reverb's freeze is reached only
+-- through S.lib.fx_hold.offered("reverb"), the high tier's alone (#819: on
+-- the standard tier its row shows --).
 -- Registers its S.registry.pages record. redraw_fx stays global.
 
 return function(S)
@@ -39,9 +40,10 @@ return function(S)
   -- `synced` names the param the row turns while the delay plays a
   -- division, the row then showing S.lib.delay_sync.label(). A row's
   -- `frozen_mark` names the effect whose freeze marks it `held` after its
-  -- label (never delay_sync's `held`, a scene apply's held send; the
-  -- delay's time row: a frozen loop keeps the length it froze at, and the
-  -- time shown is the one its release plays, #911). A `hold` row
+  -- label (never delay_sync's `held`, a scene apply's held send): the
+  -- delay's time row (a frozen loop keeps the length it froze at, and the
+  -- time shown is the one its release plays, #911) and the reverb's size
+  -- row (the engine holds the size until the release, #819). A `hold` row
   -- ("freeze", "clear") has no param_id: its param is its effect's in
   -- S.lib.fx_hold.FX_HOLD (freeze_id, clear_id), and none while the
   -- effect's freeze is not offered
@@ -66,7 +68,8 @@ return function(S)
       {label = "clear", section = "delay", effect = "delay", hold = "clear"},
       {label = "reverb", section = "reverb", selectable = false, bypass = "reverb", freeze = "reverb"},
       {label = "level", section = "reverb", param_id = "reverb_mix", format = percent, effect = "reverb"},
-      {label = "size", section = "reverb", param_id = "reverb_size", format = "%.2f", effect = "reverb"},
+      {label = "size", section = "reverb", param_id = "reverb_size", format = "%.2f", effect = "reverb",
+        frozen_mark = "reverb"},
       {label = "damp", section = "reverb", param_id = "reverb_damp", format = percent, effect = "reverb"},
       {label = "from delay", section = "reverb", param_id = "delay_to_reverb", format = percent, effect = "reverb"},
       {label = "freeze", section = "reverb", effect = "reverb", hold = "freeze", format = on_off, binary = true},
@@ -381,6 +384,15 @@ return function(S)
         params:set("clock_tempo", 20)
         S.lib.fx_hold.toggle("delay")
         S.fx_row = row_of("delay_time")
+      end},
+      -- 3.9 (#819): frz on the reverb's section row and held on its size
+      -- row (the cursor on reverb level, so both are in view). The states
+      -- load on the standard tier, so this one sets the high tier, where
+      -- the freeze is offered (offered reads the tier at each call)
+      {name = "reverb frozen", setup = function()
+        S.performance.tier = "high"
+        S.lib.fx_hold.toggle("reverb")
+        S.fx_row = row_of("reverb_mix")
       end},
       {name = "the clear row", setup = function() S.fx_row = hold_row_of("delay", "clear") end},
       -- the widest hint: K2:cancel K3:unfreeze E3:fine (122 px)

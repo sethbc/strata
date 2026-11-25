@@ -72,10 +72,16 @@ local function pick_set(pane, set)
   pane.show(S.constants.GRID_PAGES.fx, 1, 2)
 end
 
+-- The performance_active.data the engine writes on the high tier, where
+-- the reverb's freeze is offered (3.9, #819)
+local HIGH = {tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60, reason = "high: setting"}
+
 -- Each arrangement (or those that show every key of `needs`, {x, y}
--- pairs) on a fresh load, its pane on the FX page
-local function each_arrangement(body, needs)
+-- pairs) on a fresh load, its pane on the FX page; with tier "high", each
+-- load on the high tier (else the standard)
+local function each_arrangement(body, needs, tier)
   for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    if tier == "high" then h.write_performance_active(HIGH) end
     local context = load_strata(); finish_startup(context)
     local S = local_value("S")
     local pane = fx_pane(context, arrangement)
@@ -113,16 +119,6 @@ local function param_snapshot()
   return table.concat(parts, " ")
 end
 
--- 3a's seam in the test's own S: a reverb freeze record in FX_HOLD and a
--- binary param of the record's id (the id written once, in the record)
-local function plant_reverb_freeze(S)
-  S.lib.fx_hold.FX_HOLD.reverb = {freeze_id = "reverb_freeze"}
-  params:add{type = "binary", id = S.lib.fx_hold.FX_HOLD.reverb.freeze_id, name = "reverb freeze",
-    behavior = "toggle", default = 0}
-  assert_true(S.lib.fx_hold.offered("reverb"), "the planted record makes the reverb's freeze offered")
-  grid_redraw()
-  return S.lib.fx_hold.FX_HOLD.reverb.freeze_id
-end
 
 test("the FX page is registered at its index", function()
   load_strata()
@@ -387,9 +383,10 @@ test("line 7's keys and levels", function()
         end
       end
     end
-    -- the reverb's freeze offered (3a's seam, planted): 4, toggled 15
+    -- the reverb's freeze, offered on the high tier: 4, toggled 15
     if shows("reverb_freeze") then
-      local freeze_id = plant_reverb_freeze(S)
+      local freeze_id = S.lib.fx_hold.FX_HOLD.reverb.freeze_id
+      assert_true(S.lib.fx_hold.offered("reverb"), arrangement .. ": the high tier offers the reverb's freeze")
       assert_equal(pane.led(key("reverb_freeze")), 4, arrangement .. ": RF offered, not frozen: 4")
       pane.tap(key("reverb_freeze"))
       assert_equal(params:get(freeze_id), 1, arrangement .. ": RF freezes the reverb")
@@ -410,39 +407,36 @@ test("line 7's keys and levels", function()
       assert_equal(params:get(freeze_id), 0, arrangement .. ": RF on a bypassed reverb freezes nothing")
       assert_equal(pane.led(key("reverb_freeze")), 4, arrangement .. ": and its key stays 4")
     end
-  end)
+  end, nil, "high")
 end)
 
 test("RF is dark and dead while offered is false", function()
   each_arrangement(function(context, S, pane, arrangement)
-    assert_true(not S.lib.fx_hold.offered("reverb"), "3.8 offers no reverb freeze")
+    assert_true(not S.lib.fx_hold.offered("reverb"), "the standard tier offers no reverb freeze")
     assert_equal(pane.led(KEY_X.reverb_freeze, LINE.keys), 0, arrangement .. ": RF dark")
     local before = param_snapshot()
     context.clear_engine_calls()
     pane.tap(KEY_X.reverb_freeze, LINE.keys)
     assert_equal(param_snapshot(), before, arrangement .. ": RF changes nothing")
     assert_equal(#context.engine_calls, 0, arrangement .. ": and sends nothing")
-    -- a param of that name is not enough: offered decides
-    S.lib.fx_hold.FX_HOLD.reverb = nil
-    params:add{type = "binary", id = "reverb_freeze", name = "reverb freeze", behavior = "toggle", default = 0}
-    params:set("reverb_freeze", 1)
+    -- the param at 1 is not enough (set silently: its action refuses it
+    -- here): offered decides
+    params:set("reverb_freeze", 1, true)
     grid_redraw()
-    assert_equal(pane.led(KEY_X.reverb_freeze, LINE.keys), 0, arrangement .. ": a param but not offered: dark")
+    assert_equal(pane.led(KEY_X.reverb_freeze, LINE.keys), 0, arrangement .. ": the param at 1 but not offered: dark")
+    context.clear_engine_calls()
     pane.tap(KEY_X.reverb_freeze, LINE.keys)
     assert_equal(params:get("reverb_freeze"), 1, arrangement .. ": and dead")
+    assert_equal(#context.engine_calls, 0, arrangement .. ": sending nothing")
   end, {{KEY_X.reverb_freeze, LINE.keys}})
 end)
 
-test("with the reverb freeze cut the page draws, and RF is dark and dead", function()
+test("on the standard tier the page draws without reading the reverb's freeze, and RF is dark and dead", function()
   each_arrangement(function(context, S, pane, arrangement)
-    -- the test's own S: the seam planted, then cut: offered answers false
-    -- for the reverb and its id is no param, so any read raises
-    local freeze_id = plant_reverb_freeze(S)
-    local offered = S.lib.fx_hold.offered
-    S.lib.fx_hold.offered = function(effect)
-      if effect == "reverb" then return false end
-      return offered(effect)
-    end
+    -- the param exists on both tiers; taken out of the lookup here, so any
+    -- read of it raises: on the standard tier the page reads none
+    assert_true(not S.lib.fx_hold.offered("reverb"), arrangement .. ": the standard tier")
+    local freeze_id = S.lib.fx_hold.FX_HOLD.reverb.freeze_id
     params.lookup[freeze_id] = nil
     assert_true(not pcall(params.get, params, freeze_id), "a read of " .. freeze_id .. " raises")
     local before = param_snapshot()

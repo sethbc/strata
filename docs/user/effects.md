@@ -35,6 +35,16 @@ Both are on the [FX page](pages/fx.md) (its `freeze` and `clear` rows, and ALT+K
 - **delay clear** - Empties the delay at once: its echoes stop, and the first echo of what comes in after plays one delay time later. Frozen, it releases the freeze first, so the delay takes in sound again and refills.
 - Neither is saved: a PSET never stores a freeze, and loading one leaves a freeze as it is unless the PSET bypasses the delay; scenes leave both alone. Bypassing the delay, by hand or by a PSET, ends a freeze, and a freeze cannot be set while the delay is bypassed. Both can be mapped to MIDI (PARAMETERS > MAP).
 
+## Reverb freeze
+
+On the high performance setting the reverb freezes too: `reverb freeze` in the fx group of the PARAMETERS menu, the reverb's `freeze` row on the [FX page](pages/fx.md) (ALT+K3 on any reverb row freezes or releases), and RF on the grid's [FX page](grid/pages/fx.md). While the reverb is frozen, FX's dot in the header stands tall on every page, as for the delay.
+
+- **What it holds** - Within 20 ms the reverb stops taking in sound and holds its tail as a wash that stays: a minute later it is as loud and as bright as when it froze (within 1 dB). Play dry and delayed sound over it for as long as you like; nothing you play enters it, and shimmer stops climbing in it (the wash keeps what shimmer had put there). Released, the tail fades away at the reverb's size and the reverb takes in sound again.
+- **Damp shades it, size waits** - Turning `damp` while frozen darkens or brightens the held wash, and turning it back brings back the brightness it had: nothing is lost. A new `size` waits until you release the freeze, then the reverb glides to it; FX marks the `size` row `held` meanwhile.
+- **A bypass ends it** - Bypassing the reverb, by hand or by a PSET, ends a freeze, and a freeze cannot be set while the reverb is bypassed. The reverb has no clear: a bypass empties it.
+- **Not saved** - A PSET never stores it, and loading one leaves it as it is unless the PSET bypasses the reverb; scenes, LFOs and macros leave it alone. It can be mapped to MIDI (PARAMETERS > MAP).
+- **On the standard setting** the reverb (a lighter one) has no freeze: the `freeze` row shows `--`, RF is dark, and a `reverb freeze` set from PARAMETERS or a MIDI controller goes back to off at once.
+
 ## Shimmer
 
 Shimmer shifts the pitch of what the delay and the reverb feed back to themselves, so each echo, and the reverb's tail, climbs (or falls) by an interval: a bright, rising halo. Three params, in the fx group of the PARAMETERS menu:

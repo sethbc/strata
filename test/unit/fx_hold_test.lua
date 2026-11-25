@@ -4,9 +4,11 @@
 -- the fx group, never in a PSET or a scene and no LFO destination, what
 -- each sends, a bypass ending the freeze first, a freeze refused while
 -- bypassed, toggle through set_binary_param, a PSET load leaving a freeze
--- as it is (plan ruling 61), the reverb not offered, and a frozen delay
--- through a tempo move, a sync switch, a bypass and a PSET load (the plan's
--- Review Focus 3)
+-- as it is (plan ruling 61), a frozen delay through a tempo move, a sync
+-- switch, a bypass and a PSET load (the plan's Review Focus 3), and 3.9's
+-- reverb_freeze (#819): offered on the high tier only, refused on the
+-- standard tier and while bypassed, its bypass and PSET rules the delay's,
+-- and its machine's table
 -- Run alone: lua test/run.lua fx_hold
 
 return function(h)
@@ -17,6 +19,17 @@ local function loaded()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   return context, S, S.lib.fx_hold
+end
+
+-- The performance_active.data the engine writes on the high tier
+local HIGH = {tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60, reason = "high: setting"}
+
+-- A load on the high tier, where the reverb's freeze is offered
+local function loaded_high()
+  h.write_performance_active(HIGH)
+  local context, S, fx_hold = loaded()
+  assert_equal(S.performance.tier, "high", "the load runs the high tier")
+  return context, S, fx_hold
 end
 
 -- The engine calls since they were cleared, as "name(arg, ...)" strings
@@ -34,6 +47,22 @@ local function call_names(context, names)
 end
 
 local function freeze_calls(context) return context.calls_named("setDelayFreeze") end
+local function reverb_freeze_calls(context) return context.calls_named("setReverbFreeze") end
+
+-- A controller on port 1 mapped to a param (cc 48): a function giving the
+-- values it was echoed, as "v,v,..."
+local function mapped_controller(context, param_id)
+  local controller = context.midi.plug(1)
+  norns.pmap.data[param_id] = { dev = 1, ch = 1, cc = 48, in_lo = 0, in_hi = 127, out_lo = 0, out_hi = 1,
+    echo = true, value = 0 }
+  return function()
+    local values = {}
+    for _, message in ipairs(controller.sent) do
+      if message[2] == 48 then table.insert(values, message[3]) end
+    end
+    return table.concat(values, ",")
+  end
+end
 
 local function pset_lines(path)
   local file = assert(io.open(path, "r")); local text = file:read("*a"); file:close()
@@ -334,7 +363,7 @@ end)
 test("release('reverb') does nothing while the reverb is not offered", function()
   local context, _, fx_hold = loaded()
   assert_true(fx_hold.offered("delay"), "the delay's freeze is offered")
-  assert_true(not fx_hold.offered("reverb") and not fx_hold.frozen("reverb"), "the reverb's is not (cut from 3.8)")
+  assert_true(not fx_hold.offered("reverb") and not fx_hold.frozen("reverb"), "the reverb's is not (the standard tier)")
   assert_true(not fx_hold.offered("filter") and not fx_hold.offered(nil), "nor anything else")
   context.clear_engine_calls()
   fx_hold.release("reverb"); fx_hold.toggle("reverb")
@@ -344,25 +373,284 @@ test("release('reverb') does nothing while the reverb is not offered", function(
     "the reverb's bypass sends its bypass alone")
 end)
 
--- The plan's ruling 27: 3.8's package 3a measured the high tier's reverb
--- freeze and cut it (its level and its tail did not hold within 1 dB), so
--- Lua offers the reverb no freeze on either tier and has no record or
--- param for it: 4a's and 4b's reverb freeze paths read offered("reverb").
--- 3.9's engine has the freeze (setReverbFreeze, #819); its Lua side, which
--- changes this test, is the reverb freeze's second package
-test("the reverb is offered no freeze on either tier (the freeze is cut from 3.8)", function()
-  for _, tier in ipairs({"standard", "high"}) do
-    local context, S, fx_hold = loaded()
-    S.performance.tier = tier
-    assert_true(not fx_hold.offered("reverb"), "not offered on " .. tier)
-    assert_true(not fx_hold.frozen("reverb") and not fx_hold.any_frozen(), "and never frozen on " .. tier)
-    assert_equal(fx_hold.FX_HOLD.reverb, nil, "no reverb record")
-    assert_equal(params.lookup["reverb_freeze"], nil, "no reverb_freeze param")
-    context.clear_engine_calls()
-    fx_hold.toggle("reverb"); fx_hold.release("reverb")
-    assert_equal(#context.engine_calls, 0, "toggle and release of the reverb send nothing on " .. tier)
+-- 3.9's reverb freeze (#819, the design's section 4): the param exists on
+-- both tiers, so the param list does not depend on the tier, and the freeze
+-- is offered on the high tier alone (the FDN; FreeVerb2 has none)
+test("the reverb's freeze is offered on the high tier only", function()
+  local context, _, fx_hold = loaded_high()
+  assert_true(fx_hold.offered("reverb"), "offered on high")
+  assert_equal(fx_hold.FX_HOLD.reverb.freeze_id, "reverb_freeze", "the reverb's record names its param")
+  assert_equal(fx_hold.FX_HOLD.reverb.clear_id, nil, "and no clear")
+  context.clear_engine_calls()
+  fx_hold.toggle("reverb")
+  assert_true(fx_hold.frozen("reverb") and fx_hold.any_frozen(), "toggle freezes it")
+  fx_hold.toggle("reverb")
+  assert_true(not fx_hold.frozen("reverb") and not fx_hold.any_frozen(), "and releases it")
+  assert_equal(table.concat(call_names(context, {"setReverbFreeze"}), " "), "setReverbFreeze(1) setReverbFreeze(0)",
+    "the engine hears each")
+  local S
+  context, S, fx_hold = loaded()
+  assert_equal(S.performance.tier, "standard", "a plain load runs the standard tier")
+  assert_true(not fx_hold.offered("reverb"), "not offered on standard")
+  assert_true(params.lookup["reverb_freeze"] ~= nil and fx_hold.FX_HOLD.reverb ~= nil, "the param and record exist")
+  context.clear_engine_calls()
+  fx_hold.toggle("reverb"); fx_hold.release("reverb")
+  assert_equal(#context.engine_calls, 0, "toggle and release of the reverb send nothing on standard")
+  assert_equal(params:get("reverb_freeze"), 0, "and leave the param at 0")
+end)
+
+test("reverb_freeze is a binary in no PSET, scene, LFO destination or macro target", function()
+  local context, S, fx_hold = loaded_high()
+  local id = fx_hold.FX_HOLD.reverb.freeze_id
+  local param = params:lookup_param(id)
+  assert_true(param ~= nil and param.t == params.tBINARY, "reverb_freeze is a binary param")
+  assert_equal(param.behavior, "toggle"); assert_equal(param.name, "reverb freeze")
+  assert_equal(params:get(id), 0, "off at its default")
+  assert_equal(param.save, false, "its save is off")
+  -- in the fx group, after the delay's clear
+  local group_index
+  for index, each in ipairs(params.params) do
+    if each.id == "strata_fx" then group_index = index end
+  end
+  local index = params.lookup[id]
+  assert_true(index > group_index and index <= group_index + params:get("strata_fx"), "in the fx group")
+  assert_equal(params.params[index - 1].id, "delay_clear", "after the delay's clear")
+  -- a written PSET has no line for it, frozen or not
+  params:set(id, 1)
+  local pset_path = context.data_dir .. "reverb_freeze.pset"
+  params:write(pset_path, "reverb freeze")
+  assert_true(not pset_lines(pset_path):find("reverb_freeze", 1, true), "the PSET has no reverb_freeze line")
+  -- a scene never holds it, and a recall leaves it alone
+  capture_scene(3)
+  assert_true(not scene_holds(S.scenes[3].data, "reverb_freeze"), "the scene holds no reverb freeze field")
+  params:set(id, 0); params:set(id, 1)
+  context.clear_engine_calls()
+  recall_scene(3, 0)
+  assert_equal(params:get(id), 1, "a recall leaves the freeze as it is")
+  assert_equal(#reverb_freeze_calls(context), 0, "and sends no setReverbFreeze")
+  for _, target in ipairs(S.lib.macros.target_ids()) do
+    assert_true(target ~= id, "not an LFO destination or a macro target: " .. target)
   end
 end)
+
+-- The design's call 1: refused on the standard tier as a freeze is refused
+-- while bypassed, so a mapped controller's light stays honest
+test("a reverb freeze set on the standard tier is refused", function()
+  local context, _, fx_hold = loaded()
+  local echoes = mapped_controller(context, "reverb_freeze")
+  context.clear_engine_calls()
+  params:set("reverb_freeze", 1)
+  assert_equal(params:get("reverb_freeze"), 0, "the param goes back to off")
+  assert_true(not fx_hold.frozen("reverb"), "not frozen")
+  local sent = call_names(context, {"setReverbFreeze"})
+  for _, call in ipairs(sent) do assert_equal(call, "setReverbFreeze(0)", "no setReverbFreeze(1) goes out") end
+  assert_true(#sent <= 1, "at most one setReverbFreeze(0) goes out (sent " .. table.concat(sent, " ") .. ")")
+  assert_equal(echoes(), "0", "the mapped controller hears the 0")
+end)
+
+test("a reverb freeze set while bypassed is refused", function()
+  local context, _, fx_hold = loaded_high()
+  local echoes = mapped_controller(context, "reverb_freeze")
+  params:set("reverb_bypass", 1)
+  context.clear_engine_calls()
+  params:set("reverb_freeze", 1)
+  assert_equal(params:get("reverb_freeze"), 0, "the param goes back to off")
+  local sent = call_names(context, {"setReverbFreeze"})
+  for _, call in ipairs(sent) do assert_equal(call, "setReverbFreeze(0)", "no setReverbFreeze(1) goes out") end
+  assert_true(#sent <= 1, "at most one setReverbFreeze(0) goes out (sent " .. table.concat(sent, " ") .. ")")
+  assert_equal(echoes(), "0", "the mapped controller hears the 0")
+  context.clear_engine_calls()
+  fx_hold.toggle("reverb")
+  assert_equal(params:get("reverb_freeze"), 0, "toggle does nothing while bypassed")
+  assert_equal(#context.engine_calls, 0, "and sends nothing")
+  params:set("reverb_bypass", 0)
+  fx_hold.toggle("reverb")
+  assert_equal(params:get("reverb_freeze"), 1, "lifted, toggle freezes")
+end)
+
+test("a reverb bypass ends its freeze first", function()
+  local context, _, fx_hold = loaded_high()
+  params:set("reverb_freeze", 1)
+  context.clear_engine_calls()
+  params:set("reverb_bypass", 1)
+  assert_equal(table.concat(call_names(context, {"setReverbFreeze", "setBypass"}), " "),
+    "setReverbFreeze(0) setBypass(1, 1)", "the freeze ends before the bypass")
+  assert_equal(params:get("reverb_freeze"), 0, "and the param reads 0")
+  assert_true(not fx_hold.frozen("reverb"), "not frozen")
+  context.clear_engine_calls()
+  params:set("reverb_bypass", 0)
+  assert_equal(table.concat(call_names(context, {"setReverbFreeze", "setBypass"}), " "), "setBypass(1, 0)",
+    "the lift sends no freeze")
+end)
+
+test("a PSET load leaves a reverb freeze as it is", function()
+  local context = loaded_high()
+  local pset_path = context.data_dir .. "reverb_unfrozen.pset"
+  params:write(pset_path, "reverb unfrozen")
+  params:set("reverb_freeze", 1)
+  context.clear_engine_calls()
+  params:read(pset_path)
+  assert_equal(params:get("reverb_freeze"), 1, "a PSET load leaves the freeze on")
+  assert_equal(#reverb_freeze_calls(context), 0, "and sends no setReverbFreeze")
+  local frozen_path = context.data_dir .. "reverb_frozen.pset"
+  params:write(frozen_path, "reverb frozen")
+  params:set("reverb_freeze", 0)
+  context.clear_engine_calls()
+  params:read(frozen_path)
+  assert_equal(params:get("reverb_freeze"), 0, "a PSET written while frozen loads no freeze")
+  assert_equal(#reverb_freeze_calls(context), 0, "and sends no setReverbFreeze")
+end)
+
+test("a PSET that bypasses the reverb ends its freeze", function()
+  local context = loaded_high()
+  params:set("reverb_bypass", 1)
+  local bypassed_path = context.data_dir .. "reverb_bypassed.pset"
+  params:write(bypassed_path, "reverb bypassed")
+  params:set("reverb_bypass", 0)
+  params:set("reverb_freeze", 1)
+  context.clear_engine_calls()
+  params:read(bypassed_path)
+  assert_equal(table.concat(call_names(context, {"setReverbFreeze", "setBypass"}), " "),
+    "setReverbFreeze(0) setBypass(1, 1)", "a PSET's bypass ends the freeze first")
+  assert_equal(params:get("reverb_freeze"), 0, "and the freeze reads 0")
+end)
+
+-- #883's rule for the reverb: a silent read runs no bypass action, so the
+-- read hook releases the freeze it left bypassed, before the engine params'
+-- hook sends the bypass (#965)
+test("a silent read that leaves the reverb bypassed and frozen releases it", function()
+  local context, S, fx_hold = loaded_high()
+  params:set("reverb_bypass", 1)
+  local bypassed_path = context.data_dir .. "reverb_silent_bypassed.pset"
+  params:write(bypassed_path, "reverb silent bypassed")
+  params:set("reverb_bypass", 0)
+  fx_hold.toggle("reverb")
+  assert_true(fx_hold.frozen("reverb"), "frozen first")
+  context.clear_engine_calls()
+  params:read(bypassed_path, true)
+  assert_true(S.lib.voice_mix.bypassed("reverb"), "the read bypasses the reverb")
+  assert_equal(params:get("reverb_freeze"), 0, "and the freeze is released")
+  assert_equal(table.concat(call_names(context, {"setReverbFreeze", "setBypass"}), " "),
+    "setReverbFreeze(0) setBypass(1, 1)", "the release goes out before the bypass")
+  params:set("reverb_bypass", 0)
+  fx_hold.toggle("reverb")
+  assert_true(fx_hold.frozen("reverb"), "lifted, toggle freezes")
+end)
+
+test("the invariant fx hold fails for a reverb bypassed and frozen", function()
+  local _, S = loaded_high()
+  local invariant
+  for _, record in ipairs(S.registry.invariants) do
+    if record.name == "fx hold" then invariant = record.fn end
+  end
+  assert_equal(invariant(), nil, "holds at the start")
+  -- broken on purpose with silent sets (no action runs), then put right
+  params:set("reverb_freeze", 1)
+  params:set("reverb_bypass", 1, true)
+  params:set("reverb_freeze", 1, true)
+  local problem = invariant()
+  assert_true(type(problem) == "string" and problem:find("the reverb is bypassed and frozen", 1, true) ~= nil,
+    "names the reverb bypassed and frozen: " .. tostring(problem))
+  params:set("reverb_freeze", 0, true)
+  assert_equal(invariant(), nil, "holds once released")
+end)
+
+-- The reverb has no clear (a bypass empties it): the delay's clear releases
+-- the delay's freeze alone
+test("delay_clear leaves a frozen reverb frozen", function()
+  local context, _, fx_hold = loaded_high()
+  fx_hold.toggle("reverb"); fx_hold.toggle("delay")
+  context.clear_engine_calls()
+  fx_hold.clear()
+  assert_equal(table.concat(call_names(context, {"setDelayFreeze", "setReverbFreeze", "clearDelay"}), " "),
+    "setDelayFreeze(0) clearDelay()", "the delay released and cleared, the reverb untouched")
+  assert_true(fx_hold.frozen("reverb") and not fx_hold.frozen("delay"), "the reverb stays frozen")
+end)
+
+-- The reverb's machine (docs/notes/lua/fx-hold.md, ### fx hold, its first
+-- table, which `notes` compares): the delay's events but the clear, on the
+-- high tier (running, frozen, bypassed) and on the standard tier, where
+-- nothing freezes. The helper loads the script, so each state sets the tier after
+-- the load (S.performance is read at each use); a reverb bypassed and frozen
+-- is no state (the invariant fx hold forbids it), so state_of names it and
+-- the row fails
+local function reverb_state()
+  local S = local_value("S")
+  if S.performance.tier ~= "high" then return "standard" end
+  local frozen = params:get("reverb_freeze") == 1
+  if S.lib.voice_mix.bypassed("reverb") then return frozen and "bypassed and frozen" or "bypassed" end
+  return frozen and "frozen" or "running"
+end
+
+-- A state: the tier, a PSET that bypasses the reverb and one that leaves it
+-- running (each written at the state's tier), then the setup
+local function reverb_entered(tier, setup)
+  return function(context)
+    local_value("S").performance.tier = tier
+    params:set("reverb_bypass", 1)
+    context.bypassed_pset = context.data_dir .. "table_bypassed.pset"
+    params:write(context.bypassed_pset, "table bypassed")
+    params:set("reverb_bypass", 0)
+    context.running_pset = context.data_dir .. "table_running.pset"
+    params:write(context.running_pset, "table running")
+    if setup then setup() end
+    context.clear_engine_calls()
+  end
+end
+
+-- A row whose check is the reverb's sends, as "name(arg, ...)" strings
+local function reverb_row(state, event, next_state, sends)
+  return {state, event, next_state, check = function(context)
+    assert_equal(table.concat(call_names(context, {"setReverbFreeze", "setBypass"}), " "), sends,
+      state .. " + " .. event .. ": the reverb's sends")
+  end}
+end
+
+h.transition_table({
+  name = "reverb freeze",
+  states = {
+    running = reverb_entered("high"),
+    frozen = reverb_entered("high", function() params:set("reverb_freeze", 1) end),
+    bypassed = reverb_entered("high", function() params:set("reverb_bypass", 1) end),
+    standard = reverb_entered("standard"),
+  },
+  events = {
+    freeze = function() params:set("reverb_freeze", 1) end,
+    release = function() params:set("reverb_freeze", 0) end,
+    bypass = function() params:set("reverb_bypass", 1) end,
+    lift = function() params:set("reverb_bypass", 0) end,
+    ["silent bypassing read"] = function(context) params:read(context.bypassed_pset, true) end,
+    ["running read"] = function(context) params:read(context.running_pset) end,
+  },
+  state_of = reverb_state,
+  rows = {
+    reverb_row("running", "freeze", "frozen", "setReverbFreeze(1)"),
+    reverb_row("running", "release", "running", ""),
+    reverb_row("running", "bypass", "bypassed", "setBypass(1, 1)"),
+    reverb_row("running", "lift", "running", ""),
+    reverb_row("running", "silent bypassing read", "bypassed", "setBypass(1, 1)"),
+    reverb_row("running", "running read", "running", ""),
+    reverb_row("frozen", "freeze", "frozen", ""),
+    reverb_row("frozen", "release", "running", "setReverbFreeze(0)"),
+    reverb_row("frozen", "bypass", "bypassed", "setReverbFreeze(0) setBypass(1, 1)"),
+    reverb_row("frozen", "lift", "frozen", ""),
+    reverb_row("frozen", "silent bypassing read", "bypassed", "setReverbFreeze(0) setBypass(1, 1)"),
+    reverb_row("frozen", "running read", "frozen", ""),
+    reverb_row("bypassed", "freeze", "bypassed", "setReverbFreeze(0)"),
+    reverb_row("bypassed", "release", "bypassed", ""),
+    reverb_row("bypassed", "bypass", "bypassed", ""),
+    reverb_row("bypassed", "lift", "running", "setBypass(1, 0)"),
+    reverb_row("bypassed", "silent bypassing read", "bypassed", ""),
+    reverb_row("bypassed", "running read", "running", "setBypass(1, 0)"),
+    reverb_row("standard", "freeze", "standard", "setReverbFreeze(0)"),
+    reverb_row("standard", "release", "standard", ""),
+    reverb_row("standard", "bypass", "standard", "setBypass(1, 1)"),
+    reverb_row("standard", "lift", "standard", ""),
+    reverb_row("standard", "silent bypassing read", "standard", "setBypass(1, 1)"),
+    reverb_row("standard", "running read", "standard", ""),
+  },
+  notes = {"docs/notes/lua/fx-hold.md", "fx hold"},
+})
 
 -- 4a's review: one answer to "would toggle freeze or release this effect
 -- now", which toggle and FX's hint and key share
@@ -375,7 +663,7 @@ test("freezable is offered and not bypassed, and toggle acts only when it is tru
   assert_true(not fx_hold.freezable("delay"), "a bypassed delay cannot")
   params:set("delay_bypass", 0)
   for _, effect in ipairs({"reverb", "filter", false}) do
-    assert_true(not fx_hold.freezable(effect or nil), tostring(effect) .. " cannot (not offered)")
+    assert_true(not fx_hold.freezable(effect or nil), tostring(effect) .. " cannot (not offered on standard)")
   end
   -- toggle asks freezable: with it false, toggle does nothing
   local real = fx_hold.freezable
