@@ -120,11 +120,13 @@ return function(S)
   end
 
   -- A hit's hold: its gate length when the caller knows it (a gated
-  -- step's), else a gated voice's gate length, else 0
+  -- step's), else a gated voice's gate length, else 0. Gated is the gate
+  -- rule's answer (3.9: a gate voice, or a pulse voice with a step while
+  -- the patterns play), as the engine's hold reads seqGate
   local function hold_for(voice_idx, info)
     if info and type(info.gate_seconds) == "number" then return info.gate_seconds end
     local sequencer = S.lib.sequencer
-    if S.voices[voice_idx].values.seq_gate == sequencer.SEQ.gate_on then
+    if sequencer.gate_wanted(voice_idx) == 1 then
       return sequencer.gate_seconds(voice_idx) or 0
     end
     return 0

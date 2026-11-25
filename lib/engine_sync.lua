@@ -737,11 +737,12 @@ return function(S)
   end
 
   -- A registered record's grain key (one of a record's grain_keys: an
-  -- engine name, or {name, value = fn}) and a stored value: the
-  -- setGrainParam name and the value to send
-  local function grain_key_message(grain_key, value)
+  -- engine name, or {name, value = fn}), a stored value and the voice: the
+  -- setGrainParam name and the value to send (3.9: value is called with the
+  -- value and the voice, fn(x, voice_idx))
+  local function grain_key_message(grain_key, value, voice_idx)
     if type(grain_key) == "table" then
-      return grain_key.name, grain_key.value and grain_key.value(value) or value
+      return grain_key.name, grain_key.value and grain_key.value(value, voice_idx) or value
     end
     return grain_key, value
   end
@@ -763,7 +764,7 @@ return function(S)
     if entry.key ~= nil then
       value = S.voices[voice_idx].values[entry.key]
       if entry.carry ~= false then value = part_value(carried, voice_idx, entry.key, value) end
-      if entry.value then value = entry.value(value) end
+      if entry.value then value = entry.value(value, voice_idx) end
     end
     if entry.grain then
       engine.setGrainParam(voice_idx - 1, entry.grain, value)

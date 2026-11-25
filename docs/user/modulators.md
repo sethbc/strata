@@ -52,7 +52,7 @@ Each voice has one envelope, **EN1** to **EN7**, fired by that voice's own hits:
 
 - **Attack**, **decay** and **release**: 1 ms to 10 s (5 ms, 200 ms and 200 ms by default).
 - **Sustain**: 0 to 1 (0 by default). At 0 the envelope is an attack and a decay, whatever the hold.
-- **The hold** is the hit's gate length: on a voice whose `seq gate` is on, the step's gate (a step's own gate length, or the voice's); on a voice that is not gated, none, so the release follows the decay. A long step gives a long envelope.
+- **The hold** is the hit's gate length: on a gated voice (its step mode gate, or pulse with a step while the patterns play), the step's gate (a step's own gate length, or the voice's); on a voice that is not gated, none, so the release follows the decay. A long step gives a long envelope.
 - **Curve** (-8 to 8, -4 by default) bends all three slopes: below 0 a slope moves fast first and then slowly, above 0 the other way, at 0 it is straight.
 - **Loop** (off by default): on, the envelope starts again each time it ends, an LFO of its own shape that runs whether or not its voice plays; a hit still restarts it. Turned off, it finishes the cycle it is in.
 - A new hit starts the attack from the level the envelope is at, so quick hits never jump down to 0.

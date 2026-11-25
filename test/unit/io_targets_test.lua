@@ -103,6 +103,7 @@ end)
 
 test("a plain step plays the routed targets at the voice's pitch and ends at its gate", function()
   local context, S, targets = started()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local a, b = recording_target(S, "a"), recording_target(S, "b")
   a.routes[1] = true
   params:set("v1_freq", 220)

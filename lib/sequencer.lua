@@ -37,8 +37,13 @@ return function(S)
     division_names = {"1/32", "1/16t", "1/16", "1/8t", "1/8", "1/4", "1/2", "1 bar"},
     division_beats = {1/8, 1/6, 1/4, 1/3, 1/2, 1, 2, 4},
     default_division = 3,            -- 1/16
-    gate_options = {"off", "on"},    -- v<i>_seq_gate: seqGate is the index - 1
-    gate_on = 2,
+    -- 3.9 grid sequencer (design section 1, The param): v<i>_seq_gate is
+    -- the step mode, 3.8's off and on (1, 2) now accent and gate, move and
+    -- pulse appended; pulse the default. Its seqGate is the gate rule
+    -- (gate_wanted)
+    modes = {"accent", "gate", "move", "pulse"},
+    gate_on = 2,                     -- the gate mode (3.8's on)
+    default_mode = 4,                -- pulse
     gate_steps = {0.05, 16},         -- a gate's length in steps (the voice's and a step's)
     gate_length_default = 0.5,
     gate_release = {0.005, 4},       -- s
@@ -174,7 +179,57 @@ return function(S)
     return SEQ.division_beats[voice_values(voice_idx).seq_division or SEQ.default_division]
   end
 
-  local function gated(voice_idx) return voice_values(voice_idx).seq_gate == SEQ.gate_on end
+  -- The step mode and the gate rule (3.9 grid sequencer, design section 1;
+  -- G7: one table). rule(option, voice): the seqGate a voice's mode option
+  -- gives now, 1 for gate, for pulse 1 exactly while the patterns play and
+  -- the voice has a set step inside its length, else 0: a function of the
+  -- mode, the pattern and the transport, with nothing stored. It is the
+  -- grain key's value, so the mode param's own sender sends it
+  local modes = {}
+
+  function modes.rule(option, voice_idx)
+    local mode = SEQ.modes[option]
+    if mode == "gate" then return 1 end
+    if mode == "pulse" and S.pattern_playing and M.has_set_step(voice_idx) then return 1 end
+    return 0
+  end
+
+  -- Each voice's answer now (before a change that may move it)
+  function modes.answers()
+    local answers = {}
+    for voice_idx = 1, NUM_VOICES do answers[voice_idx] = M.gate_wanted(voice_idx) end
+    return answers
+  end
+
+  -- After that change: the rule sent to each voice whose answer moved
+  function modes.send_moved(answers)
+    for voice_idx = 1, NUM_VOICES do
+      if M.gate_wanted(voice_idx) ~= answers[voice_idx] then M.send_gate_rule(voice_idx) end
+    end
+  end
+
+  -- The voice's step mode by name ("accent", "gate", "move" or "pulse"); nil
+  -- for a voice out of range
+  function M.step_mode(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    return SEQ.modes[voice_values(voice_idx).seq_gate or SEQ.default_mode]
+  end
+
+  -- The gate rule's answer for the voice now: 0 or 1 (0 out of range)
+  function M.gate_wanted(voice_idx)
+    if not valid_voice(voice_idx) then return 0 end
+    return modes.rule(voice_values(voice_idx).seq_gate or SEQ.default_mode, voice_idx)
+  end
+
+  -- Send the rule: the mode param through its own sender (send_param_to_
+  -- engine: only to a running voice; a start sends it with its other grain
+  -- keys) and nothing else. The sequencer keeps no record of what it sent
+  function M.send_gate_rule(voice_idx)
+    if not valid_voice(voice_idx) then return end
+    send_param_to_engine(voice_param(voice_idx, "seq_gate"), voice_values(voice_idx).seq_gate or SEQ.default_mode)
+  end
+
+  local function gated(voice_idx) return M.gate_wanted(voice_idx) == 1 end
 
   local function direction(voice_idx) return voice_values(voice_idx).seq_direction or SEQ.forward end
 
@@ -239,6 +294,21 @@ return function(S)
       if S.patterns[voice_idx][step] > 0 then return true end
     end
     return false
+  end
+
+  -- The one writer of a step's level (3.9 grid sequencer, design section 1:
+  -- the grid's level gesture, SEQ's encoder, its level and reset rows, the
+  -- arc's ring and toggle_pattern_step write through it; replace_pattern
+  -- writes a whole pattern): a whole level 0..MAX_STEP_LEVEL, the voice's
+  -- pattern undo ended, the gate rule sent when its answer moved, the grid
+  -- redrawn. A voice, step or level out of range does nothing
+  function M.set_level(voice_idx, step, level)
+    if not valid_place(voice_idx, step) or not whole_between(level, 0, MAX_STEP_LEVEL) then return end
+    local answer = M.gate_wanted(voice_idx)
+    S.patterns[voice_idx][step] = level
+    S.lib.mutation.note_pattern_edit(voice_idx)
+    if M.gate_wanted(voice_idx) ~= answer then M.send_gate_rule(voice_idx) end
+    grid_redraw()
   end
 
   -- A step attribute (a copy of a notes list), or nil
@@ -734,14 +804,28 @@ return function(S)
     step_region_to_end[voice_idx] = S.lib.notes.pass_seconds(voice_idx, region[2]) ~= nil
   end
 
+  -- A move voice's hit (3.9 grid sequencer, design section 1, A move hit):
+  -- for its own voice a copy of the event at velocity 0, so it adds no swell
+  -- and plucks no string (the retrigger still reaches what listens to hits);
+  -- any other mode's event as it is
+  function modes.own_event(event)
+    if M.step_mode(event.voice) ~= "move" then return event end
+    local own = {}
+    for key, value in pairs(event) do own[key] = value end
+    own.velocity = 0
+    return own
+  end
+
   -- Strata's own voices: a stopped voice is started at the step's first
   -- hit (a gated one is then retriggered), a running one retriggered at
   -- each hit, a gated one's gate length sent first when it changed, then
   -- the chord's further notes. Never a node for the voice's own note:
   -- start_voice for a stopped voice, retrigger for a running one. The
   -- step's locks and note are set first: a stopped voice's sends wait for
-  -- its start, which carries them, so its first grain plays the step (#632)
+  -- its start, which carries them, so its first grain plays the step (#632).
+  -- 3.9: a move voice plays its own hit at velocity 0 (modes.own_event)
   local function voices_play(event)
+    event = modes.own_event(event)
     local voice_idx = event.voice
     local voice = S.voices[voice_idx]
     local started = false
@@ -895,6 +979,8 @@ return function(S)
     local event = {voice = voice_idx, step = step, hit = hit, hits = hits, first = hit == 1, level = level,
       velocity = level / MAX_STEP_LEVEL, beat = clock.get_beats(), gate_beats = division / hits,
       pitches = copy_list(pitches)}
+    -- 3.9: outside, a move hit is at full velocity (its level is kept)
+    if M.step_mode(voice_idx) == "move" then event.velocity = 1 end
     if gated(voice_idx) then
       local steps = attrs.gate or voice_values(voice_idx).seq_gate_length or SEQ.gate_length_default
       event.gate_beats = steps * division / hits
@@ -1486,12 +1572,9 @@ return function(S)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
     if step < 1 or step > PATTERN_LENGTH then return end
 
-    if S.patterns[voice_idx][step] == 0 then
-      S.patterns[voice_idx][step] = MAX_STEP_LEVEL  -- full brightness
-    else
-      S.patterns[voice_idx][step] = 0
-    end
-    S.lib.mutation.note_pattern_edit(voice_idx)
+    -- an empty step on at full brightness, a set one off, through the one
+    -- writer of a level
+    M.set_level(voice_idx, step, S.patterns[voice_idx][step] == 0 and MAX_STEP_LEVEL or 0)
   end
 
   -- A step level from any value: a number floored to a whole level and
@@ -1508,10 +1591,12 @@ return function(S)
   -- pattern, and the voice's overrides (its locks and note: no step of the
   -- old pattern will end them). Every whole-pattern change goes through it;
   -- it forgets the voice's fill (S.seq_euclid, #923: euclid sets its own
-  -- after) and redraws nothing (callers do)
+  -- after) and redraws nothing (callers do). 3.9: the gate rule is sent
+  -- when its answer moved
   function M.replace_pattern(voice_idx, steps)
     if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 then return end
     if voice_idx < 1 or voice_idx > NUM_VOICES or type(steps) ~= "table" then return end
+    local answer = M.gate_wanted(voice_idx)
     for step = 1, PATTERN_LENGTH do
       S.patterns[voice_idx][step] = whole_step_level(steps[step])
     end
@@ -1519,6 +1604,7 @@ return function(S)
     end_overrides(voice_idx)
     S.lib.grid_core.end_step_gestures(voice_idx)
     S.lib.mutation.note_pattern_edit(voice_idx)
+    if M.gate_wanted(voice_idx) ~= answer then M.send_gate_rule(voice_idx) end
   end
 
   function clear_pattern(voice_idx)
@@ -1613,14 +1699,18 @@ return function(S)
   -- output that failed is played again. A start the play key left waiting
   -- is dropped (a followed transport start, #625; the waiting start's own
   -- run has left the quantizer already). The clocks that ran end through
-  -- end_clocks(all_posted): true for a followed transport start
+  -- end_clocks(all_posted): true for a followed transport start. 3.9: the
+  -- gate rule goes to every voice whose answer the start moved (a pulse
+  -- voice with a step), before the first hit
   local function start_patterns(all_posted)
     S.lib.quantize.cancel("patterns")
     end_clocks(all_posted)
     -- the sequencer's count is the clock's again (ruling 47)
     play.failed, play.started, play.reset_beat, play.offset = {}, false, nil, 0
     play.generation = play.generation + 1
+    local answers = modes.answers()
     S.pattern_playing = true
+    modes.send_moved(answers)
     S.pattern_position = 1
     S.pattern_sounding_step = nil
     local beat = clock.get_beats()
@@ -1640,16 +1730,20 @@ return function(S)
 
   -- Stop the patterns: a start the play key left waiting dropped (#625),
   -- every clock ended (end_clocks), the playheads cleared, every override
-  -- ended and (when they played) every output's stop run
+  -- ended and (when they played) every output's stop run; 3.9: then the
+  -- gate rule to every voice whose answer the stop moved (opening every
+  -- pulse voice)
   function pattern_clock_stop()
     S.lib.quantize.cancel("patterns")
     local was_playing = S.pattern_playing
+    local answers = modes.answers()
     S.pattern_playing = false
     S.pattern_sounding_step = nil
     end_clocks(false)
     play.reset_beat, chain.next_beat = nil, nil
     end_all_overrides()
     if was_playing then stop_outputs() end
+    modes.send_moved(answers)
     grid_redraw()
     -- the header's play mark, SEQ's status line and SETUP's count offset,
     -- whoever stopped them (#921)
@@ -1711,12 +1805,16 @@ return function(S)
           -- the step that set the voice's overrides is past the new length:
           -- no step of it will end them
           if (last_played[voice_idx] or 0) > length then end_overrides(voice_idx) end
+          -- 3.9: a pulse voice's rule counts the steps inside its length
+          if M.step_mode(voice_idx) == "pulse" then M.send_gate_rule(voice_idx) end
           grid_redraw()
         end})
       add(voice_idx, record, "seq_division", {type = "option", name = "seq division", options = SEQ.division_names,
         default = SEQ.default_division})
-      add(voice_idx, record, "seq_gate", {type = "option", name = "seq gate", options = SEQ.gate_options, default = 1,
-        action = function() resend_gate(voice_idx) end})
+      -- 3.9: the step mode; its own send (add_voice_param's) is the gate
+      -- rule's (send_gate_rule), so its action adds the gate length only
+      add(voice_idx, record, "seq_gate", {type = "option", name = "seq gate", options = SEQ.modes,
+        default = SEQ.default_mode, action = function() resend_gate(voice_idx) end})
       add(voice_idx, record, "seq_gate_length", {type = "control", name = "seq gate length",
         controlspec = controlspec.new(SEQ.gate_steps[1], SEQ.gate_steps[2], "exp", 0, SEQ.gate_length_default, "st"),
         action = function() resend_gate(voice_idx) end})
@@ -1736,18 +1834,19 @@ return function(S)
       add(voice_idx, record, "seq_misstep", {type = "number", name = "seq misstep", min = 0, max = SEQ.max_misstep,
         default = 0, formatter = percent})
     end,
-    grain_keys = {seq_gate = {name = "seqGate", value = function(option) return option - 1 end},
+    -- seq_gate's seqGate is the gate rule for the mode option sent
+    grain_keys = {seq_gate = {name = "seqGate", value = function(option, voice_idx) return modes.rule(option, voice_idx) end},
       seq_gate_release = "gateRelease", seq_gate_floor = "gateFloor"},
     -- the voice sync and a start (before voiceOn: grain params only): a
     -- gated voice's gate length, when it changed
     sync = function(voice_idx)
       if gated(voice_idx) then send_gate_seconds(voice_idx, M.gate_seconds(voice_idx)) end
     end,
-    scene_defaults = {seq_length = PATTERN_LENGTH, seq_division = SEQ.default_division, seq_gate = 1,
+    scene_defaults = {seq_length = PATTERN_LENGTH, seq_division = SEQ.default_division, seq_gate = SEQ.default_mode,
       seq_gate_length = SEQ.gate_length_default, seq_gate_release = SEQ.gate_release_default, seq_swing = SEQ.swing[1],
       seq_direction = SEQ.forward, seq_misstep = 0, seq_gate_floor = SEQ.gate_floor.default},
     discrete = {seq_length = {1, PATTERN_LENGTH}, seq_division = {1, #SEQ.division_names},
-      seq_gate = {1, #SEQ.gate_options}, seq_swing = {SEQ.swing[1], SEQ.swing[2]},
+      seq_gate = {1, #SEQ.modes}, seq_swing = {SEQ.swing[1], SEQ.swing[2]},
       seq_direction = {1, #SEQ.directions}, seq_misstep = {0, SEQ.max_misstep}},
     scene_ranges = {seq_gate_length = {SEQ.gate_steps[1], SEQ.gate_steps[2]},
       seq_gate_release = {SEQ.gate_release[1], SEQ.gate_release[2]},
@@ -1940,6 +2039,25 @@ return function(S)
       if not valid_voice(voice_idx) or type(seconds) ~= "number" or seconds < SEQ.gate_seconds[1]
           or seconds > SEQ.gate_seconds[2] then
         return "gate_sent[" .. tostring(voice_idx) .. "] is " .. tostring(seconds) .. ", no voice's gate length"
+      end
+    end
+  end)
+
+  -- 3.9 grid sequencer (design section 7, ruling 1b-2): for a running
+  -- voice, the mode the engine sync last sent for v<i>_seq_gate (its
+  -- expected value; after a start, which records none, the stored one the
+  -- start sent) gives the grain key the rule's answer now. What the engine
+  -- was sent is the stub's to check (the step gate table): this is what Lua
+  -- can see, and it fails on a mode change that was never sent
+  S.register_invariant("step gate", function()
+    for voice_idx = 1, NUM_VOICES do
+      if S.voices[voice_idx].active then
+        local sent = S.lib.engine_sync.expected_value(voice_param(voice_idx, "seq_gate"))
+        if sent == nil then sent = voice_values(voice_idx).seq_gate end
+        if modes.rule(sent, voice_idx) ~= M.gate_wanted(voice_idx) then
+          return "voice " .. voice_idx .. " was sent mode " .. tostring(sent) .. ", whose seqGate is "
+            .. modes.rule(sent, voice_idx) .. ", not the rule's " .. M.gate_wanted(voice_idx)
+        end
       end
     end
   end)

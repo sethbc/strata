@@ -126,7 +126,9 @@ end)
 --     written as the file's own text (SCENE.gated_text).
 -- The one difference allowed is the gate's floor, which this plan's 1a adds
 -- to the full sync the recall sends each voice whose source or type it
--- changes (voices 1 and 2). Every package keeps both green
+-- changes (voices 1 and 2). The grid sequencer's 1b re-based the recording
+-- for its step mode (three seqGate 0 lines; the fixture's header says why).
+-- Every package keeps both green
 local SCENE = {
   seed = 38,  -- math.randomseed, before the load
   fixture = "/test/fixtures/3.8.0-scene-calls.lua",

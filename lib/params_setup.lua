@@ -871,7 +871,7 @@ return function(S)
   local function key_sender(voice_idx, grain_key, voice_key)
     if grain_key then
       return function(value)
-        local name, sent = S.lib.engine_sync.grain_key_message(grain_key, value)
+        local name, sent = S.lib.engine_sync.grain_key_message(grain_key, value, voice_idx)
         engine.setGrainParam(voice_idx - 1, name, sent)
       end
     end
@@ -879,7 +879,7 @@ return function(S)
       return function(value) voice_key.send(voice_idx, value) end
     end
     return function(value)
-      local name, sent = S.lib.engine_sync.grain_key_message(voice_key, value)
+      local name, sent = S.lib.engine_sync.grain_key_message(voice_key, value, voice_idx)
       engine.setVoiceParam(voice_idx - 1, name, sent)
     end
   end
@@ -1218,7 +1218,7 @@ return function(S)
   -- them after it). An entry has key (the voice's value it sends; absent
   -- for a keyless send) and exactly one of grain = engine name
   -- (setGrainParam), voice = engine name (setVoiceParam) or send =
-  -- fn(voice_idx, value); value = fn(x) converts the value, and carry =
+  -- fn(voice_idx, value); value = fn(x, voice_idx) converts the value, and carry =
   -- false sends the stored value at a start, never the param's override
   -- and offsets. One part per record (S.registry.voice_params), in
   -- registration order: its grain keys (kept) and voice keys

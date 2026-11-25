@@ -423,8 +423,7 @@ return function(S)
     if not whole_number_in(positions, 1, PATTERN_LENGTH) or not whole_number_in(position, 1, positions) then return end
     local held, held_x, held_y = held_step(port, voice_idx, x, y)
     if held then
-      S.patterns[voice_idx][held.step] = M.level_for_position(position, positions)
-      S.lib.mutation.note_pattern_edit(voice_idx)
+      S.lib.sequencer.set_level(voice_idx, held.step, M.level_for_position(position, positions))
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
       stop_hold(port, held_x, held_y)

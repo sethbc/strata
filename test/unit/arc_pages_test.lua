@@ -1076,6 +1076,37 @@ test("SEQ rings move the step, set its level, the tempo and the voice row", func
   assert_equal(S.patterns[C.NUM_VOICES][3], 1, "ring 2 edits the selected voice's row")
 end)
 
+-- 3.9's grid sequencer, package 1b: SEQ's level ring writes through the
+-- sequencer's one writer of a level, which asks the gate rule
+test("SEQ's level ring writes through set_level, which asks the gate rule", function()
+  local context = load_strata(); finish_startup(context)
+  context.arc.plug(1)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  local writes = {}
+  local real_set_level = seq.set_level
+  seq.set_level = function(voice_idx, step, level)
+    writes[#writes + 1] = voice_idx .. ":" .. step .. ":" .. level
+    return real_set_level(voice_idx, step, level)
+  end
+  S.selected_voice = 1
+  show_page("SEQ")
+  S.cursors.seq_step = 4
+  pattern_clock_start()
+  context.clear_engine_calls()
+  context.arc.turn(1, 2, 30)
+  assert_equal(table.concat(writes, " "), "1:4:3", "ring 2 sets voice 1's step 4 to 3 through set_level")
+  context.arc.turn(1, 2, -1000)
+  seq.set_level = real_set_level
+  assert_equal(writes[#writes], "1:4:0", "and back to 0")
+  local gates = {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainParam" and call.args[1] == 0 and call.args[2] == "seqGate" then gates[#gates + 1] = call.args[3] end
+  end
+  assert_equal(table.concat(gates, " "), "1 0", "the pulse voice closed by its only step, opened when it is gone")
+  pattern_clock_stop()
+end)
+
 test("SEQ and SCENES rings draw their position fractions", function()
   local context = load_strata(); finish_startup(context)
   local device = context.arc.plug(1)

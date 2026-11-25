@@ -288,9 +288,9 @@ return function()
   --   name: unique; count: the params add adds per voice (checked at init),
   --     or a function of the voice that gives it;
   --   add = fn(voice_idx): adds them with S.lib.params_setup.add_voice_param;
-  --   grain_keys: {key = "<engine name>" | {name, value = fn(x), carry =
-  --     false}}, sent with setGrainParam by the param's sender and the voice
-  --     sync (a start sends them before voiceOn);
+  --   grain_keys: {key = "<engine name>" | {name, value = fn(x, voice_idx),
+  --     carry = false}}, sent with setGrainParam by the param's sender and
+  --     the voice sync (a start sends them before voiceOn);
   --   voice_keys: {key = "<engine name>" | {name, value = fn(x), carry =
   --     false} | {send = fn(voice_idx, x), carry = false}}, or a function of
   --     the voice that gives that table: sent with setVoiceParam (or the

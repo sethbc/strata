@@ -758,7 +758,8 @@ end
 -- from their defaults, with voices 1-4 running
 local SESSION_3_4 = { v2_mute = 1, v3_solo = 1, scatter = 1, scatter_depth = 50, v1_seq_gate = 2, v1_seq_swing = 66,
   morph = 0.5, macro_1 = 0.7 }
-local DEFAULTS_3_4 = { v2_mute = 0, v3_solo = 0, scatter = 0, scatter_depth = 10, v1_seq_gate = 1, v1_seq_swing = 50,
+-- (gs-1b: v1_seq_gate's default is pulse, 4)
+local DEFAULTS_3_4 = { v2_mute = 0, v3_solo = 0, scatter = 0, scatter_depth = 10, v1_seq_gate = 4, v1_seq_swing = 50,
   morph = 0, macro_1 = 0 }
 
 test("a PSET line that is missing still means the default (#628)", function()
@@ -1825,6 +1826,12 @@ local PARAM_FIXTURE_ALLOWED = {
     why = "gs-1a: a closed gate lets the floor of the voice through (grid sequencer design section 1)",
     record = {t = T.control, name = "seq gate floor", default = 0, min = 0, max = 1, warp = "lin", step = 0.01,
       quantum = 0.01, units = "", string = "0 %"}},
+  -- gs-1b: the step mode (3.9 grid sequencer design section 1, The param):
+  -- seq_gate's two options keep their numbers, two are appended, pulse the default
+  {kind = "options", id = "v<v>_seq_gate", options = {"accent", "gate", "move", "pulse"},
+    why = "gs-1b: seq_gate is the step mode, off and on now accent and gate (grid sequencer design section 1)"},
+  {kind = "default", id = "v<v>_seq_gate", default = 4,
+    why = "gs-1b: pulse is the new default (grid sequencer design section 1)"},
   -- 2b: the arpeggiator (design §4.3)
   {kind = "added", id = "v<v>_arp", after = "v<v>_release", why = "2b: each voice's arpeggiator (design section 4.3)",
     record = {t = T.option, name = "arp", default = 1, options = {"off", "up", "down", "up-down", "shuffle"}}},

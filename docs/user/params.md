@@ -216,10 +216,10 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | slices | off, one, overlap | off | Buffer voices: whether MIDI notes and a grid's row play the slot's slices, one at a time on the voice's own note or each in a note of its own; a step's slice plays as overlap gives, else as one ([Slices](slices.md)) |
 | seq length | 1-16 | 16 | The voice's pattern: how many steps it plays, how long each is, its gate and swing ([Sequencer](sequencer.md)) |
 | seq division | 1/32, 1/16t, 1/16, 1/8t, 1/8, 1/4, 1/2, 1 bar | 1/16 | |
-| seq gate | off, on | off | On: the voice is heard only while a step's gate is open |
+| seq gate | accent, gate, move, pulse | pulse | The step mode ([Step modes](sequencer.md#step-modes)): pulse and gate hear the voice only while a step's gate is open |
 | seq gate length | 0.05-16 st | 0.5 | In steps |
 | seq gate release | 0.005-4 s | 0.1 | |
-| seq gate floor | 0-100% | 0 | How much of the voice a closed gate lets through ([Gates](sequencer.md#gates)) |
+| seq gate floor | 0-100% | 0 | How much of the voice a closed gate lets through ([Step modes](sequencer.md#step-modes)) |
 | seq swing | 50-75 | 50 | Percent: 50 is straight |
 | seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
 | seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |

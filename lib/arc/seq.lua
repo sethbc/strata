@@ -42,13 +42,12 @@ return function(S)
     return arc_whole_steps("seq:" .. n, delta, ARC_SEQ.ticks[n], context)
   end
 
+  -- through the sequencer's one writer of a level (which redraws the grid)
   local function set_step_level(steps)
     local voice_idx, step = S.selected_voice, cursor_step()
-    local pattern = S.patterns[voice_idx]
-    if pattern == nil then return end
-    pattern[step] = util.clamp(pattern[step] + steps, 0, MAX_STEP_LEVEL)
-    S.lib.mutation.note_pattern_edit(voice_idx)
-    grid_redraw()  -- the grid shows the patterns
+    local level = S.patterns[voice_idx] and S.patterns[voice_idx][step]
+    if level == nil then return end
+    S.lib.sequencer.set_level(voice_idx, step, util.clamp(level + steps, 0, MAX_STEP_LEVEL))
   end
 
   local function arc_seq_delta(n, delta)
