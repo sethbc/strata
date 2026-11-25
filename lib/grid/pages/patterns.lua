@@ -34,7 +34,7 @@ return function(S)
   -- (chance: 8 of 15 keys, round(8 * 100 / 15); gate: the voice's gate
   -- length), the lights
   local LANE_SIDE = {
-    side = 2,
+    side = 2, side_count = 2,  -- the lane side, and how many sides the page has
     lines = {"hits", "a", "b", "chance", "repeats", "gate"},
     utility_line = 7,
     modes = {"pulse", "move", "accent"},
@@ -521,7 +521,7 @@ return function(S)
   M.record = {
     name = "patterns",
     index = GRID_PAGES.patterns,
-    sides = LANE_SIDE.side,
+    sides = LANE_SIDE.side_count,
     press = function(pane, x, y, z)
       if y < 1 or y > NUM_VOICES or x < 1 or x > PATTERN_LENGTH then return end
       if pane.side == LANE_SIDE.side then

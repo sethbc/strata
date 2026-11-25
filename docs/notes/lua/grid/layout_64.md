@@ -1,7 +1,7 @@
 ## Must not break
 
 - The layout is its spec alone (`S.lib.grid_pane.arrange`): no key, LED or page of its own; pages are their own files (`docs/notes/lua/grid/pane.md`).
-- It shows a half of a pane: columns 1-8 or 9-16 of every page (`set_half`, the chooser's), so a level gesture runs over eight keys and a 16-key fader line is drawn across the half's eight.
+- It shows a half of a pane: columns 1-8 or 9-16 of every page (`set_half`, the chooser's), so a two-key gesture (side 1's loop of the patterns page, a level or a lane's value on its side 2) runs over eight keys and a 16-key fader line is drawn across the half's eight.
 - NV acts at its release when tapped (play or stop); held `GRID_HOLD.chooser_seconds` it shows the chooser instead and its release only closes it. The chooser's state is the port's (`port_state(port).chooser`), so each 64 has its own and it goes with the grid.
 
 ## Owns
