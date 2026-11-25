@@ -3329,6 +3329,23 @@ test("a notes table that differs from the rows fails, naming the row", function(
   local more = TOY_NOTES:format("b"):gsub("(| b | go | b | nothing |\n)", "%1| b | stay | a | nothing |\n")
   ok, message = notes_test(notes_file("toy-more.md", more))
   assert_true(not ok and tostring(message):find("b + stay", 1, true) ~= nil, "a row only the notes have: " .. tostring(message))
+  -- notes = {path, machine, n} compares the heading's n-th table
+  local second = TOY_NOTES:format("a") .. "\n| State | Event | Next | Effect |\n|---|---|---|---|\n"
+    .. "| a | go | b | moves |\n| a | stay | a | nothing |\n| b | go | b | nothing |\n"
+  local function nth_test(path, number)
+    local added = registered(function()
+      h.transition_table(toy_machine(rows, {impossible = impossible, notes = {path, "toy", number}}))
+    end)
+    return run_test(registered_test(added, "toy: the notes' table equals these rows"))
+  end
+  local second_path = notes_file("toy-second.md", second)
+  ok, message = nth_test(second_path, 2)
+  assert_true(ok, "the second table, the same rows, passes: " .. tostring(message))
+  ok, message = nth_test(second_path, 1)
+  assert_true(not ok and tostring(message):find("b + go", 1, true) ~= nil, "the first, which differs, fails: "
+    .. tostring(message))
+  registered(function() ok = pcall(h.transition_table, toy_machine(rows, {notes = {second_path, "toy", "2"}})) end)
+  assert_true(not ok, "a table number that is not a whole number raises as the spec is read")
 end)
 
 test("notes_table reads the table under its machine's heading and no other", function()
@@ -3348,6 +3365,12 @@ test("notes_table reads the table under its machine's heading and no other", fun
   for _, row in ipairs(rows) do text[#text + 1] = table.concat(row, " / ") end
   assert_equal(table.concat(text, "; "), "a / go / b; a, waiting / stay / a, waiting",
     "the rows of the first table under ### toy, its State, Event and Next, backticks stripped")
+  local second = h.notes_table(path, "toy", 2)
+  assert_equal(#second, 1, "the second table under ### toy, by its number")
+  assert_equal(table.concat(second[1], " / "), "second / e / x", "its row")
+  assert_equal(#h.notes_table(path, "toy", 1), 2, "number 1 is the first table")
+  assert_true(not pcall(h.notes_table, path, "toy", 3), "a number past the heading's tables raises")
+  assert_true(not pcall(h.notes_table, path, "toy", 0), "a number that is no whole number from 1 raises")
   assert_true(not pcall(h.notes_table, path, "missing"), "no heading raises")
   local bare = notes_file("bare.md", "## Must not break\n\n### toy\n\nno table\n\n### next\n\n| State | Event | Next |\n|---|---|---|\n| x | y | z |\n")
   assert_true(not pcall(h.notes_table, bare, "toy"), "no table under the heading raises")

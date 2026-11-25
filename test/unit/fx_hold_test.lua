@@ -8,7 +8,7 @@
 -- switch, a bypass and a PSET load (the plan's Review Focus 3), and 3.9's
 -- reverb_freeze (#819): offered on the high tier only, refused on the
 -- standard tier and while bypassed, its bypass and PSET rules the delay's,
--- and its machine's table
+-- and its machine's table; and the delay's machine's table (#1059)
 -- Run alone: lua test/run.lua fx_hold
 
 return function(h)
@@ -650,6 +650,85 @@ h.transition_table({
     reverb_row("standard", "running read", "standard", ""),
   },
   notes = {"docs/notes/lua/fx-hold.md", "fx hold"},
+})
+
+-- The delay's machine (docs/notes/lua/fx-hold.md, ### fx hold, its second
+-- table, #1059): running, frozen and bypassed on the stubs' standard tier
+-- (the delay's freeze is offered on both), the reverb's events and the
+-- clear, under the delay's names. A delay bypassed and frozen is no state
+-- (the invariant fx hold forbids it), so state_of names it and the row fails
+local function delay_state()
+  local frozen = params:get("delay_freeze") == 1
+  if local_value("S").lib.voice_mix.bypassed("delay") then return frozen and "bypassed and frozen" or "bypassed" end
+  return frozen and "frozen" or "running"
+end
+
+-- A state: a PSET that bypasses the delay and one that leaves it running,
+-- then the setup
+local function delay_entered(setup)
+  return function(context)
+    params:set("delay_bypass", 1)
+    context.bypassed_pset = context.data_dir .. "delay_table_bypassed.pset"
+    params:write(context.bypassed_pset, "delay table bypassed")
+    params:set("delay_bypass", 0)
+    context.running_pset = context.data_dir .. "delay_table_running.pset"
+    params:write(context.running_pset, "delay table running")
+    if setup then setup() end
+    context.clear_engine_calls()
+  end
+end
+
+-- A row whose check is the delay's sends, as "name(arg, ...)" strings
+local function delay_row(state, event, next_state, sends)
+  return {state, event, next_state, check = function(context)
+    assert_equal(table.concat(call_names(context, {"setDelayFreeze", "clearDelay", "setBypass"}), " "), sends,
+      state .. " + " .. event .. ": the delay's sends")
+  end}
+end
+
+local SILENT_BYPASSING_READ, RUNNING_READ = "a silent PSET read that bypasses", "a PSET read that leaves the delay running"
+
+h.transition_table({
+  name = "delay freeze",
+  states = {
+    running = delay_entered(),
+    frozen = delay_entered(function() params:set("delay_freeze", 1) end),
+    bypassed = delay_entered(function() params:set("delay_bypass", 1) end),
+  },
+  events = {
+    freeze = function() params:set("delay_freeze", 1) end,
+    release = function() params:set("delay_freeze", 0) end,
+    clear = function() params:set("delay_clear", 1) end,
+    bypass = function() params:set("delay_bypass", 1) end,
+    lift = function() params:set("delay_bypass", 0) end,
+    [SILENT_BYPASSING_READ] = function(context) params:read(context.bypassed_pset, true) end,
+    [RUNNING_READ] = function(context) params:read(context.running_pset) end,
+  },
+  state_of = delay_state,
+  rows = {
+    delay_row("running", "freeze", "frozen", "setDelayFreeze(1)"),
+    delay_row("running", "release", "running", ""),
+    delay_row("running", "clear", "running", "clearDelay()"),
+    delay_row("running", "bypass", "bypassed", "setBypass(0, 1)"),
+    delay_row("running", "lift", "running", ""),
+    delay_row("running", SILENT_BYPASSING_READ, "bypassed", "setBypass(0, 1)"),
+    delay_row("running", RUNNING_READ, "running", ""),
+    delay_row("frozen", "freeze", "frozen", ""),
+    delay_row("frozen", "release", "running", "setDelayFreeze(0)"),
+    delay_row("frozen", "clear", "running", "setDelayFreeze(0) clearDelay()"),
+    delay_row("frozen", "bypass", "bypassed", "setDelayFreeze(0) setBypass(0, 1)"),
+    delay_row("frozen", "lift", "frozen", ""),
+    delay_row("frozen", SILENT_BYPASSING_READ, "bypassed", "setDelayFreeze(0) setBypass(0, 1)"),
+    delay_row("frozen", RUNNING_READ, "frozen", ""),
+    delay_row("bypassed", "freeze", "bypassed", "setDelayFreeze(0)"),
+    delay_row("bypassed", "release", "bypassed", ""),
+    delay_row("bypassed", "clear", "bypassed", "clearDelay()"),
+    delay_row("bypassed", "bypass", "bypassed", ""),
+    delay_row("bypassed", "lift", "running", "setBypass(0, 0)"),
+    delay_row("bypassed", SILENT_BYPASSING_READ, "bypassed", ""),
+    delay_row("bypassed", RUNNING_READ, "running", "setBypass(0, 0)"),
+  },
+  notes = {"docs/notes/lua/fx-hold.md", "fx hold", 2},
 })
 
 -- 4a's review: one answer to "would toggle freeze or release this effect

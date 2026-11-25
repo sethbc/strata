@@ -17,9 +17,9 @@
 ### fx hold
 - **State:** for each effect, its bypass (`S.lib.voice_mix.bypassed(effect)`) and its freeze (`S.lib.fx_hold.frozen(effect)`): running (neither), frozen, or bypassed; the reverb's also standard, the standard tier, where its freeze is not offered (bypassed or not). `freezable(effect)` is running or frozen.
 - **Invariant:** `fx hold`: no effect is bypassed and frozen.
-- **Test:** `test/unit/fx_hold_test.lua`: "the invariant fx hold fails for a delay bypassed and frozen" and "the invariant fx hold fails for a reverb bypassed and frozen"; the reverb's table runs as "reverb freeze: every cell is decided" and its rows (`h.transition_table`; each state sets the tier after the load and writes the two PSETs the reads load, one that bypasses the reverb and one that leaves it running; each row's check is the `setReverbFreeze` and `setBypass` calls it sent).
+- **Test:** `test/unit/fx_hold_test.lua`: "the invariant fx hold fails for a delay bypassed and frozen" and "the invariant fx hold fails for a reverb bypassed and frozen"; the reverb's table runs as "reverb freeze: every cell is decided" and its rows (`h.transition_table`; each state sets the tier after the load and writes the two PSETs the reads load, one that bypasses the reverb and one that leaves it running; each row's check is the `setReverbFreeze` and `setBypass` calls it sent), and the delay's as "delay freeze: every cell is decided" and its rows (#1059; on the standard tier, each state writing the two PSETs as the reverb's do; each row's check is the `setDelayFreeze`, `clearDelay` and `setBypass` calls it sent). Both tables are compared with the notes: "reverb freeze: the notes' table equals these rows" and "delay freeze: the notes' table equals these rows".
 
-The reverb's table (3.9, #819): the delay's events but the clear, each a set of a param (freeze and release `reverb_freeze` 1 and 0, bypass and lift `reverb_bypass` 1 and 0) or a PSET read; a set to the value a param already holds runs no action, so it sends nothing. Every cell is a row: no pair is impossible. It is the entry's first table, so the test compares it with its rows ("reverb freeze: the notes' table equals these rows"; `h.notes_table` reads only a heading's first table). The delay's table follows; no test runs it as a table (its rows are the delay's tests above).
+The reverb's table (3.9, #819): the delay's events but the clear, each a set of a param (freeze and release `reverb_freeze` 1 and 0, bypass and lift `reverb_bypass` 1 and 0) or a PSET read; a set to the value a param already holds runs no action, so it sends nothing. Every cell is a row: no pair is impossible. It is the entry's first table, which the test compares with its rows (`notes = {path, "fx hold"}`). The delay's table follows, the entry's second, which its test compares with its rows (`notes = {path, "fx hold", 2}`, #1059).
 
 | State | Event | Next | Effect |
 |---|---|---|---|
@@ -48,23 +48,31 @@ The reverb's table (3.9, #819): the delay's events but the clear, each a set of 
 | standard | silent bypassing read | standard | `setBypass(1, 1)` |
 | standard | running read | standard | nothing |
 
-The delay's table (a freeze or a release here is `toggle`, E3, PARAMS, a MIDI map or the grid's DF):
+The delay's table (#1059): the reverb's events and the clear (the trigger `delay_clear`), under the delay's names, on either tier (the delay's freeze is offered on both). A freeze or a release here is `toggle`, E3, PARAMS, a MIDI map or the grid's DF (the test sets `delay_freeze`); a bypass or a lift a key, PARAMS, a MIDI map or a PSET read with actions (the test sets `delay_bypass`); a set to the value a param already holds runs no action, so it sends nothing. Every cell is a row:
 
 | State | Event | Next | Effect |
 |---|---|---|---|
 | running | freeze | frozen | `setDelayFreeze(1)` |
+| running | release | running | nothing |
 | running | clear | running | `clearDelay()` |
 | running | bypass | bypassed | `setBypass(0, 1)` |
+| running | lift | running | nothing |
 | running | a silent PSET read that bypasses | bypassed | `setBypass(0, 1)`, from the engine params' read hook (#965; this hook has no freeze to release) |
-| running | a PSET read that leaves the delay running | running | no `setDelayFreeze` |
+| running | a PSET read that leaves the delay running | running | nothing (no `setDelayFreeze`) |
+| frozen | freeze | frozen | nothing |
 | frozen | release | running | `setDelayFreeze(0)` |
 | frozen | clear | running | `setDelayFreeze(0)`, then `clearDelay()` (#912) |
-| frozen | bypass (a key, PARAMS, a MIDI map, a PSET read with actions) | bypassed | `setDelayFreeze(0)`, then `setBypass(0, 1)` |
+| frozen | bypass | bypassed | `setDelayFreeze(0)`, then `setBypass(0, 1)` |
+| frozen | lift | frozen | nothing |
 | frozen | a silent PSET read that bypasses | bypassed | the read hook's `setDelayFreeze(0)` (#883), then the engine params' hook's `setBypass(0, 1)` (#965) |
-| frozen | a PSET read that leaves the delay running | frozen | no `setDelayFreeze` |
+| frozen | a PSET read that leaves the delay running | frozen | nothing (no `setDelayFreeze`) |
 | bypassed | freeze | bypassed | refused: the param back to 0 and one `setDelayFreeze(0)`; `toggle` does nothing |
+| bypassed | release | bypassed | nothing |
 | bypassed | clear | bypassed | `clearDelay()`, which the engine ignores while bypassed (FX's clear row is the lift there) |
+| bypassed | bypass | bypassed | nothing |
 | bypassed | lift | running | `setBypass(0, 0)` |
+| bypassed | a silent PSET read that bypasses | bypassed | nothing |
+| bypassed | a PSET read that leaves the delay running | running | `setBypass(0, 0)`, from the bypass's action |
 
 ## What it owns
 
@@ -90,4 +98,4 @@ The freezes are also FX's rows (`freeze` and `clear`, its ALT+K3 freezing the ro
 
 ## Tests (`test/unit/fx_hold_test.lua`)
 
-The delay's params (type, place, default, no PSET line, no scene field, no LFO destination), each one's send, a bypass ending the freeze first, a freeze refused while bypassed, toggle's MIDI echo, a PSET load leaving a freeze on and off as it was, a PSET that bypasses the delay ending its freeze (one that leaves it running does not), a silent read that leaves it bypassed and frozen releasing the freeze (#883; one that leaves it running keeps it), the invariant `fx hold`, a clear on a frozen delay releasing it first (#912), a tempo move under a frozen synced delay, and the plan's Review Focus 3: a frozen delay through a tempo move, a sync switch, a bypass and a PSET load. The reverb's (3.9, #819), loaded on the high tier through `h.write_performance_active`: offered there only, and on the standard tier `toggle` and `release` send nothing; `reverb_freeze` in no PSET, scene, LFO destination or macro target, after `delay_clear`; a set refused on the standard tier and while bypassed (the param back at 0, a mapped controller echoed 0, no `setReverbFreeze(1)`); a bypass ending it first; a PSET load leaving it, one that bypasses ending it, a silent read that leaves it bypassed and frozen releasing it; the invariant for the reverb; `delay_clear` leaving a frozen reverb frozen; and its table (Machines, above).
+The delay's params (type, place, default, no PSET line, no scene field, no LFO destination), each one's send, a bypass ending the freeze first, a freeze refused while bypassed, toggle's MIDI echo, a PSET load leaving a freeze on and off as it was, a PSET that bypasses the delay ending its freeze (one that leaves it running does not), a silent read that leaves it bypassed and frozen releasing the freeze (#883; one that leaves it running keeps it), the invariant `fx hold`, a clear on a frozen delay releasing it first (#912), a tempo move under a frozen synced delay, and the plan's Review Focus 3: a frozen delay through a tempo move, a sync switch, a bypass and a PSET load. The reverb's (3.9, #819), loaded on the high tier through `h.write_performance_active`: offered there only, and on the standard tier `toggle` and `release` send nothing; `reverb_freeze` in no PSET, scene, LFO destination or macro target, after `delay_clear`; a set refused on the standard tier and while bypassed (the param back at 0, a mapped controller echoed 0, no `setReverbFreeze(1)`); a bypass ending it first; a PSET load leaving it, one that bypasses ending it, a silent read that leaves it bypassed and frozen releasing it; the invariant for the reverb; `delay_clear` leaving a frozen reverb frozen; and its table (Machines, above). The delay's table (#1059, Machines, above).
