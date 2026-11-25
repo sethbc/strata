@@ -1499,12 +1499,13 @@ return function(S)
 
   -- The voice's position starts (a pattern start, a restart, a division
   -- reset's bar, a stop): no step taken, pass 1 with no outcome, every
-  -- free lane back at 1 (2c)
+  -- free lane back at 1 (2c), a loop back at its first step (5a)
   local function start_position(voice_idx, state)
     state.last, state.taken, state.heading, state.pass_length = nil, 0, 1, voice_length(voice_idx)
     state.way = nil
     S.lib.conditions.start(voice_idx)
     S.lib.lanes.start(voice_idx)
+    S.lib.loop_roll.start(voice_idx)
   end
 
   -- Ping-pong's move after last (3.7, design §5.5): up to the pass's
@@ -1611,11 +1612,15 @@ return function(S)
   -- 2c: each lane is read once, at the tick (S.lib.lanes.read: the step's
   -- key while it follows, its own cell while it is free), and the free
   -- lanes move on (advance); the rest of the tick reads what was read
-  -- (S.lib.lanes.last_read). Returns the hits still to play and their spacing
+  -- (S.lib.lanes.last_read). 5a: the step played is the loop's when the
+  -- voice has one (S.lib.loop_roll.played_step), asked after take_position,
+  -- which moves the voice's own position, passes and conditions as before;
+  -- it is the step played, lit and read by the following lanes. Returns the
+  -- hits still to play and their spacing
   local function begin_voice_step(voice_idx)
     local state = play.voices[voice_idx]
     at_beat(state.beat)
-    local step = take_position(voice_idx)
+    local step = S.lib.loop_roll.played_step(voice_idx, take_position(voice_idx))
     S.pattern_sounding_steps[voice_idx] = step
     local lanes = S.lib.lanes
     for _, lane in ipairs(lanes.LANES) do lanes.read(voice_idx, lane, step) end
@@ -1705,13 +1710,13 @@ return function(S)
   -- No bursts (rule 4): at a wake the voice plays at most one step that has
   -- come. While its next tick has come too, the step at its tick is skipped
   -- (its position moves on, nothing plays, and, 2c, its free lanes move
-  -- on, reading nothing) and it takes that tick, so it plays the latest,
-  -- at the position the count puts it at
+  -- on, reading nothing; 5a, a loop's own step moves on too) and it takes
+  -- that tick, so it plays the latest, at the position the count puts it at
   local function skip_due_ticks(voice_idx)
     while true do
       local k, beat = next_voice_tick(voice_idx)
       if not is_due(beat) then return end
-      take_position(voice_idx)
+      S.lib.loop_roll.played_step(voice_idx, take_position(voice_idx))
       S.lib.lanes.advance(voice_idx)
       take_tick(voice_idx, k, beat)
     end
@@ -2104,6 +2109,8 @@ return function(S)
           -- a lock of that step held comes back
           values.end_held(voice_idx, function(entry) return entry.step <= length end)
           if (last_played[voice_idx] or 0) > length then end_overrides(voice_idx, true) end
+          -- 3.9 (5a): a loop past the new length ends, one across it is cut
+          S.lib.loop_roll.fit_length(voice_idx, length)
           -- 3.9: a pulse voice's rule counts the steps inside its length
           if M.step_mode(voice_idx) == "pulse" then M.send_gate_rule(voice_idx) end
           grid_redraw()

@@ -60,30 +60,132 @@ test("a step toggles at its release", function()
   end)
 end)
 
-test("a second key sets the held step's level over 16 positions, 8 on a half", function()
+-- 3.9's loop (package 5a, design section 4, The loop): side 1's second key
+-- of a line loops the voice between the two keys (the level gesture moved
+-- to side 2's hits line). Re-based from 3.4's "a second key sets the held
+-- step's level over 16 positions, 8 on a half"
+
+-- Voice 1's clock's next tick, and the step it played
+local function next_step(context, S)
+  context.clock.advance_until(S.pattern_clocks[1])
+  return S.lib.sequencer.sounding_step(1)
+end
+
+local function every_step_set(S, voice_idx)
+  for step = 1, S.constants.PATTERN_LENGTH do S.lib.sequencer.set_level(voice_idx, step, 15) end
+end
+
+test("two keys of a line loop between them", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local first = shown_columns(pane)
+    local lo, hi = first + 1, first + 4
+    every_step_set(S, 1)
+    pattern_clock_start()
+    pane.press(hi, 1, 1)
+    pane.press(lo, 1, 1)
+    pane.press(lo, 1, 0)
+    local got_lo, got_hi = S.lib.loop_roll.loop(1)
+    assert_equal(got_lo, lo, arrangement .. ": the loop from the lower key")
+    assert_equal(got_hi, hi, arrangement .. ": to the upper, the held key")
+    local steps = {}
+    for _ = 1, 5 do steps[#steps + 1] = next_step(context, S) end
+    assert_equal(table.concat(steps, " "), table.concat({lo, lo + 1, lo + 2, hi, lo}, " "),
+      arrangement .. ": the voice plays between them")
+    pane.press(hi, 1, 0)
+    assert_equal(S.lib.loop_roll.loop(1), nil, arrangement .. ": the held key's release ends it")
+    assert_equal(next_step(context, S), 7, arrangement .. ": tick 7 plays the voice's own step 7")
+    pattern_clock_stop()
+  end)
+end)
+
+test("neither key toggles and no editor opens", function()
+  each_arrangement(function(context, S, pane, arrangement)
+    local first = shown_columns(pane)
+    pane.press(first, 2, 1)
+    pane.press(first + 3, 2, 1)
+    context.clock.run_for(0.5)
+    assert_equal(shown_step_editor(), nil, arrangement .. ": the second key stopped the held step's hold")
+    pane.press(first + 3, 2, 0); pane.press(first, 2, 0)
+    assert_equal(S.patterns[2][first] + S.patterns[2][first + 3], 0, arrangement .. ": neither release toggles")
+    -- after the hold has fired a further key of the line does nothing
+    pane.press(first + 1, 3, 1)
+    context.clock.run_for(0.35)
+    assert_equal(shown_step_editor(), "3 " .. (first + 1) .. " 1", arrangement .. ": the hold opened the editor")
+    pane.press(first + 5, 3, 1)
+    assert_equal(S.lib.loop_roll.loop(3), nil, arrangement .. ": a key after the hold makes no loop")
+    pane.press(first + 5, 3, 0); pane.press(first + 1, 3, 0)
+    assert_equal(S.patterns[3][first + 1] + S.patterns[3][first + 5], 0, arrangement .. ": and toggles nothing")
+  end)
+end)
+
+test("a page change and an unplug end an unlatched loop at the next tick", function()
+  for _, ending in ipairs({"page change", "unplug"}) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    local pane = grid_pane(context, "128h")
+    pane.show(S.constants.GRID_PAGES.patterns)
+    every_step_set(S, 1)
+    pattern_clock_start()
+    pane.press(5, 1, 1); pane.press(8, 1, 1); pane.press(8, 1, 0)
+    assert_equal(next_step(context, S), 5, ending .. ": the loop plays")
+    if ending == "unplug" then context.grid.unplug(1) else pane.show(S.constants.GRID_PAGES.voices) end
+    assert_equal(next_step(context, S), 3, ending .. ": the next tick plays the voice's own step 3")
+    assert_equal(S.lib.loop_roll.loop(1), nil, ending .. ": the loop has ended")
+    pattern_clock_stop()
+  end
+end)
+
+test("a variation switch leaves a loop, and its key's release still ends it", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pane = grid_pane(context, "128h")
+  pane.show(S.constants.GRID_PAGES.patterns)
+  every_step_set(S, 1)
+  pattern_clock_start()
+  pane.press(5, 1, 1); pane.press(8, 1, 1); pane.press(8, 1, 0)
+  S.lib.pattern_letters.switch_now(1, "B")
+  assert_equal(S.lib.pattern_letters.current(1), "B", "B plays")
+  assert_equal(select(2, S.lib.loop_roll.loop(1)), 8, "the loop stays")
+  assert_equal(next_step(context, S), 5, "and plays")
+  pane.press(5, 1, 0)
+  assert_equal(next_step(context, S), 3, "the key's release ends it: the voice's own step 3")
+  pattern_clock_stop()
+end)
+
+test("on a 64 both keys are in the half shown", function()
+  for _, case in ipairs({{"64 left", 2, 5}, {"64 right", 10, 13}}) do
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    local pane = grid_pane(context, case[1])
+    pane.show(S.constants.GRID_PAGES.patterns)
+    local first, last = shown_columns(pane)
+    assert_true(case[2] >= first and case[3] <= last, case[1] .. ": both keys shown")
+    assert_true(not pane.shows(case[1] == "64 left" and 9 or 8, 1), case[1] .. ": the other half's keys are not")
+    every_step_set(S, 1)
+    pane.press(case[2], 1, 1); pane.press(case[3], 1, 1)
+    pattern_clock_start()
+    local steps = {S.lib.sequencer.sounding_step(1)}
+    for _ = 1, 4 do steps[#steps + 1] = next_step(context, S) end
+    assert_equal(table.concat(steps, " "), table.concat({case[2], case[2] + 1, case[2] + 2, case[3], case[2]}, " "),
+      case[1] .. ": the loop of the half's keys")
+    pattern_clock_stop()
+  end
+end)
+
+test("while a loop is set the voice's set steps outside it light 2", function()
   each_arrangement(function(_, S, pane, arrangement)
     local first, last = shown_columns(pane)
-    local positions = last - first + 1
-    S.patterns[2][first] = 5
-    pane.press(first, 2, 1)
-    pane.press(last, 2, 1)
-    assert_equal(S.patterns[2][first], 15, arrangement .. ": the line's last shown key is the top level, 15")
-    pane.press(last, 2, 0)
-    -- the half-way key: 8 of 16 (round(8 * 15 / 16) = 8), or 4 of 8 on a
-    -- half (round(4 * 15 / 8) = round(7.5) = 8)
-    local middle = first + positions / 2 - 1
-    pane.press(middle, 2, 1)
-    assert_equal(S.patterns[2][first], 8, arrangement .. ": the half-way key of " .. positions .. " sets 8")
-    pane.press(middle, 2, 0)
-    local quarter = first + positions / 4 - 1
-    pane.press(quarter, 2, 1)
-    -- 4 of 16 (round(3.75) = 4), or 2 of 8 (round(3.75) = 4)
-    assert_equal(S.patterns[2][first], 4, arrangement .. ": the quarter key of " .. positions .. " sets 4")
-    pane.press(quarter, 2, 0)
-    pane.press(first, 2, 0)
-    assert_equal(S.patterns[2][first], 4, arrangement .. ": neither release toggles")
-    assert_equal(S.patterns[2][last] + S.patterns[2][middle] + S.patterns[2][quarter], 0,
-      arrangement .. ": the level keys toggled nothing")
+    every_step_set(S, 1)
+    S.lib.sequencer.set_level(1, last, 0)
+    pane.press(first + 2, 1, 1); pane.press(first + 4, 1, 1)
+    grid_redraw()
+    assert_equal(pane.led(first, 1), 2, arrangement .. ": a set step before the loop at 2")
+    assert_equal(pane.led(first + 3, 1), 15, arrangement .. ": one inside at its level")
+    assert_equal(pane.led(last, 1), 1, arrangement .. ": an empty step outside stays as it was (the picked voice's, 1)")
+    assert_equal(pane.led(first, 2), 0, arrangement .. ": another voice's line is untouched")
+    pane.press(first + 2, 1, 0)
+    grid_redraw()
+    assert_equal(pane.led(first, 1), 15, arrangement .. ": let go, its level again")
   end)
 end)
 
@@ -134,29 +236,32 @@ test("the sounding step between steps (#113)", function()
   end)
 end)
 
-test("both panes on patterns: steps held above and below are each their voice's held step, and a level key in one pane never sets a step held in the other for another voice", function()
+-- Re-based by 3.9's loop (5a) from "... and a level key in one pane never
+-- sets a step held in the other for another voice": side 1's second key loops
+test("both panes on patterns: steps held above and below are each their voice's held step, and a second key in one pane never loops a step held in the other for another voice", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local pages = S.constants.GRID_PAGES
   local top = grid_pane(context, "256 top")
   local bottom = grid_pane(context, "256 bottom")
   top.show(pages.patterns); bottom.show(pages.patterns)
+  local loop_roll = S.lib.loop_roll
   top.press(3, 2, 1)     -- voice 2's held step 3, above
   bottom.press(5, 4, 1)  -- voice 4's held step 5, below
-  bottom.press(16, 4, 1) -- voice 4's level key, below
-  assert_equal(S.patterns[4][5], 15, "the level key sets its own voice's held step")
-  assert_equal(S.patterns[2][3], 0, "and not the step held above for voice 2")
+  bottom.press(16, 4, 1) -- voice 4's second key, below
+  assert_equal(select(2, loop_roll.loop(4)), 16, "the second key loops its own voice's held step: 5 to 16")
+  assert_equal(loop_roll.loop(2), nil, "and not the step held above for voice 2")
   bottom.press(16, 4, 0)
-  top.press(8, 2, 1)     -- voice 2's level key, above
-  assert_equal(S.patterns[2][3], 8, "voice 2's level key, above, sets voice 2's step")
-  assert_equal(S.patterns[4][5], 15, "voice 4's below is left alone")
+  top.press(8, 2, 1)     -- voice 2's second key, above
+  assert_equal(select(2, loop_roll.loop(2)), 8, "voice 2's second key, above, loops voice 2: 3 to 8")
+  assert_equal(select(2, loop_roll.loop(4)), 16, "voice 4's below is left alone")
   top.press(8, 2, 0); top.press(3, 2, 0); bottom.press(5, 4, 0)
-  assert_equal(S.patterns[2][3], 8, "neither release toggled")
-  assert_equal(S.patterns[4][5], 15)
-  -- a step of one voice in both panes: the second press is a level key
+  assert_equal(S.patterns[2][3] + S.patterns[4][5], 0, "neither release toggled")
+  -- a step of one voice in both panes: the second press is its second key
   bottom.press(2, 6, 1)
   top.press(12, 6, 1)
-  assert_equal(S.patterns[6][2], 11, "a voice has one held step on a port: round(12 * 15 / 16) = 11")
+  local lo, hi = loop_roll.loop(6)
+  assert_equal(lo, 2, "a voice has one held step on a port: the loop from 2"); assert_equal(hi, 12, "to 12")
   top.press(12, 6, 0); bottom.press(2, 6, 0)
 end)
 

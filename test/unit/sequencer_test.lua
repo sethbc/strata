@@ -5971,7 +5971,9 @@ do
     end
     sends("the step set", function() seq.set_level(1, STEP, 15) end, 1)
     sends("SEQ's encoder turns it off", function() enc(3, -15) end, 0)
-    -- the grid's gesture sets a held step's level, never 0
+    -- the grid's gesture sets a held step's level, never 0 (3.9, 5a: on
+    -- side 2's hits line, voice 1's: side 1's second key loops)
+    S.lib.grid_core.set_page(1, S.constants.GRID_PAGES.patterns, 1, 2)
     sends("the grid's level gesture", function()
       context.grid.press(1, STEP, 1, 1); context.grid.press(1, 14, 1, 1)
       context.grid.press(1, 14, 1, 0); context.grid.press(1, STEP, 1, 0)
@@ -6200,8 +6202,13 @@ do
   gate_events["toggle"] = function() toggle_pattern_step(GATE.voice, GATE.step) end
   gate_events["grid level"] = function(context)
     context.grid.plug(1, 16, 16)
-    context.grid.press(1, GATE.step, GATE.voice, 1); context.grid.press(1, 14, GATE.voice, 1)
-    context.grid.press(1, 14, GATE.voice, 0); context.grid.press(1, GATE.step, GATE.voice, 0)
+    -- 3.9 (5a): side 1's second key loops, so the grid's level gesture is
+    -- side 2's hits line (line 1), the picked voice's
+    local S = local_value("S")
+    S.lib.grid_pages_patterns.pick(1, GATE.voice)
+    S.lib.grid_core.set_page(1, S.constants.GRID_PAGES.patterns, 1, 2)
+    context.grid.press(1, GATE.step, 1, 1); context.grid.press(1, 14, 1, 1)
+    context.grid.press(1, 14, 1, 0); context.grid.press(1, GATE.step, 1, 0)
   end
   gate_events["length cut"] = function() params:set("v" .. GATE.voice .. "_seq_length", GATE.cut_length) end
   gate_events["start"] = function() pattern_clock_start() end

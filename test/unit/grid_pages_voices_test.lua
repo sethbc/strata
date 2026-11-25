@@ -413,6 +413,7 @@ end)
 -- lands on"
 test("a paste ends the pasted voice's step gestures", function()
   local context = load_strata(); finish_startup(context)
+  h.level_side_one()  -- 3.9 (5a): the core's level gesture on side 1, which now loops
   local S = local_value("S")
   local pages = S.constants.GRID_PAGES
   local steps = grid_pane(context, "256 top")

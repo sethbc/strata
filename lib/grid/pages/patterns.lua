@@ -3,10 +3,11 @@
 -- grid sequencer's package 3b, design section 4). Side 1: seven lines of
 -- sixteen steps, a line per voice. A step key goes through the pane's
 -- step_key (a toggle at its release, the step editor after
--- GRID_HOLD.step_edit_seconds, a second key of the line sets the held
--- step's level over the keys shown); a press also picks its voice for
+-- GRID_HOLD.step_edit_seconds; 5a: a second key of the line before the
+-- hold fires loops the voice between the two, S.lib.loop_roll.set_loop,
+-- held by the first key's pane.still); a press also picks its voice for
 -- side 2. Its LEDs are S.lib.lanes.hit_light, the picked voice's empty
--- steps at 1. Side 2, the lane side: the picked voice's hits (line 1, a
+-- steps at 1, a looped voice's set steps outside its loop at 2. Side 2, the lane side: the picked voice's hits (line 1, a
 -- step key whose second key sets the level, or value A in move), its five
 -- lanes' cells (lines 2-6, cell keys: a tap clears or gives the lane's
 -- last value, a second key sets the held cell from its place) and the
@@ -44,6 +45,7 @@ return function(S)
     max_prob = 100, max_repeats = 4,
     levels = {
       picked_empty = 1,                       -- side 1: the picked voice's empty steps
+      outside_loop = 2,                       -- side 1: a looped voice's set steps outside its loop (at most)
       repeats = {4, 8, 11, 15},               -- 1 to 4 repeats
       playing = 15, playing_empty = 4,        -- the cell a lane read last
       past_length = 1,                        -- a cell past its lane's length that holds something
@@ -484,18 +486,35 @@ return function(S)
 
   -- The picked voice's empty steps inside its length light picked_empty;
   -- past its length they stay dark (the controller's ruling for 3b's
-  -- review), so the length shows
+  -- review), so the length shows. 5a (design section 4, Lights): while a
+  -- voice has a loop, its set steps outside it but the playhead dim to
+  -- outside_loop (never brighter than they were)
   local function draw_steps(pane, led)
     local picked = M.voice(pane.port)
     local picked_length = voice_length(picked)
     for voice_idx = 1, NUM_VOICES do
+      local lo, hi = S.lib.loop_roll.loop(voice_idx)
+      local sounding = S.lib.sequencer.sounding_step(voice_idx)
       for step = 1, PATTERN_LENGTH do
         local level = S.lib.lanes.hit_light(voice_idx, step)
         if voice_idx == picked and level == 0 and S.patterns[voice_idx][step] == 0 and step <= picked_length then
           level = LANE_SIDE.levels.picked_empty
         end
+        if lo and (step < lo or step > hi) and S.patterns[voice_idx][step] > 0 and step ~= sounding then
+          level = math.min(level, LANE_SIDE.levels.outside_loop)
+        end
         led(step, voice_idx, level)
       end
+    end
+  end
+
+  -- Side 1's second key (5a, design section 4, The loop): the voice loops
+  -- between its held step and this key's, held by the held key's own
+  -- still (its pane place, which pane.step_key gives); an armed latch keeps
+  -- it (S.lib.loop_roll.set_loop)
+  local function loop_second(pane)
+    return function(voice_idx, held_step, second_step, held_x, held_y)
+      S.lib.loop_roll.set_loop(voice_idx, held_step, second_step, pane.still(held_x, held_y))
     end
   end
 
@@ -515,7 +534,7 @@ return function(S)
         return
       end
       if z == 1 then M.pick(pane.port, y) end
-      pane.step_key(x, y, z, y, x)
+      pane.step_key(x, y, z, y, x, loop_second(pane))
     end,
     redraw = function(pane, led)
       local view = pane.side == LANE_SIDE.side and STEP_VIEW.of(pane)

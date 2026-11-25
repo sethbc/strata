@@ -10,8 +10,9 @@
 -- plugged, a rotation (S.lib.grid_core.set_rotation). A small model of the
 -- grid core keeps, per key the core holds, what its release should do:
 -- toggle its step (a held step whose gesture still stands), nothing (a
--- level key, a consumed key: one that opened the step editor or took a
--- level, a key whose gesture ended) or end a hold (the 64's NV, fill, a
+-- second key, "level" in the model: since 3.9's 5a it loops, setting no
+-- level; a consumed key: one that opened the step editor or met a second
+-- key, a key whose gesture ended) or end a hold (the 64's NV, fill, a
 -- positions HD key), with the patterns it expects and the step editor it
 -- expects open. After every op `after` compares the model with
 -- S.patterns, S.grid_held and the open step editor (and the chooser on
@@ -278,16 +279,14 @@ function Walk.press(state, px, py)
           .. " shows patterns' side 2, which the model does not know (3.9's 3b): extend the model (6b)"
       end
       local voice, step = where.y, where.x
-      local width = layout_kind == "64" and 8 or 16
-      local offset = layout_kind == "64" and (Walk.half(state, where.pane) - 1) * 8 or 0
       local held = Model.held_step(model, voice, name)
       entry.voice = voice
       if held then
-        local level = math.max(1, math.floor((where.x - offset) * S.constants.MAX_STEP_LEVEL / width + 0.5))
-        model.patterns[voice][held.step] = math.min(level, S.constants.MAX_STEP_LEVEL)
+        -- 3.9 (5a): side 1's second key loops the voice (before the hold
+        -- fires; after it, nothing): both keys consumed, no level set
         held.consumed, held.deadline = true, nil
         entry.kind, entry.step, entry.consumed = "level", step, true
-        state.counts.level_set = state.counts.level_set + 1
+        state.counts.second_key = state.counts.second_key + 1
       else
         entry.kind, entry.step, entry.deadline = "step", step, now + hold.step_edit_seconds
       end
@@ -697,7 +696,7 @@ local function finish(state)
 end
 
 local COUNTERS = { "hold_fired", "hold_ended_by_page", "release_under_chooser", "unplug_with_key_held",
-  "step_toggled", "level_set", "fill_released", "hold_key_released", "page_unplugged", "rotation_unplugged",
+  "step_toggled", "second_key", "fill_released", "hold_key_released", "page_unplugged", "rotation_unplugged",
   "tied" }
 
 -- The walk's state on a fresh script with a grid of the layout, every
@@ -747,11 +746,11 @@ end
 
 -- The model by hand, on the 128h: a tap toggles its step; a key held past
 -- the editor's hold opens the editor and its release toggles nothing; a
--- level key sets the held step's level; a page change ends a held step;
+-- second key after it sets nothing (3.9's 5a); a page change ends a held step;
 -- the walk's comparisons find nothing wrong on the way. And the
 -- comparison is no rubber stamp: a step set behind the model's back is
 -- named
-h.test("the grid walk's model: taps, the editor's hold, a level key and a page change, by hand", function()
+h.test("the grid walk's model: taps, the editor's hold, a second key and a page change, by hand", function()
   local context = h.load_strata()
   h.finish_startup(context)
   local state = walk_state(context, "128h", function() return 0 end)
@@ -764,18 +763,18 @@ h.test("the grid walk's model: taps, the editor's hold, a level key and a page c
   h.assert_equal(problems_of(run_op(state, Walk.clock, 0.4)), "", "voice 2 step 6 held past the editor's hold")
   h.assert_equal(h.shown_step_editor(), "2 6 1", "the editor is open for it")
   run_op(state, Walk.press, 12, 2)
-  h.assert_equal(S.patterns[2][6], 11, "the level key at 12 of 16 set step 6's level (round(12 * 15 / 16))")
+  h.assert_equal(S.patterns[2][6], 0, "a second key after the hold sets nothing (3.9's 5a: side 1's second key loops)")
   run_op(state, Walk.release, key_name(12, 2))
   h.assert_equal(problems_of(run_op(state, Walk.release, key_name(6, 2))), "", "the editor's key up")
   h.assert_equal(h.shown_step_editor(), nil, "the editor closed")
-  h.assert_equal(S.patterns[2][6], 11, "and its step kept its level")
+  h.assert_equal(S.patterns[2][6], 0, "and its step stayed off")
   run_op(state, Walk.press, 3, 3)
   run_op(state, function(walk_state_now)
     walk_state_now.core.set_page(WALK.port, S.constants.GRID_PAGES.scenes, 1, 1)
   end)
   h.assert_equal(problems_of(run_op(state, Walk.release, key_name(3, 3))), "", "a held step up after a page change")
   h.assert_equal(S.patterns[3][3], 0, "its step did not toggle")
-  h.assert_true(state.counts.hold_fired == 1 and state.counts.level_set == 1 and state.counts.step_toggled == 1,
+  h.assert_true(state.counts.hold_fired == 1 and state.counts.second_key == 1 and state.counts.step_toggled == 1,
     "the counters followed")
   S.patterns[4][1] = 9
   h.assert_equal(problems_of(run_op(state, Walk.clock, 0.1)), "voice 4 step 1: 9, the model's 0",
@@ -870,7 +869,7 @@ h.test("the grid walk's end: a tempo key's repeat and a fill held through an unp
 end)
 
 for _, layout in ipairs({ "256", "128h", "128v", "64" }) do
-  local reached = { "hold_fired", "hold_ended_by_page", "unplug_with_key_held", "step_toggled", "level_set",
+  local reached = { "hold_fired", "hold_ended_by_page", "unplug_with_key_held", "step_toggled", "second_key",
     "hold_key_released", "page_unplugged", "rotation_unplugged" }
   -- the 64 has the chooser and no fill key; the other layouts the reverse
   reached[#reached + 1] = layout == "64" and "release_under_chooser" or "fill_released"
