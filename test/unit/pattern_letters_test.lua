@@ -653,6 +653,35 @@ test("a late wake past three bars moves an order on three entries and switches o
   assert_equal(table.concat(wholes, " "), "15", "one switch, to D (a copy of A), none to B or C")
 end)
 
+-- #1051's review round 1: a chain link clears every order's place, so the
+-- bars a late wake skipped before the link never move the linked scene's
+-- order. Scenes 1-4 each hold voice 1's order A B C, on; the chain links
+-- them a bar each. `run` moves the clocks on; the letter voice 1 plays then
+local function chained_order(run)
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  letters.set_order(1, {"A", "B", "C"})
+  for slot = 1, 4 do capture_scene(slot) end
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 4)
+  params:set("seq_chain_bars", 1)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  run(context, S)
+  local playing = letters.current(1)
+  pattern_clock_stop()
+  return playing
+end
+
+test("a late wake past three chain links plays the linked order's first entry, as on time", function()
+  assert_equal(chained_order(function(context) context.clock.run_for(3 * BAR_SECONDS) end), "A",
+    "on time: each link's bar plays its order's entry 1")
+  assert_equal(chained_order(function(context, S)
+    context.clock.advance_until(S.pattern_clocks[1], function() context.set_time(util.time() + 3 * BAR_SECONDS) end)
+    context.clock.run_for(0.01)
+  end), "A", "late: the bars before the link never move the linked order")
+end)
+
 test("a stop clears a wait", function()
   local context, S = setup()
   local letters = S.lib.pattern_letters
