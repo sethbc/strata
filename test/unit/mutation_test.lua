@@ -1264,6 +1264,41 @@ local HOLD_EDITS = {
   },
 }
 
+-- 3.9's 2c (ruling 2c-3): a chain start's hold takes every voice's lane
+-- lengths (S.lib.lanes) with the patterns, and its undo puts them back
+local function chain_on_scene_1(S)
+  S.lib.sequencer.set_level(1, 1, 15)
+  capture_scene(1)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
+end
+
+test("a chain start's undo puts the lane lengths back (2c)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lanes, mutation = S.lib.lanes, S.lib.mutation
+  lanes.set_length(1, "a", 5)
+  chain_on_scene_1(S)
+  lanes.set_length(1, "a", nil); lanes.set_length(2, "chance", 3)
+  pattern_clock_start(); pattern_clock_stop()
+  assert_equal(lanes.length(1, "a"), 5, "the link applied the scene's lane A")
+  assert_equal(lanes.length(2, "chance"), nil, "and made the live chance lane follow")
+  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "the start's undo is held")
+  assert_true(mutation.undo(), "and used")
+  assert_equal(lanes.length(1, "a"), nil, "the undo puts lane A back to following")
+  assert_equal(lanes.length(2, "chance"), 3, "and the chance lane's 3")
+end)
+
+test("a chain start that changes only a lane length holds its undo (2c)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local lanes, mutation = S.lib.lanes, S.lib.mutation
+  chain_on_scene_1(S)
+  lanes.set_length(1, "gate", 2)
+  pattern_clock_start(); pattern_clock_stop()
+  assert_equal(lanes.length(1, "gate"), nil, "the link made the gate lane follow")
+  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "a lane length alone holds the undo")
+end)
+
 test("each hold ends as a page randomize's does (#922, #927)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")

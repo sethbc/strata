@@ -1412,8 +1412,8 @@ return function(S)
     chain.current = slot
     end_all_overrides()
     for voice_idx = 1, NUM_VOICES do M.replace_pattern(voice_idx, data.patterns[voice_idx]) end
+    S.lib.lanes.apply_block(data.lanes or {})  -- 2c: the lanes block before the steps block, as a recall
     set_all_steps(data.steps or {})
-    S.lib.lanes.apply_block(data.lanes or {})  -- 2c: the lanes block, with the steps block
     for voice_idx = 1, NUM_VOICES do
       local scene_values = data.voices[voice_idx].values or {}
       for _, key in ipairs(SEQ.chain_keys) do
