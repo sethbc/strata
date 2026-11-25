@@ -16,7 +16,7 @@ var readBus = { arg bus; h.readBus(bus) };
 // the windows an analysis measures, and the values it gives each
 var numWindows = 8, fields = 5, windowField;
 var newLines, startCheckNode, runCases, guarded, powerDb, stepsArgs;
-var checkGraph, checkAsBefore, checkHold, checkBehavior, checkHeldDrift, checkCommands, startHigh, withIgnoredLines;
+var checkGraph, checkAsBefore, checkHold, checkBehavior, checkHeldDrift, checkCommands, checkToggledNode, startHigh, withIgnoredLines;
 // the def the behavior checks freeze (checkBehavior)
 var freezeDef = \strataReverbFDN;
 // the bar (design, Decided 6): the level's step at the freeze against an
@@ -408,7 +408,7 @@ checkBehavior = {
         powerDb.(windowField.(results[8], 1, 0) / windowField.(results[8], 0, 0).max(1e-30))];
     check.(results.every({ arg each; (0 .. (numWindows - 1)).every({ arg window; windowField.(each, window, 4) == 0 }) })
         and: { windowField.(results[8], 0, 0) > 1 } and: { twin[0].abs < 1 } and: { twin[1].abs < 1 } and: { twin[2] < -40 },
-        "reverb: toggled ten times in 2 s: one node, no bad value, and after the last freeze the level is within 1 dB of the twin's (% dB; held % dB once the input stops, the twin % dB)".format(
+        "reverb: toggled ten times in 2 s: no bad value, and after the last freeze the level is within 1 dB of the twin's (% dB; held % dB once the input stops, the twin % dB)".format(
             twin[0].round(0.01), twin[1].round(0.01), twin[2].round(0.1)));
 };
 
@@ -446,6 +446,43 @@ checkHeldDrift = {
             before, closed.maxItem - closed.minItem, met !? { arg frame; (frame / rate).round(0.001) }, steps, bound));
 };
 
+// The engine's own reverb node toggled ten times in 2 s by setReverbFreeze
+// (frozen, then released 0.1 s later, nine times, then frozen a tenth),
+// on a high engine (target, its fresh node node) with pink noise sent into
+// its filtered reverb send: after every command the engine's context holds
+// exactly one \strataReverbFDN, the engine's node keeps its node ID, and no
+// NaN or inf reaches the reverb's return. Released after
+checkToggledNode = { arg target, node;
+    var silent = Bus.audio(server, 2), resultBus = Bus.control(server, numWindows * fields), seconds = 20;
+    var input, analysis, ids = List.new, counts = List.new, values, kept;
+    resultBus.setAll(0);
+    server.sync;
+    server.makeBundle(nil, {
+        input = Synth(\strataCheckReverbInput, [\out, target.mixBus(\reverbSendPost), \rgen, 40, \seed, 5000], node, \addBefore);
+        analysis = Synth(\strataCheckReverbWindows, [\in, target.reverbBus, \ref, silent, \out, resultBus, \seconds, seconds,
+            \windows, [0, seconds] ++ (0 ! 14)], node, \addAfter);
+    });
+    1.wait;
+    19.do({ arg index;
+        h.commandTo(target, \setReverbFreeze, if (index.even) { 1 } { 0 });
+        server.sync;
+        ids.add(target.synths[\reverb] !? { arg synth; synth.nodeID });
+        counts.add(h.synthNames(target.context.xg).count({ arg name; name == \strataReverbFDN }));
+        0.1.wait;
+    });
+    0.5.wait; server.sync;
+    values = readBus.(resultBus);
+    kept = target.areaState[\effects][\controls][\reverb][\frozen];
+    h.commandTo(target, \setReverbFreeze, 0);
+    input.free; analysis.free; server.sync;
+    [silent, resultBus].do(_.free);
+    check.((ids.size == 19) and: { ids.every({ arg id; id == node.nodeID }) } and: { counts.every({ arg count; count == 1 }) }
+        and: { kept == 1 } and: { windowField.(values, 0, 2) > 0.01 } and: { windowField.(values, 0, 4) == 0 },
+        "reverb: setReverbFreeze toggled ten times in 2 s keeps one reverb node, the engine's own, with no bad value (node IDs %, the node %; \\strataReverbFDN nodes after each command %; kept %; peak %, bad %)".format(
+            ids.asSet.asArray, node.nodeID, counts.asSet.asArray, kept, windowField.(values, 0, 2).round(0.001),
+            windowField.(values, 0, 4)));
+};
+
 // The command and the bypass (design, sections 1 and 3), on the main
 // (standard) engine and a high one of its own: setReverbFreeze sets and
 // keeps the high node's frozen and ignores another value with one line;
@@ -478,6 +515,7 @@ checkCommands = {
     fresh = [node !? { getControl.(node, \frozen) }, kept.value];
     firstLineBuf = node !? { getControl.(node, \lineBuf) };
     check.(fresh == [0, 0], "reverb: a fresh high engine's reverb has frozen 0 (the node's and kept %)".format(fresh));
+    checkToggledNode.(high, node);
     h.commandTo(high, \setReverbFreeze, 1);
     server.sync;
     set = [getControl.(node, \frozen), kept.value];
