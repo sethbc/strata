@@ -75,7 +75,7 @@ With `quantize_actions` off the play key starts at once. A step's error stops as
 - **Invariant:** `step holds`: while stopped all but `gate_sent` are empty; `step_region_to_end[v]` implies `step_regions[v]`; `step_slices[v].step` is `last_played[v]`; every held value's param has a base override (its own, or a lock's over it); `gate_sent` holds only voices and lengths `gate_seconds` gives. A stop never empties `gate_sent`: it is the gate length the engine still holds (#639), set while stopped too.
 - **Test:** `test/unit/sequencer_test.lua`: "step holds: the invariant names each hold it forbids".
 
-No table of its own: a first hit sets them (the two machines below); every end is `end_overrides`'s (Must not break, above), but a held value's, which `docs/notes/lua/lanes.md`'s table `held values` walks (it outlives the steps without one; a length cut ends it only past its own step, and `end_held_values` ends it at a target, mode, source or type change).
+No table of its own: a first hit sets them (the two machines below); every end is `end_overrides`'s (Must not break, above), but a held value's, which `docs/notes/lua/lanes.md`'s table `held values` walks (it outlives the steps without one; a length cut ends it only past its own step, and `end_held_values` ends it at a target, mode, source or type change, `end_held_value` a position value at a jump).
 
 ### slice decision
 - **State:** the slices option (`one` stands for one or off), another owner on slot 1 (`held`, its key down), the next step's `notes` (`chord`), and an earlier slice ringing on the own note to its end (`rings`: `M.playing_region` in one shot).
