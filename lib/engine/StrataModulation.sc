@@ -205,12 +205,14 @@
     // voiceMixMod: the stage's controls Event (\strataVoiceMix, before both
     // filter banks and voiceLevel). Declares the stage's fastModIn (its
     // voice's block, from stageControls; default the silent bus) and the gate
-    // and mute controls (design 3.4 §8.12, §8.14), reads the block, and sets
-    // what the stage reads: filterFreq x fastModCutoffFactor ^ m3 (clipped to
+    // and mute controls (design 3.4 §8.12, §8.14) and 3.9's floor, reads
+    // the block, and sets what the stage reads: filterFreq x
+    // fastModCutoffFactor ^ m3 (clipped to
     // 20-20000, before both banks and their 0.05 s lag), ampOffset m4
     // (through voiceLevel on both paths) and voiceGate, the factor on the
     // stage's whole output after the mirror's tap of the other path:
-    //   (1 - gate lagged 20 ms x (1 - env)) x (1 - mute lagged 20 ms)
+    //   (1 - gate lagged 20 ms x (1 - (floor + (1 - floor) x env))) x (1 - mute lagged 20 ms)
+    // with floor = gateFloor clipped to 0-1 and lagged 20 ms
     // (seqGate switched on a running voice, or at a recall's end, glides as
     // the mute does, #614; a gate held at 1 is exactly 1, so the envelope's
     // attack and release are unchanged)
