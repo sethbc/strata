@@ -138,14 +138,17 @@ return function(S)
   -- play.retired: [id] = true for each clock ended but left to finish at its
   -- next wake (end_clock); 4b's play.next_bar: the beat of the next bar of
   -- the count while the patterns play (nil while stopped), and
-  -- play.bar_hooks: the functions on_bar registered, in order;
+  -- play.bar_hooks: the functions on_bar registered, in order; 5b's
+  -- play.last_hits: per voice, a copy of the event of the hit it played
+  -- last since the patterns started (replay_hit's; emptied at every start
+  -- and stop);
   -- overrides: per voice, the param ids its last played step overrides;
   -- last_played: per voice, that step; gate_sent: per voice, the
   -- gateSeconds sent last; chords: per voice, the notes its last played
   -- step plays through S.lib.notes (owner "seq", key k: the step's k-th
   -- note), {note_id, count, pitches, values} (step_chord), or nil
   local play = {voices = {}, transport = {}, failed = {}, started = false, reset_beat = nil, offset = 0,
-    generation = 0, retired = {}, next_bar = nil, bar_hooks = {}}
+    generation = 0, retired = {}, next_bar = nil, bar_hooks = {}, last_hits = {}}
   local overrides, last_played, gate_sent, chords = {}, {}, {}, {}
   -- 3.7 (design §3.5, ruling 32): per voice, the own region its last played
   -- step set (a voice set to one, or off), and the slice its step's first
@@ -552,6 +555,20 @@ return function(S)
       end
     end
     return fresh
+  end
+
+  -- 5b: a rolled hit sets the voice's held values again (each at its
+  -- level's value now), but where a lock of the last played step holds the
+  -- param, which stays the lock's
+  function values.set_again(voice_idx)
+    local held = held_values[voice_idx]
+    for _, target in ipairs(sorted_keys(held or {})) do
+      local entry = held[target]
+      local param_id, value = S.lib.lanes.value(voice_idx, target, entry.level)
+      if param_id == entry.param and not (overrides[voice_idx] and overrides[voice_idx][param_id]) then
+        set_override(voice_idx, param_id, value)
+      end
+    end
   end
 
   -- The level the voice's hits hold on a target (one of S.lib.lanes.TARGETS), or nil
@@ -982,9 +999,10 @@ return function(S)
   -- A move voice's hit (3.9 grid sequencer, design section 1, A move hit):
   -- for its own voice a copy of the event at velocity 0, so it adds no swell
   -- and plucks no string (the retrigger still reaches what listens to hits);
-  -- any other mode's event as it is
+  -- any other mode's event as it is, and a rolled hit (5b) too: it swells
+  -- at its level in every mode
   function modes.own_event(event)
-    if M.step_mode(event.voice) ~= "move" then return event end
+    if event.rolled or M.step_mode(event.voice) ~= "move" then return event end
     local own = {}
     for key, value in pairs(event) do own[key] = value end
     own.velocity = 0
@@ -998,7 +1016,10 @@ return function(S)
   -- start_voice for a stopped voice, retrigger for a running one. The
   -- step's locks and note are set first: a stopped voice's sends wait for
   -- its start, which carries them, so its first grain plays the step (#632).
-  -- 3.9: a move voice plays its own hit at velocity 0 (modes.own_event)
+  -- 3.9: a move voice plays its own hit at velocity 0 (modes.own_event).
+  -- 5b: a rolled hit (replay_hit) is a later hit, so it plays no step
+  -- again: it sets the held values again first, and a gated voice's gate
+  -- length is the event's own (the roll's interval times the voice's)
   local function voices_play(event)
     event = modes.own_event(event)
     local voice_idx = event.voice
@@ -1020,9 +1041,10 @@ return function(S)
     if slice and slice.step ~= event.step then slice = nil end
     local on_slice = slice and slice.rings
     local gate_seconds
+    if event.rolled then values.set_again(voice_idx) end
     if not started or gated(voice_idx) then
       if gated(voice_idx) then
-        gate_seconds = M.gate_seconds(voice_idx, event.step, event.hits)
+        gate_seconds = event.gate_seconds or M.gate_seconds(voice_idx, event.step, event.hits)
         send_gate_seconds(voice_idx, gate_seconds)
       end
       if not on_slice then S.lib.engine_sync.retrigger(voice_idx, event.velocity, "step", gate_seconds) end
@@ -1099,12 +1121,29 @@ return function(S)
 
   local function stop_output(output) output.stop() end
 
-  -- Every output in registration order. Strata's own voices output is the
+  -- 5b: a copy of a hit's event, its lists and locks copied too, so no
+  -- output's change to one reaches the other
+  function play.copy_event(event)
+    local copy = {}
+    for key, value in pairs(event) do copy[key] = value end
+    for _, key in ipairs({"pitches", "notes", "semitones"}) do
+      if type(event[key]) == "table" then copy[key] = copy_list(event[key]) end
+    end
+    if type(event.locks) == "table" then
+      copy.locks = {}
+      for key, value in pairs(event.locks) do copy.locks[key] = value end
+    end
+    return copy
+  end
+
+  -- Every output in registration order (5b: a step's hit kept first, a
+  -- copy, for replay_hit). Strata's own voices output is the
   -- exception to the protection (ruling 38): an error in it is a bug in
   -- Strata, so it is called directly and its error reaches the clock's
   -- guard, which stops the patterns and raises it again (#243, #382), as a
   -- step's error did before 3.4
   local function play_outputs(event)
+    if not event.rolled then play.last_hits[event.voice] = play.copy_event(event) end
     for _, output in ipairs(S.registry.step_outputs) do
       if output == voices_output then
         play_output(output, event)
@@ -1174,6 +1213,40 @@ return function(S)
     event.locks = step_locks(attrs)
     event.slice = attrs.slice  -- 3.7: the step's slice (design §5.3)
     return event
+  end
+
+  -- The voice's nominal step in seconds (its division at the tempo now),
+  -- or nil for no voice
+  function M.step_seconds(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    return division_beats(voice_idx) * S.lib.params_setup.beat_seconds_now()
+  end
+
+  -- 5b (design section 4, R1 to R4): the voice's last played hit again,
+  -- through every step output, as a later hit of its step (first false,
+  -- rolled true: it plays no step again, so the step's locks, note and
+  -- chord stand as held and its extra notes are heard again), at the hit's
+  -- level as its velocity in every mode (move too: a rolled hit swells),
+  -- at the beat now; its gate the roll's interval (S.lib.loop_roll's, the
+  -- voice's step with no roll) times the voice's gate length in steps.
+  -- Never a node. false, playing nothing, with the patterns stopped or
+  -- when the voice has played no hit since they started
+  function M.replay_hit(voice_idx)
+    if not valid_voice(voice_idx) or not S.pattern_playing then return false end
+    local kept = play.last_hits[voice_idx]
+    if kept == nil then return false end
+    local event = play.copy_event(kept)
+    local seconds = S.lib.loop_roll.interval(voice_idx) or M.step_seconds(voice_idx)
+    local beats = seconds / S.lib.params_setup.beat_seconds_now()
+    event.first, event.rolled, event.beat = false, true, clock.get_beats()
+    event.velocity, event.gate_beats, event.gate_seconds = event.level / MAX_STEP_LEVEL, beats, nil
+    if gated(voice_idx) then
+      local steps = voice_values(voice_idx).seq_gate_length or SEQ.gate_length_default
+      event.gate_beats = steps * beats
+      event.gate_seconds = util.clamp(steps * seconds, SEQ.gate_seconds[1], SEQ.gate_seconds[2])
+    end
+    play_outputs(event)
+    return true
   end
 
   -- The clocks (design 8.2, 8.13) ------------------------------------------
@@ -1630,7 +1703,9 @@ return function(S)
     local attrs = S.pattern_steps[voice_idx][step] or {}
     local prob = lanes.last_read(voice_idx, "chance") or SEQ.max_prob
     local plays = false
-    if level > 0 then
+    -- 5b: under a roll the voice's own step takes its position and plays
+    -- nothing, drawing nothing (as a skipped tick)
+    if level > 0 and not S.lib.loop_roll.rolling(voice_idx) then
       plays = (attrs.cond == nil or S.lib.conditions.test(voice_idx, attrs.cond)) and prob > 0
         and (prob >= SEQ.max_prob or math.random() * SEQ.max_prob < prob)
       if attrs.cond ~= nil or prob < SEQ.max_prob then S.lib.conditions.record(voice_idx, plays) end
@@ -1658,7 +1733,9 @@ return function(S)
       pitches = pitches}
   end
 
+  -- A step's later hit (a ratchet); none under a roll (5b)
   local function play_voice_hit(voice_idx, plan, hit)
+    if S.lib.loop_roll.rolling(voice_idx) then return end
     play_outputs(hit_event(voice_idx, plan.step, hit, plan.hits, plan.level, plan.semitones, plan.pitches))
   end
 
@@ -1818,6 +1895,7 @@ return function(S)
     S.pattern_clock = nil
     if running then end_clock(running, play.transport, all_posted) end
     play.transport = {anchor = 0, tick = 0, beat = 0}
+    for voice_idx in pairs(play.last_hits) do play.last_hits[voice_idx] = nil end
   end
   end_clocks()
 
@@ -2039,6 +2117,8 @@ return function(S)
     S.pattern_playing = false
     S.pattern_sounding_step = nil
     end_clocks(false)
+    -- 5b (ruling 5b-1): a stop ends every roll, cleanup's too
+    for voice_idx = 1, NUM_VOICES do S.lib.loop_roll.end_roll(voice_idx) end
     play.reset_beat, chain.next_beat, play.next_bar = nil, nil, nil
     S.lib.pattern_letters.end_waits()  -- 4b: a stop clears every waiting letter
     end_all_overrides()
