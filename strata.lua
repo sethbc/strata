@@ -198,6 +198,7 @@ S.lib.grid_layout_256 = include("lib/grid/layout_256")(S)
 S.lib.grid_layout_128h = include("lib/grid/layout_128h")(S)
 S.lib.grid_layout_128v = include("lib/grid/layout_128v")(S)
 S.lib.grid_layout_64 = include("lib/grid/layout_64")(S)
+S.lib.lanes = include("lib/lanes")(S)
 S.lib.sequencer = include("lib/sequencer")(S)
 
 -- init's start-up: voice 1 starts at once, voice 2 voice_delay_seconds

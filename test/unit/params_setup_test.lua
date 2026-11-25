@@ -1832,6 +1832,13 @@ local PARAM_FIXTURE_ALLOWED = {
     why = "gs-1b: seq_gate is the step mode, off and on now accent and gate (grid sequencer design section 1)"},
   {kind = "default", id = "v<v>_seq_gate", default = 4,
     why = "gs-1b: pulse is the new default (grid sequencer design section 1)"},
+  -- gs-2a: the two move targets (3.9 grid sequencer design section 2, The values)
+  {kind = "added", id = "v<v>_seq_move_a", after = "v<v>_seq_misstep",
+    why = "gs-2a: what a step's value A moves (grid sequencer design section 2)",
+    record = {t = T.option, name = "seq move A", default = 1, options = {"auto", "position", "pitch", "size", "cutoff"}}},
+  {kind = "added", id = "v<v>_seq_move_b", after = "v<v>_seq_move_a",
+    why = "gs-2a: what a step's value B moves (grid sequencer design section 2)",
+    record = {t = T.option, name = "seq move B", default = 1, options = {"off", "position", "pitch", "size", "cutoff"}}},
   -- 2b: the arpeggiator (design §4.3)
   {kind = "added", id = "v<v>_arp", after = "v<v>_release", why = "2b: each voice's arpeggiator (design section 4.3)",
     record = {t = T.option, name = "arp", default = 1, options = {"off", "up", "down", "up-down", "shuffle"}}},

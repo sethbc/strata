@@ -1431,6 +1431,7 @@ test("VOICE's step lock layout states draw the tag on every held row they show",
     ["step locks on a buffer voice"] = { "v1_buf_pos", "v1_buf_rate" },
     ["step locks at their widest values"] = { "v1_buf_pos", "v1_buf_rate" },
     ["a step's note on a synth voice"] = { "v1_freq" },
+    ["a step's value on the cutoff, at its widest"] = { "v1_filter_freq" },  -- gs-2a (ruling 2a-2)
   }
   for state_name, ids in pairs(cases) do
     local context, S = started_voice_page()

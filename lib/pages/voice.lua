@@ -496,6 +496,14 @@ return function(S)
     S.lib.engine_sync.set_base_override(prefix .. "freq", params:get(prefix .. "freq"))
     M.place_cursor(M.row_of(prefix .. "freq"))
   end})
+  -- 3.9 grid sequencer (ruling 2a-2): a step's held value marks the voice
+  -- filter's cutoff, its row's first mark, at its widest value (20000.0 Hz)
+  table.insert(layout_states, {name = "a step's value on the cutoff, at its widest", setup = function()
+    local prefix = "v" .. S.selected_voice .. "_"
+    params:set(prefix .. "filter_freq", 20000)
+    S.lib.engine_sync.set_base_override(prefix .. "filter_freq", 20000)
+    M.place_cursor(M.row_of(prefix .. "filter_freq"))
+  end})
   -- ALT's hint row: the widest, K2:locked K3:unlock (on a row that draws),
   -- and ALT+K2 held past the hold time (K2:reset); on the type row, no
   -- quick K2 (K3:lock), and on the preset row the hold's K2:cancel (#823)

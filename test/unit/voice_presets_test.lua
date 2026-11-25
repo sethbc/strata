@@ -68,7 +68,7 @@ test("every voice scene key is in or out", function()
   local ins, outs = 0, 0
   for _, value in pairs(keys) do if value then ins = ins + 1 else outs = outs + 1 end end
   assert_equal(ins, 39, "thirty-nine keys in")
-  assert_equal(outs, 40, "forty keys out")
+  assert_equal(outs, 42, "forty-two keys out")
   for _, key in ipairs({ "mod_speed", "input_channel", "buf_pos", "mute", "seq_length" }) do
     assert_equal(keys[key], false, key .. " is out")
   end
@@ -174,6 +174,25 @@ test("a voice preset leaves the floor alone", function()
     params:set("v" .. voice .. "_seq_gate_floor", 0.5)
     assert_true(presets.load(voice, 1), "loaded into voice " .. voice)
     assert_near(params:get("v" .. voice .. "_seq_gate_floor"), 0.5, 1e-9, "voice " .. voice .. " keeps its floor")
+  end
+end)
+
+-- 3.9's grid sequencer, package 2a (rulings 1a-3 and 2a-6): the two move
+-- targets are out, as every seq key is, since the step mode is out
+test("a voice preset leaves the two targets alone", function()
+  local _, S, presets = loaded()
+  for _, key in ipairs({"seq_move_a", "seq_move_b"}) do
+    assert_equal(presets.VOICE_PRESETS.keys[key], false, key .. " is out")
+    params:set("v1_" .. key, 4)
+  end
+  assert_true(presets.save(1, 1, "moved"), "a preset of voice 1 moving size")
+  assert_equal(presets.capture(1).values.seq_move_a, nil, "a voice's sound holds no target A")
+  assert_equal(presets.capture(1).values.seq_move_b, nil, "nor B")
+  for voice = 1, S.constants.NUM_VOICES do
+    params:set("v" .. voice .. "_seq_move_a", 5); params:set("v" .. voice .. "_seq_move_b", 2)
+    assert_true(presets.load(voice, 1), "loaded into voice " .. voice)
+    assert_equal(params:get("v" .. voice .. "_seq_move_a"), 5, "voice " .. voice .. " keeps its target A")
+    assert_equal(params:get("v" .. voice .. "_seq_move_b"), 2, "and B")
   end
 end)
 

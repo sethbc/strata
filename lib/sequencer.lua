@@ -281,6 +281,10 @@ return function(S)
     cond = S.lib.conditions.valid,  -- 3.7 (design §5.3): one of the 78 conditions
     -- 3.7 (design §5.3): a slice of the voice's slot, 1 to SLICES.max
     slice = function(value) return whole_between(value, 1, S.lib.slices.SLICES.max) end,
+    -- 3.9 grid sequencer (design section 2, The values): the step's value
+    -- A and value B, 1 to MAX_STEP_LEVEL (S.lib.lanes.value)
+    va = function(value) return whole_between(value, 1, MAX_STEP_LEVEL) end,
+    vb = function(value) return whole_between(value, 1, MAX_STEP_LEVEL) end,
   }
 
   local function valid_place(voice_idx, step)
@@ -454,17 +458,114 @@ return function(S)
     end
   end
 
+  -- The values a voice's hits hold (3.9 grid sequencer, package 2a, design
+  -- section 2, The values; G7: one table of functions). held_values[v]:
+  -- per target, {level, step (the step that set it), param (the param id
+  -- its override is on)}, or nil with none. A value is a base override, as
+  -- a lock is, kept apart from `overrides` (the last played step's locks
+  -- and note): it stays through steps without one and ends only at the
+  -- ends of design section 2. A lock on its param wins for the lock's step
+  -- (the override is the lock's while overrides[v] names the param), and
+  -- when the lock ends the value is set again
+  local held_values = {}
+  local values = {}
+
+  -- The voice's held value on a param (its value now, from its level), or nil
+  function values.on_param(voice_idx, param_id)
+    for target, entry in pairs(held_values[voice_idx] or {}) do
+      if entry.param == param_id then
+        local _, value = S.lib.lanes.value(voice_idx, target, entry.level)
+        return value
+      end
+    end
+    return nil
+  end
+
+  -- A lock or note override of the voice's ends: the param takes the held
+  -- value on it again, or its own value
+  function values.release(voice_idx, param_id)
+    local value = values.on_param(voice_idx, param_id)
+    if value ~= nil then set_override(voice_idx, param_id, value) else clear_override(voice_idx, param_id) end
+  end
+
+  -- End the voice's held values that keep(entry) does not keep (all with
+  -- no keep): each override cleared, the param back to its own value, but
+  -- where a lock of the last played step holds the param, which stays the
+  -- lock's until it ends (it then finds no value to bring back)
+  function values.end_held(voice_idx, keep)
+    local held = held_values[voice_idx]
+    if not held then return end
+    for _, target in ipairs(sorted_keys(held)) do
+      local entry = held[target]
+      if not (keep and keep(entry)) then
+        held[target] = nil
+        if not (overrides[voice_idx] and overrides[voice_idx][entry.param]) then clear_override(voice_idx, entry.param) end
+      end
+    end
+    if next(held) == nil then held_values[voice_idx] = nil end
+  end
+
+  -- A played step's values (its first hit): each of lanes A and B whose
+  -- target and step key are set replaces the voice's held value on that
+  -- target. Returns the params they set, param id -> value, to be sent
+  -- where no lock of the step holds them
+  function values.take(voice_idx, step)
+    local attrs = S.pattern_steps[voice_idx][step] or {}
+    local fresh = {}
+    for _, lane in ipairs({"a", "b"}) do
+      local target = S.lib.lanes.target(voice_idx, lane)
+      local level = target and attrs[S.lib.lanes.MOVE.step_key[lane]]
+      local param_id, value
+      if level then param_id, value = S.lib.lanes.value(voice_idx, target, level) end
+      if param_id then
+        held_values[voice_idx] = held_values[voice_idx] or {}
+        held_values[voice_idx][target] = {level = level, step = step, param = param_id}
+        fresh[param_id] = value
+      end
+    end
+    return fresh
+  end
+
+  -- The level the voice's hits hold on a target (one of S.lib.lanes.TARGETS), or nil
+  function M.held_value(voice_idx, target)
+    local entry = valid_voice(voice_idx) and held_values[voice_idx] and held_values[voice_idx][target]
+    return entry and entry.level or nil
+  end
+
+  -- Every held value of the voice ends (a target, mode, source or type
+  -- change: an auto target and pitch's path follow the source and type)
+  function M.end_held_values(voice_idx)
+    if valid_voice(voice_idx) then values.end_held(voice_idx) end
+  end
+
+  -- A hand edit of a param ends the held value on it: the engine sync's
+  -- own touch hook has cleared its override already, so the record goes
+  -- with it and nothing is sent
+  S.register_param_touch(function(param_id)
+    for voice_idx = 1, NUM_VOICES do
+      for target, entry in pairs(held_values[voice_idx] or {}) do
+        if entry.param == param_id then held_values[voice_idx][target] = nil end
+      end
+      if held_values[voice_idx] and next(held_values[voice_idx]) == nil then held_values[voice_idx] = nil end
+    end
+  end)
+
+  S.register_source_change(function(voice_idx) M.end_held_values(voice_idx) end)
+
   -- End every override a voice's step set, and its chord: each param goes
-  -- back to its stored value at once
-  local function end_overrides(voice_idx)
+  -- back to its stored value at once. Its held values end too, but with
+  -- keep_held (a length cut past the last played step, not past theirs),
+  -- where a held value comes back on a lock's param
+  local function end_overrides(voice_idx, keep_held)
     step_slices[voice_idx] = nil
     end_step_region(voice_idx)
     release_step_slices(voice_idx)
     end_chord(voice_idx)
+    if not keep_held then values.end_held(voice_idx) end
     local held = overrides[voice_idx]
     overrides[voice_idx], last_played[voice_idx] = nil, nil
     if not held then return end
-    for _, param_id in ipairs(sorted_keys(held)) do clear_override(voice_idx, param_id) end
+    for _, param_id in ipairs(sorted_keys(held)) do values.release(voice_idx, param_id) end
   end
 
   local function end_all_overrides()
@@ -716,11 +817,21 @@ return function(S)
     for k = (chord and chord.count or 0) + 1, SEQ.max_step_notes do
       S.lib.notes.release(voice_idx, SEQ.note_owner, k)
     end
+    -- 3.9 (design section 2): the step's values replace the held ones on
+    -- their targets; an override of the last step this one lacks ends, its
+    -- param back to a held value on it (the lock's end: the value comes
+    -- back) or to its own; a value is sent where no lock of this step
+    -- holds its param (the lock wins for its step), and a held value this
+    -- step does not set is not sent again (it stays)
+    local fresh = values.take(voice_idx, event.step)
     for _, param_id in ipairs(sorted_keys(overrides[voice_idx] or {})) do
-      if wanted[param_id] == nil then clear_override(voice_idx, param_id) end
+      if wanted[param_id] == nil and fresh[param_id] == nil then values.release(voice_idx, param_id) end
     end
     for _, param_id in ipairs(lock_ids) do
       if param_id ~= note_id then set_override(voice_idx, param_id, wanted[param_id]) end
+    end
+    for _, param_id in ipairs(sorted_keys(fresh)) do
+      if wanted[param_id] == nil then set_override(voice_idx, param_id, fresh[param_id]) end
     end
     local n = locks.bookmark
     if n and S.lib.bookmarks.is_set(voice_idx, n) and bookmark_in_loop(voice_idx, n) then
@@ -1353,8 +1464,9 @@ return function(S)
     if pass_ended then
       S.lib.conditions.next_pass(voice_idx)
       -- the pass's end: with no set step left inside its length, no step of
-      -- the voice will end its overrides or chord (its only set step was turned off)
-      if (overrides[voice_idx] or chords[voice_idx]) and not M.has_set_step(voice_idx) then
+      -- the voice will end its overrides, chord or held values (its only
+      -- set step was turned off)
+      if (overrides[voice_idx] or chords[voice_idx] or held_values[voice_idx]) and not M.has_set_step(voice_idx) then
         end_overrides(voice_idx)
       end
     end
@@ -1573,8 +1685,13 @@ return function(S)
     if step < 1 or step > PATTERN_LENGTH then return end
 
     -- an empty step on at full brightness, a set one off, through the one
-    -- writer of a level
-    M.set_level(voice_idx, step, S.patterns[voice_idx][step] == 0 and MAX_STEP_LEVEL or 0)
+    -- writer of a level. 3.9 (design section 2, Move's values): in move a
+    -- step turned on is given a random value A where it has none
+    local turned_on = S.patterns[voice_idx][step] == 0
+    M.set_level(voice_idx, step, turned_on and MAX_STEP_LEVEL or 0)
+    if turned_on and M.step_mode(voice_idx) == "move" and M.step_attr(voice_idx, step, "va") == nil then
+      M.set_step_attr(voice_idx, step, "va", math.random(1, MAX_STEP_LEVEL))
+    end
   end
 
   -- A step level from any value: a number floored to a whole level and
@@ -1792,19 +1909,23 @@ return function(S)
   end
 
   -- The per-voice seq params (design 8.1, 8.12, 8.13): a registered record
-  -- with discrete scene keys (length, division, gate, swing) and three that
-  -- crossfade (the gate's length, release and floor), no VOICE rows
+  -- with discrete scene keys (length, division, gate, swing, direction,
+  -- misstep, 3.9's two move targets) and three that crossfade (the gate's
+  -- length, release and floor), no VOICE rows
   local record
   record = {
     name = "seq",
-    count = 9,
+    count = 11,
     add = function(voice_idx)
       local add = S.lib.params_setup.add_voice_param
       add(voice_idx, record, "seq_length", {type = "number", name = "seq length", min = 1, max = PATTERN_LENGTH,
         default = PATTERN_LENGTH, action = function(length)
           -- the step that set the voice's overrides is past the new length:
-          -- no step of it will end them
-          if (last_played[voice_idx] or 0) > length then end_overrides(voice_idx) end
+          -- no step of it will end them; 3.9: a held value ends only past
+          -- the step that set it (first, so a param is sent once), and one
+          -- a lock of that step held comes back
+          values.end_held(voice_idx, function(entry) return entry.step <= length end)
+          if (last_played[voice_idx] or 0) > length then end_overrides(voice_idx, true) end
           -- 3.9: a pulse voice's rule counts the steps inside its length
           if M.step_mode(voice_idx) == "pulse" then M.send_gate_rule(voice_idx) end
           grid_redraw()
@@ -1814,7 +1935,11 @@ return function(S)
       -- 3.9: the step mode; its own send (add_voice_param's) is the gate
       -- rule's (send_gate_rule), so its action adds the gate length only
       add(voice_idx, record, "seq_gate", {type = "option", name = "seq gate", options = SEQ.modes,
-        default = SEQ.default_mode, action = function() resend_gate(voice_idx) end})
+        default = SEQ.default_mode, action = function()
+          resend_gate(voice_idx)
+          -- 3.9 (design section 2): a mode change ends the voice's held values
+          M.end_held_values(voice_idx)
+        end})
       add(voice_idx, record, "seq_gate_length", {type = "control", name = "seq gate length",
         controlspec = controlspec.new(SEQ.gate_steps[1], SEQ.gate_steps[2], "exp", 0, SEQ.gate_length_default, "st"),
         action = function() resend_gate(voice_idx) end})
@@ -1833,6 +1958,13 @@ return function(S)
         default = SEQ.forward})
       add(voice_idx, record, "seq_misstep", {type = "number", name = "seq misstep", min = 0, max = SEQ.max_misstep,
         default = 0, formatter = percent})
+      -- 3.9 grid sequencer (design section 2, The values): the two move
+      -- targets (S.lib.lanes); a change ends the voice's held values. The
+      -- hand's choice (S.lib.lanes.choose_target) adds the filter's opening
+      for _, lane in ipairs({"a", "b"}) do
+        add(voice_idx, record, S.lib.lanes.MOVE.param[lane], {type = "option", name = "seq move " .. lane:upper(),
+          options = S.lib.lanes.options(lane), default = 1, action = function() M.end_held_values(voice_idx) end})
+      end
     end,
     -- seq_gate's seqGate is the gate rule for the mode option sent
     grain_keys = {seq_gate = {name = "seqGate", value = function(option, voice_idx) return modes.rule(option, voice_idx) end},
@@ -1844,10 +1976,12 @@ return function(S)
     end,
     scene_defaults = {seq_length = PATTERN_LENGTH, seq_division = SEQ.default_division, seq_gate = SEQ.default_mode,
       seq_gate_length = SEQ.gate_length_default, seq_gate_release = SEQ.gate_release_default, seq_swing = SEQ.swing[1],
-      seq_direction = SEQ.forward, seq_misstep = 0, seq_gate_floor = SEQ.gate_floor.default},
+      seq_direction = SEQ.forward, seq_misstep = 0, seq_gate_floor = SEQ.gate_floor.default, seq_move_a = 1,
+      seq_move_b = 1},
     discrete = {seq_length = {1, PATTERN_LENGTH}, seq_division = {1, #SEQ.division_names},
       seq_gate = {1, #SEQ.modes}, seq_swing = {SEQ.swing[1], SEQ.swing[2]},
-      seq_direction = {1, #SEQ.directions}, seq_misstep = {0, SEQ.max_misstep}},
+      seq_direction = {1, #SEQ.directions}, seq_misstep = {0, SEQ.max_misstep},
+      seq_move_a = {1, #S.lib.lanes.TARGETS + 1}, seq_move_b = {1, #S.lib.lanes.TARGETS + 1}},
     scene_ranges = {seq_gate_length = {SEQ.gate_steps[1], SEQ.gate_steps[2]},
       seq_gate_release = {SEQ.gate_release[1], SEQ.gate_release[2]},
       seq_gate_floor = {SEQ.gate_floor[1], SEQ.gate_floor[2]}},
@@ -2009,13 +2143,13 @@ return function(S)
   end)
 
   -- 3.9 (#919): what a step holds on its voice ends together. Stopped, no
-  -- voice holds a step's overrides, step, chord, region, slice or begun
-  -- inputs; a region's end flag goes with its region, and a step slice is
+  -- voice holds a step's overrides, step, chord, region, slice, begun
+  -- inputs or (3.9 grid sequencer, 2a) held values; a region's end flag goes with its region, and a step slice is
   -- the last played step's. gate_sent outlives a stop (the engine keeps
   -- gateSeconds, #639): it holds only voices and gate lengths gate_seconds gives
   local held_tables = {{"overrides", overrides}, {"last_played", last_played}, {"chords", chords},
     {"step_regions", step_regions}, {"step_slices", step_slices}, {"step_region_to_end", step_region_to_end},
-    {"stepping", stepping}}
+    {"stepping", stepping}, {"held_values", held_values}}
   S.register_invariant("step holds", function()
     if not S.pattern_playing then
       for _, entry in ipairs(held_tables) do
@@ -2028,6 +2162,14 @@ return function(S)
     for voice_idx = 1, NUM_VOICES do
       if step_region_to_end[voice_idx] ~= nil and step_regions[voice_idx] == nil then
         return "step_region_to_end[" .. voice_idx .. "] is " .. tostring(step_region_to_end[voice_idx]) .. " with no region"
+      end
+      -- 3.9 grid sequencer (2a): a held value's param has a base override
+      -- (its own, or a lock's over it), so a record never outlives its value
+      for target, entry in pairs(held_values[voice_idx] or {}) do
+        if not S.lib.engine_sync.is_overridden(entry.param) then
+          return "held_values[" .. voice_idx .. "]." .. tostring(target) .. " is on " .. tostring(entry.param)
+            .. ", which no override holds"
+        end
       end
       local slice = step_slices[voice_idx]
       if slice and slice.step ~= last_played[voice_idx] then

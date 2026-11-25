@@ -224,6 +224,9 @@ return function(S)
       heading.name = "voice " .. voice_idx .. ": " .. record.name
       S.lib.engine_sync.send_voice_type(voice_idx)
       for _, key in ipairs(S.lib.types.keys()) do note_param_edit("v" .. voice_idx .. "_" .. key) end
+      -- 3.9 grid sequencer (ruling 2a-1): the voice's held step values end
+      -- (pitch's path follows the type), before the sync sends its values
+      S.lib.sequencer.end_held_values(voice_idx)
       if S.voices[voice_idx].active and not S.scene_recall_in_progress then sync_voice_values_to_engine(voice_idx) end
       -- the grid fader list follows the type (its synth keys): the one
       -- clamp, for every path, the faders page's type keys included
