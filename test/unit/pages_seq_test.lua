@@ -745,19 +745,57 @@ test("a one-note step shows add note, and the cursor stays on the notes when the
   assert_equal((cursor_row(context)), "note " .. most, "a full chord: the last note row")
 end)
 
+-- Draw each SEQ layout state whose name begins with prefix, each on a fresh
+-- script as the layout parts draw it: every field row drawn (label ->
+-- value), how many states, and how many drew no row an earlier one had not
+-- (a window to spare). visit(label, value) sees each row drawn
+local function draw_windows(prefix, visit)
+  local _, S = started_on_seq()
+  local seq_index = S.constants.UI_PAGES.index.SEQ
+  local drawn, count, spare = {}, 0, 0
+  for index, state in ipairs(S.registry.pages[seq_index].layout_states) do
+    if state.name:sub(1, #prefix) == prefix then
+      local context = load_strata(); finish_startup(context)
+      show_page("SEQ")
+      local_value("S").registry.pages[seq_index].layout_states[index].setup(context)
+      context.screen.clear(); redraw()
+      count = count + 1
+      local new = false
+      for _, entry in ipairs(context.screen.texts) do
+        if entry.x == EDIT.field_x then
+          local value = ""
+          for _, other in ipairs(context.screen.texts) do
+            if other.y == entry.y and other.x == EDIT.value_right and other.align == "right" then value = other.text end
+          end
+          if drawn[entry.text] == nil then new = true end
+          drawn[entry.text] = value
+          if visit then visit(entry.text, value) end
+        end
+      end
+      if not new then spare = spare + 1 end
+    end
+  end
+  return drawn, count, spare
+end
+
+local function row_count(drawn)
+  local count = 0
+  for _ in pairs(drawn) do count = count + 1 end
+  return count
+end
+
 test("SEQ's layout states count a full chord as the sequencer's most notes", function()
   local _, S = started_on_seq()
   assert_equal(S.lib.pages_seq.WIDEST_CHORD_ROWS, S.lib.sequencer.SEQ.max_step_notes, "the widest chord is the sequencer's")
-  local seen = 0
-  for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states) do
-    if state.name:find("edit view eight notes rows", 1, true) then seen = seen + 1 end
-  end
-  -- 3 section labels + 20 voice + 8 step + 8 notes + 3 locks + bookmark + 8
-  -- chain rows (3.7: direction, misstep, fill, cond, slice, next, prev,
-  -- random; 3.9's 6a: floor, move A and B, five lane lengths and the letter,
-  -- val A and val B), five to a window: the states' step is a buffer voice's
-  local rows = 3 + 20 + 8 + S.lib.sequencer.SEQ.max_step_notes + 3 + 1 + 8
-  assert_equal(seen, math.ceil(rows / 5), "a window for every row of an eight-note step")
+  -- 20 voice + 8 step + 8 notes + 3 locks + bookmark + 8 chain rows (3.7:
+  -- direction, misstep, fill, cond, slice, next, prev, random; 3.9's 6a:
+  -- floor, move A and B, five lane lengths and the letter, val A and val
+  -- B): the states' step is a buffer voice's. The windows are as many as
+  -- window_cursors gives (6a's review): every row drawn, none to spare
+  local drawn, count, spare = draw_windows("edit view eight notes rows ")
+  assert_equal(row_count(drawn), 20 + 8 + S.lib.sequencer.SEQ.max_step_notes + 3 + 1 + 8,
+    "the windows draw every row of an eight-note step")
+  assert_equal(spare, 0, "and every one of the " .. count .. " windows draws a row no other before it did")
 end)
 
 test("turn_note ignores an index that is not a whole number in 1..n + 1", function()
@@ -1150,9 +1188,11 @@ test("SEQ's new rows show their values at their ends", function()
   assert_true(labels:find("mode floor move A move B len A len B len chance len repeats len gate letter gate len",
     1, true) ~= nil, "the voice rows after mode: " .. labels)
   assert_true(labels:find("level val A val B prob", 1, true) ~= nil, "the step rows after level: " .. labels)
-  assert_equal(go_to(context, "floor"), "0.00", "the floor at 0")
-  enc(3, 200); assert_equal(params:get("v1_seq_gate_floor"), 1); assert_equal(shown(context), "1.00", "and at 1")
-  params:set("v1_seq_gate_floor", 0.25); assert_equal(shown(context), "0.25")
+  -- the floor in its param's own unit, as PARAMS shows it (6a's review)
+  assert_equal(go_to(context, "floor"), "0 %", "the floor at 0")
+  enc(3, 200); assert_equal(params:get("v1_seq_gate_floor"), 1); assert_equal(shown(context), "100 %", "and at 1")
+  params:set("v1_seq_gate_floor", 0.25)
+  assert_equal(shown(context), "25 %"); assert_equal(shown(context), params:string("v1_seq_gate_floor"))
   assert_equal(go_to(context, "move A"), "auto", "A's first option")
   enc(3, 10); assert_equal(shown(context), "cutoff", "and its last")
   enc(3, -10); assert_equal(shown(context), "auto")
@@ -1300,46 +1340,58 @@ test("the step editor's own letter switch keeps it open", function()
   context.grid.press(1, 5, 3, 0)
 end)
 
+-- 6a's review: a switch the editor's letter row leaves waiting is the bar
+-- hook's when it lands (S.lib.sequencer.on_bar), not the editor's, so it
+-- closes the editor as any replacement from elsewhere does
+test("a waiting letter switch made from the step editor closes it when the bar lands", function()
+  local context, S = started_on_seq()
+  context.grid.plug(1, 16, 16)
+  pattern_toggle()
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  assert_true(S.lib.pages_seq.step_editor() ~= nil, "the grid key opened the editor")
+  go_to(context, "letter")
+  enc(3, 1)
+  assert_equal(S.lib.pattern_letters.waiting(3), "B", "playing, the switch waits for the bar")
+  assert_true(S.lib.pages_seq.step_editor() ~= nil, "and the editor stays open meanwhile")
+  context.clock.run_for(2.1)  -- a bar at 120 BPM
+  assert_equal(S.lib.pattern_letters.current(3), "B", "the bar switches it")
+  assert_equal(S.lib.pages_seq.step_editor(), nil, "and closes the editor")
+  local step_5 = S.patterns[3][5]
+  context.grid.press(1, 5, 3, 0)
+  assert_equal(S.patterns[3][5], step_5, "the key's release toggles nothing")
+  pattern_toggle()
+end)
+
 -- Every new row at its widest in the layout states (the layout tests draw
 -- them: ui_layout_pages_1_test.lua)
 test("SEQ's layout states draw every new row at its widest", function()
-  local _, S = started_on_seq()
-  local states = S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states
-  local want = {floor = "0.25", ["move A"] = "position", ["move B"] = "position", ["len A"] = "16",
+  local want = {floor = "100 %", ["move A"] = "position", ["move B"] = "position", ["len A"] = "16",
     ["len B"] = "16", ["len chance"] = "16", ["len repeats"] = "16", ["len gate"] = "16",
     letter = "A ABDABDAB", ["val A"] = "15", ["val B"] = "15"}
-  local seen, letters, drawn = {}, {}, {}
-  for index, state in ipairs(states) do
-    if state.name:find("^edit view v7 step 16 bookmarks") or state.name:find("letter", 1, true) then
-      local context = load_strata(); finish_startup(context)
-      show_page("SEQ")
-      local_value("S").registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states[index].setup(context)
-      context.screen.clear(); redraw()
-      for _, entry in ipairs(context.screen.texts) do
-        if entry.x == EDIT.field_x and state.name:find("^edit view v7") then drawn[entry.text] = true end
-      end
-      for _, entry in ipairs(context.screen.texts) do
-        if entry.x == EDIT.field_x and want[entry.text] then
-          for _, other in ipairs(context.screen.texts) do
-            if other.y == entry.y and other.x == EDIT.value_right and other.align == "right" then
-              seen[entry.text] = other.text
-              if entry.text == "letter" then letters[other.text] = true end
-            end
-          end
-        end
-      end
-    end
-  end
+  local letters = {}
+  local function letter_seen(label, value) if label == "letter" then letters[value] = true end end
+  local drawn = draw_windows("edit view v7 step 16 bookmarks rows ", letter_seen)
   for label, text in pairs(want) do
-    if label ~= "letter" then assert_equal(seen[label], text, label .. " at its widest") end
+    if label ~= "letter" then assert_equal(drawn[label], text, label .. " at its widest") end
   end
+  draw_windows("edit view, a letter waiting", letter_seen)
   assert_true(letters[want.letter], "the letter with an order of eight at its widest")
   assert_true(letters["A>B"], "and a letter waiting")
-  -- the windows draw every row (a window whose second row is a section's
-  -- label starts a row early, so none is skipped)
-  local count = 0
-  for _ in pairs(drawn) do count = count + 1 end
-  assert_equal(count, 42, "voice 7's windows draw all 42 rows of a buffer voice's one-note step (its add note row too)")
+end)
+
+-- 6a: a window whose second row is a section's label starts a row early,
+-- so no row is skipped; every family of edit view windows draws all its
+-- rows, with no window to spare (the eight-note windows: the chord's test)
+test("every family of SEQ's edit view windows draws all its rows", function()
+  -- one note and its add row; a synth voice has no slice and no bookmark row
+  for _, family in ipairs({{"v1", true, 42}, {"v7", true, 42}, {"v1", false, 40}, {"v7", false, 40}}) do
+    local voice, bookmarks, rows = family[1], family[2], family[3]
+    local drawn, count, spare = draw_windows("edit view " .. voice .. " step 16 " .. (bookmarks and "bookmarks " or "")
+      .. "rows ")
+    local where = voice .. (bookmarks and " with bookmarks" or " without")
+    assert_equal(row_count(drawn), rows, where .. ": every row drawn")
+    assert_equal(spare, 0, where .. ": none of its " .. count .. " windows to spare")
+  end
 end)
 
 -- The level's one writer (S.lib.sequencer.set_level): SEQ's encoder, its
