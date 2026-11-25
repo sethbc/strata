@@ -4966,7 +4966,8 @@ local function sequencer_local(S, name)
   end
   for _, output in ipairs(S.registry.step_outputs) do
     if output.name == "voices" then
-      local found = search(output.play, 1)
+      -- gs-2a: the held values' functions are fields of a table; held_value reaches them
+      local found = search(output.play, 1) or search(S.lib.sequencer.held_value, 1)
       assert_true(type(found) == "table", "lib/sequencer.lua's " .. name .. " is reached")
       return found
     end
@@ -4989,8 +4990,9 @@ test("step holds: the invariant names each hold it forbids", function()
   assert_equal(step_holds_problem(), nil, "a fresh script holds")
   -- stopped: every hold of a step is empty
   local held = {overrides = {}, last_played = 3, chords = {}, step_regions = {0, 0.25}, step_slices = {slice = 1, step = 3},
-    step_region_to_end = false, stepping = {}}
-  for _, name in ipairs({"overrides", "last_played", "chords", "step_regions", "step_slices", "step_region_to_end", "stepping"}) do
+    step_region_to_end = false, stepping = {}, held_values = {position = {level = 15, step = 3, param = "v2_buf_pos"}}}
+  for _, name in ipairs({"overrides", "last_played", "chords", "step_regions", "step_slices", "step_region_to_end", "stepping",
+      "held_values"}) do
     local tables = sequencer_local(S, name)
     tables[2] = held[name]
     local problem = step_holds_problem()
@@ -5011,6 +5013,14 @@ test("step holds: the invariant names each hold it forbids", function()
   assert_true((step_holds_problem() or ""):find("step_slices[5]", 1, true), "a slice of a step that was not the last played")
   last[5] = 7
   assert_equal(step_holds_problem(), nil, "the last played step's slice")
+  -- gs-2a: a held value's param has a base override
+  local held_values = sequencer_local(S, "held_values")
+  held_values[6] = {size = {level = 4, step = 2, param = "v6_grain_size"}}
+  assert_true((step_holds_problem() or ""):find("held_values[6].size", 1, true), "a held value with no override")
+  S.lib.engine_sync.set_base_override("v6_grain_size", 0.3)
+  assert_equal(step_holds_problem(), nil, "with its override")
+  held_values[6] = nil
+  S.lib.engine_sync.clear_base_override("v6_grain_size")
   pattern_clock_stop()
   assert_equal(step_holds_problem(), nil, "a stop ends them all")
   -- gate_sent outlives a stop (the engine keeps gateSeconds, #639), but

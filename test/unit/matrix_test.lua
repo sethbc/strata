@@ -1663,7 +1663,7 @@ test("16 full scenes with six homes write 6898 tables", function()
   local sequencer = S.lib.sequencer
   local notes = { -14, -9, -5, -2, 0, 3, 7, 14 }
   local attrs = { prob = 37, ratchet = 4, pos = 0.123456789, pitch = 1.23456789, size = 0.123456789, bookmark = 4,
-    gate = 7.123456789, slice = S.lib.slices.SLICES.max }
+    gate = 7.123456789, slice = S.lib.slices.SLICES.max, va = 15, vb = 15 }  -- gs-2a: value A and B
   local longest_cond = ""
   for _, value in ipairs(S.lib.conditions.values) do
     if #value > #longest_cond then longest_cond = value end

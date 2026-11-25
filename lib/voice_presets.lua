@@ -52,7 +52,7 @@ return function(S)
       filter_type = true, filter_freq = true, filter_res = true, filter_mix = true, delay_send = true,
       reverb_send = true, dry = true, attack = true, release = true, env_attack = true, env_decay = true,
       env_sustain = true, env_release = true, env_curve = true, env_loop = true,
-      -- out (40)
+      -- out (42)
       buf_pos = false, buf_rate = false, buf_scan = false, mod_source_1 = false, mod_source_2 = false,
       mod_source_3 = false, mod_amp_amt_1 = false, mod_amp_amt_2 = false, mod_amp_amt_3 = false,
       mod_freq_amt_1 = false, mod_freq_amt_2 = false, mod_freq_amt_3 = false, mod_speed = false,
@@ -61,7 +61,8 @@ return function(S)
       scan_mode = false, follow = false, slices = false, mute = false, press_target = false,
       press_depth = false, slide_target = false, slide_depth = false, seq_length = false,
       seq_division = false, seq_direction = false, seq_gate = false, seq_gate_length = false,
-      seq_gate_release = false, seq_swing = false, seq_misstep = false, seq_gate_floor = false,
+      seq_gate_release = false, seq_swing = false, seq_misstep = false, seq_gate_floor = false, seq_move_a = false,
+      seq_move_b = false,
     },
   }
   M.VOICE_PRESETS = VOICE_PRESETS

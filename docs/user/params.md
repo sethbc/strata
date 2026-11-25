@@ -223,5 +223,7 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq swing | 50-75 | 50 | Percent: 50 is straight |
 | seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
 | seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |
+| seq move A | auto, position, pitch, size, cutoff | auto | What a step's value A moves ([Moving a voice](sequencer.md#moving-a-voice)); auto is position on a buffer voice, pitch on any other |
+| seq move B | off, position, pitch, size, cutoff | off | What a step's value B moves |
 
-None of the extras (grain shape to seq misstep) is changed by MAIN's randomize or the mutations. The grid's fader pages show the window's shape and skew among the grain faders (where 3.7's envelope was), and, after the voice's own faders, the voice filter's cutoff, resonance and mix, the dry level, both sends, a buffer voice's loop, the three jitters and the voice's attack and release; ALT+K2 on VOICE randomizes some of the extras with the section under the cursor ([VOICE](pages/voice.md)).
+None of the extras (grain shape to seq move B) is changed by MAIN's randomize or the mutations. The grid's fader pages show the window's shape and skew among the grain faders (where 3.7's envelope was), and, after the voice's own faders, the voice filter's cutoff, resonance and mix, the dry level, both sends, a buffer voice's loop, the three jitters and the voice's attack and release; ALT+K2 on VOICE randomizes some of the extras with the section under the cursor ([VOICE](pages/voice.md)).

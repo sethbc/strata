@@ -327,6 +327,7 @@ Every module, in include order (`strata.lua`'s includes), with its `S.lib` name,
 | `lib/grid/pane.lua` | `grid_pane` | `docs/notes/lua/grid/pane.md` | grid_pane_test.lua |
 | `lib/grid/pages/<page>.lua`: `patterns`, `faders`, `scenes`, `sources`, `positions`, `voices`, `fx` | `grid_pages_<page>` (`grid_pages_patterns`, ...) | `docs/notes/lua/grid/pages/<page>.md` | grid_pages_<page>_test.lua |
 | `lib/grid/layout_<size>.lua`: `256`, `128h`, `128v`, `64` | `grid_layout_<size>` (`grid_layout_256`, ...) | `docs/notes/lua/grid/layout_<size>.md` (`docs/notes/lua/grid/layout_256.md`, ...) | grid_layout_<size>_test.lua (grid_layout_256_test.lua, ...) |
+| `lib/lanes.lua` | `lanes` | `docs/notes/lua/lanes.md` | lanes_test.lua |
 | `lib/sequencer.lua` | `sequencer` | `docs/notes/lua/sequencer.md` | sequencer_test.lua |
 | `lib/Engine_Strata.sc`, `lib/engine/Strata*.sc` (an area, or a set of defs, a file) | | `docs/notes/engine/<area>.md`, one per check area | `test/engine_check.scd` (the engine check's runner) and `test/engine_check/<area>.scd` |
 | the test harness (`test/norns_stubs.lua`, `test/sync_check.lua`, ...) | | `docs/notes/test-harness.md` | stubs_test.lua, docs_test.lua |
