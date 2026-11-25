@@ -1,6 +1,8 @@
 # Grid Page 6: Voices
 
-One line per voice: its mute, solo and lock, its pattern's clear, randomize and copy, a copy of its sound onto another voice, and its level. Its fourth key is its audio freeze. Press the page's key (P6) to show it. Back to [Monome Grid](../../grid.md).
+One line per voice: its mute, solo and lock, its pattern's clear, randomize and copy, a copy of its sound onto another voice, and its level. Its fourth key is its audio freeze. Press the page's key (P6) to show it; press it again for the [perform side](#side-2-the-perform-side). Back to [Monome Grid](../../grid.md).
+
+## Side 1: each voice's keys
 
 ```
      1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
@@ -22,3 +24,24 @@ Line 1 is voice 1, line 7 voice 7. Every key acts as you press it, but CL and RN
 Each grid keeps its own pattern copy and voice mark: they stay while the grid shows other pages, the two panes of a 16×16 share them, and unplugging the grid forgets them. A mute, solo or lock set anywhere else (the screen, a scene, MIDI) shows at once. So does a freeze.
 
 Where it sits: rows 1-7 of the [16×8](../128h.md) and either pane of the [16×16](../256.md) (the bottom pane's lines on rows 9-15; a 16×16 starts on patterns over voices), down columns 1-7 of the [8×16](../128v.md) (each voice's eight keys down rows 1-8 of its column, its level up rows 9-16, row 16 the minimum), and a half at a time on the [8×8](../64.md): the left half holds the eight keys (columns 1-8), the right half the levels (columns 9-16), each across its eight keys.
+
+## Side 2: the perform side
+
+Every voice's performing keys, a line each, so you can play the [variations](../../sequencer.md#variations), the loop's latch, the rolls, the step modes and fill of all seven voices from one page. Press the page's key again while it shows (on the [8×8](../64.md), the chooser's rows 3 and 4).
+
+```
+     1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
+1    MU SO A  B  C  D  OR LP R1 R2 R3 R4 PU MV AC FL
+...
+7    MU SO A  B  C  D  OR LP R1 R2 R3 R4 PU MV AC FL
+```
+
+- **MU** and **SO** mute and solo the voice, as on side 1
+- **A**, **B**, **C**, **D** switch the voice to that pattern ([Variations](../../sequencer.md#variations)). While the patterns play, the letter waits for the next bar and blinks between 15 and 2; tap it again to switch at once, tap the playing letter to cancel the wait. With the patterns stopped it switches at once. The playing letter lights 15, a letter the voice has used 4 (one used and cleared stays used), one never used 2. Switching by hand turns the voice's order off
+- **OR** is the voice's order. Hold it and tap letters: each tap adds that letter (up to eight), and nothing switches while you hold it. Let go and the order you tapped replaces the old one and turns on: the voice takes its first letter at the next bar and one letter a bar after that. Tap OR alone to turn the order off or back on (an order is kept while off). OR lights 10 while held, 15 while the order is on, 4 for an order that is off, 2 with none. Changing the pane's page before you let go sets nothing
+- **LP** is the loop's latch ([The loop](../../sequencer.md#performing)): 2 off; pressed, it arms (10), and the next loop you make on the voice (on the patterns page's side 1) stays when you let its keys go; 6 while a loop is held and not latched, when a press latches it; 15 while a loop is latched, when a press ends it
+- **R1** to **R4** roll the voice while held: its last played hit again, 1, 2, 3 or 4 times a step, never closer than 20 ms ([The roll](../../sequencer.md#performing)). The key lights 15 while it rolls, 4 otherwise. Of two roll keys held the last pressed rolls, and letting the first go changes nothing; letting go of the rolling key ends the roll at once, whatever another grid holds. A page change or unplugging the grid ends it too. With the patterns stopped a roll key does nothing
+- **PU**, **MV**, **AC** choose the voice's step mode, pulse, move or accent ([Step modes](../../sequencer.md#step-modes)), as the patterns page's side 2 does (choosing move gives every set step a random value A where it has none): the voice's mode 15, the others 4. A voice in `gate` (chosen on SEQ or in PARAMETERS, or 3.8's seq gate in an old scene) lights PU at 8 and none of the three 15. Every voice's mode shows at once
+- **FL** holds fill while it is down, on any line ([Fill](../../sequencer.md#fill)): 15 while fill is on, however it was turned on, 4 otherwise. Each line's FL is its own hold: letting go of one leaves another held, the strip's FL and a latched fill. A page change or unplugging the grid lets go. This puts fill on the 8×8, which has no fill key on its strip
+
+Side 2 has no level fader: keys 9-16 are the rolls, the mode keys and FL. Where it sits: as side 1 on the 16×8 and the 16×16 (on either pane, or side 1 on one and side 2 on the other), each voice's sixteen keys down its column on the 8×16, and on the 8×8 a half at a time: MU, SO, the letters, OR and LP on the left half, the rolls, the mode keys and FL on the right.

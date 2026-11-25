@@ -10,7 +10,15 @@
 -- state (the pattern copy and the voice mark, per port) is pane.state()'s
 --
 -- CL and RN hold for GRID_HOLD.action_hold_seconds (0.5 s), the grids'
--- half-second hold (a recorder's clear waits it too)
+-- half-second hold (a recorder's clear waits it too). 3.9 (the grid
+-- sequencer's 5c, design section 4, The perform side): a second side, a
+-- line a voice: MU SO as side 1's, the letters A-D
+-- (S.lib.pattern_letters.switch), OR (held: the letters tapped make a new
+-- order, set at its release; tapped alone: the order on or off), LP (the
+-- loop's latch, S.lib.loop_roll.press_latch), R1-R4 (held: a roll at that
+-- rate, held by the key's own pane.still), the mode keys (pulse, move,
+-- accent: S.lib.lanes.choose_mode) and FL (held: fill, holder
+-- "grid:<port>:<line>"). Side 2 has no fader line
 
 return function(S)
   local M = {}
@@ -28,6 +36,20 @@ return function(S)
       copied = 15, target = 4, no_copy = 2},
   }
   M.VOICES_PAGE = VOICES_PAGE
+
+  -- The perform side (side 2): its keys (pane x), its mode keys' modes,
+  -- the roles its held keys are pressed in, and the lights
+  local PERFORM = {
+    side = 2,
+    keys = {mute = 1, solo = 2, first_letter = 3, order = 7, latch = 8, first_roll = 9, rolls = 4, fill = 16},
+    modes = {[13] = "pulse", [14] = "move", [15] = "accent"},
+    order_role = "perform order", fill_role = "perform fill",
+    levels = {letter_playing = 15, letter_used = 4, letter_unused = 2,
+      order_on = 15, order_off = 4, order_none = 2, order_held = 10,
+      latch_off = 2, latch_held = 6, latch_armed = 10, latch_latched = 15,
+      roll_on = 15, roll_off = 4, fill_on = 15, fill_off = 4},
+  }
+  M.PERFORM = PERFORM
 
   local keys, levels = VOICES_PAGE.keys, VOICES_PAGE.levels
   local HOLD_KEYS = {keys.clear, keys.randomize}
@@ -89,7 +111,7 @@ return function(S)
     end
   end
 
-  local function press(pane, x, y, z)
+  local function press_voice_keys(pane, x, y, z)
     if z ~= 1 or not whole_in(x, 1, keys.voice_copy) or not whole_in(y, 1, NUM_VOICES) then return end
     local voice_idx = y
     if x == keys.mute then
@@ -111,6 +133,108 @@ return function(S)
     end
   end
 
+  -- The perform side's keys ------------------------------------------------
+
+  -- The letters A-D (S.lib.pattern_letters is included after this page,
+  -- so read at each use)
+  local function all_letters() return S.lib.pattern_letters.LETTERS end
+
+  -- The letter of key x (A-D from first_letter), or nil
+  local function letter_of(x) return all_letters()[x - PERFORM.keys.first_letter + 1] end
+
+  -- The order being built while OR is held: the port's page state keeps,
+  -- per voice, {pane, still (OR's own press), letters}; it counts only
+  -- while OR's still holds, so it never outlives its key
+  local function order_build(pane, voice_idx)
+    local builds = pane.state().orders
+    local build = builds and builds[voice_idx]
+    if build and build.still() then return build end
+    return nil
+  end
+
+  -- OR: a press starts a new order, empty; its release sets the order
+  -- built (S.lib.pattern_letters.set_order, which turns it on from its
+  -- first letter at the next bar), or with no letter tapped turns the
+  -- voice's order on or off (set_order_on). Only the release of OR pressed
+  -- as OR on this pane acts, so a page change before it does nothing
+  local function order_key(pane, x, voice_idx, z)
+    local state, letters = pane.state(), S.lib.pattern_letters
+    if z == 1 then
+      pane.press_as(x, voice_idx, PERFORM.order_role)
+      state.orders = state.orders or {}
+      state.orders[voice_idx] = {pane = pane.index, still = pane.still(x, voice_idx), letters = {}}
+      return
+    end
+    local build = order_build(pane, voice_idx)
+    if build == nil or build.pane ~= pane.index then return end
+    state.orders[voice_idx] = nil
+    if not pane.pressed_as(x, voice_idx, PERFORM.order_role) then return end
+    if #build.letters > 0 then
+      letters.set_order(voice_idx, build.letters)
+    else
+      letters.set_order_on(voice_idx, not select(2, letters.order(voice_idx)))
+    end
+  end
+
+  -- A letter: added to the order OR builds while it is held (up to the
+  -- order's max), else switched to (S.lib.pattern_letters.switch: it waits
+  -- for the bar while the patterns play)
+  local function letter_key(pane, voice_idx, letter)
+    local build = order_build(pane, voice_idx)
+    if build == nil then
+      S.lib.pattern_letters.switch(voice_idx, letter)
+    elseif #build.letters < S.lib.pattern_letters.VARIATIONS.max_order then
+      build.letters[#build.letters + 1] = letter
+    end
+  end
+
+  -- FL: held, fill, held by the key's own still under the line's holder;
+  -- only its own release ends that hold
+  local function fill_key(pane, x, voice_idx, z)
+    local holder = "grid:" .. pane.port .. ":" .. voice_idx
+    if z == 1 then
+      pane.press_as(x, voice_idx, PERFORM.fill_role)
+      S.lib.conditions.hold_fill(holder, true, pane.still(x, voice_idx))
+    elseif pane.pressed_as(x, voice_idx, PERFORM.fill_role) then
+      S.lib.conditions.hold_fill(holder, false)
+    end
+  end
+
+  -- A roll key's rate (1..rolls from first_roll), or nil
+  local function roll_rate(x)
+    local rate = x - PERFORM.keys.first_roll + 1
+    if rate >= 1 and rate <= PERFORM.keys.rolls then return rate end
+    return nil
+  end
+
+  -- A key of side 2 (a release acts for OR and FL only). A roll key's
+  -- press rolls the voice, held by the key's own still: its release (the
+  -- press gone) ends that roll and no other, so the release itself does
+  -- nothing, and a roll another key started since goes on
+  local function press_perform(pane, x, y, z)
+    if not whole_in(x, 1, PERFORM.keys.fill) or not whole_in(y, 1, NUM_VOICES) then return end
+    local voice_idx, perform = y, PERFORM.keys
+    if x == perform.order then return order_key(pane, x, voice_idx, z) end
+    if x == perform.fill then return fill_key(pane, x, voice_idx, z) end
+    if z ~= 1 then return end
+    if x == perform.mute or x == perform.solo then
+      toggle_param(param_of(voice_idx, x == perform.mute and "mute" or "solo"))
+    elseif letter_of(x) then
+      letter_key(pane, voice_idx, letter_of(x))
+    elseif x == perform.latch then
+      S.lib.loop_roll.press_latch(voice_idx)
+    elseif roll_rate(x) then
+      S.lib.loop_roll.roll(voice_idx, roll_rate(x), pane.still(x, voice_idx))
+    elseif PERFORM.modes[x] then
+      S.lib.lanes.choose_mode(voice_idx, PERFORM.modes[x])
+    end
+  end
+
+  local function press(pane, x, y, z)
+    if pane.side == PERFORM.side then return press_perform(pane, x, y, z) end
+    press_voice_keys(pane, x, y, z)
+  end
+
   -- A copy key's level: the copied (or marked) voice, the others while a
   -- copy exists, none
   local function copy_level(copy, voice_idx)
@@ -125,7 +249,58 @@ return function(S)
     return S.lib.freeze.is_frozen(voice_idx) and levels.freeze_on or levels.freeze_off
   end
 
+  -- The perform side's lights ---------------------------------------------
+
+  -- A letter: blinking while it waits (the core's blink, whose signature
+  -- counts it while a pane shows this side), 15 playing, 4 used, 2 never
+  local function letter_level(voice_idx, letter)
+    local letters, perform = S.lib.pattern_letters, PERFORM.levels
+    if letters.waiting(voice_idx) == letter then return S.lib.grid_core.waiting_level() end
+    if letters.current(voice_idx) == letter then return perform.letter_playing end
+    return letters.used(voice_idx, letter) and perform.letter_used or perform.letter_unused
+  end
+
+  -- OR: 10 while held (as OR, on this pane), 15 on, 4 an order held off, 2 none
+  local function order_level(pane, voice_idx)
+    local perform = PERFORM.levels
+    if pane.pressed_as(PERFORM.keys.order, voice_idx, PERFORM.order_role) then return perform.order_held end
+    local order, on = S.lib.pattern_letters.order(voice_idx)
+    if on then return perform.order_on end
+    return #order > 0 and perform.order_off or perform.order_none
+  end
+
+  -- LP: 15 latched, 6 a loop held and not latched, 10 armed, 2 off
+  local function latch_level(voice_idx)
+    local roll, perform = S.lib.loop_roll, PERFORM.levels
+    if roll.latched(voice_idx) then return perform.latch_latched end
+    if roll.loop(voice_idx) then return perform.latch_held end
+    return roll.armed(voice_idx) and perform.latch_armed or perform.latch_off
+  end
+
+  -- A roll key: 15 while its rate rolls the voice, 4 else
+  local function roll_level(voice_idx, rate)
+    return S.lib.loop_roll.rolling(voice_idx) == rate and PERFORM.levels.roll_on or PERFORM.levels.roll_off
+  end
+
+  local function draw_perform(pane, led)
+    local perform = PERFORM.keys
+    local fill = S.lib.conditions.fill() and PERFORM.levels.fill_on or PERFORM.levels.fill_off
+    for voice_idx = 1, NUM_VOICES do
+      led(perform.mute, voice_idx, is_on(param_of(voice_idx, "mute")) and levels.on or levels.off)
+      led(perform.solo, voice_idx, is_on(param_of(voice_idx, "solo")) and levels.on or levels.off)
+      for n, letter in ipairs(all_letters()) do
+        led(perform.first_letter + n - 1, voice_idx, letter_level(voice_idx, letter))
+      end
+      led(perform.order, voice_idx, order_level(pane, voice_idx))
+      led(perform.latch, voice_idx, latch_level(voice_idx))
+      for rate = 1, perform.rolls do led(perform.first_roll + rate - 1, voice_idx, roll_level(voice_idx, rate)) end
+      for x, name in pairs(PERFORM.modes) do led(x, voice_idx, S.lib.grid_pages_patterns.mode_level(voice_idx, name)) end
+      led(perform.fill, voice_idx, fill)
+    end
+  end
+
   local function redraw(pane, led)
+    if pane.side == PERFORM.side then return draw_perform(pane, led) end
     local state = pane.state()
     for voice_idx = 1, NUM_VOICES do
       led(keys.mute, voice_idx, is_on(param_of(voice_idx, "mute")) and levels.on or levels.off)
@@ -140,9 +315,11 @@ return function(S)
     end
   end
 
-  -- x 9-16 of each line: the voice's level, for the params that exist
-  local function faders()
+  -- x 9-16 of each line on side 1: the voice's level, for the params that
+  -- exist; side 2 has none
+  local function faders(pane)
     local found = {}
+    if pane.side == PERFORM.side then return found end
     for voice_idx = 1, NUM_VOICES do
       local id = param_of(voice_idx, "amp")
       if exists(id) then
@@ -152,11 +329,31 @@ return function(S)
     return found
   end
 
+  -- Side 2's: per voice what its keys show but a wait (the blink's) and a
+  -- held OR (its key's repaint): the letter played and those used, the
+  -- order and whether it is on, the latch, the roll and the mode; and
+  -- fill. A scene recall's letters, a mode set from SEQ or a loop a length
+  -- cut repaint through it at the drift tick at the latest
+  local function perform_signature()
+    local letters = S.lib.pattern_letters
+    local parts = {tostring(S.lib.conditions.fill())}
+    for voice_idx = 1, NUM_VOICES do
+      local used = {}
+      for _, letter in ipairs(all_letters()) do used[#used + 1] = letters.used(voice_idx, letter) and letter or "-" end
+      local order, on = letters.order(voice_idx)
+      parts[#parts + 1] = table.concat({letters.current(voice_idx), table.concat(used), table.concat(order),
+        tostring(on), latch_level(voice_idx), tostring(S.lib.loop_roll.rolling(voice_idx)),
+        tostring(S.lib.sequencer.step_mode(voice_idx))}, ":")
+    end
+    return table.concat(parts, ",")
+  end
+
   -- What the follow compares beside the level lines: each voice's lock
   -- (a scene's lock entry sets S.locked with no redraw of its own until
   -- the recall ends) and the two copies. Mute, solo and freeze have no
   -- term: their params' actions always redraw the grids
   local function signature(pane)
+    if pane.side == PERFORM.side then return perform_signature() end
     local parts = {}
     for voice_idx = 1, NUM_VOICES do parts[#parts + 1] = tostring(S.locked[voice_idx] == true) end
     local state = pane.state()
@@ -168,6 +365,7 @@ return function(S)
   M.record = {
     name = "voices",
     index = S.constants.GRID_PAGES.voices,
+    sides = PERFORM.side,
     press = press,
     redraw = redraw,
     faders = faders,
