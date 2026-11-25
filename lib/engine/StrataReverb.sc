@@ -85,25 +85,21 @@
 
     addReverbCommands {
         // msg: frozen, 0 (release) or 1 (freeze); another value is ignored
-        // with one line. The high tier's alone (setReverbFrozen)
+        // with one line. On the high tier, keep frozen and set it on the
+        // node; with no node (a bypass has freed it, emptying its lines) 0
+        // is kept, so a lift never starts a frozen node (Lua also releases a
+        // freeze before it bypasses and refuses one while bypassed:
+        // docs/notes/engine/reverb.md, Freeze by bypass). On the standard
+        // tier (FreeVerb2) there is no freeze: 0 is kept and nothing is sent
         this.addCommand(\setReverbFreeze, "i", { arg msg;
-            if (this.fastModIndicesValid(\setReverbFreeze, [[\frozen, msg[1], 1]])) { this.setReverbFrozen(msg[1]) };
+            if (this.fastModIndicesValid(\setReverbFreeze, [[\frozen, msg[1], 1]])) {
+                if (tier == \high) {
+                    this.keepEffectControls(\reverb, (frozen: if (synths[\reverb].notNil) { msg[1] } { 0 }));
+                    this.setSynth(\reverb, \frozen, msg[1]);
+                } {
+                    this.keepEffectControls(\reverb, (frozen: 0));
+                };
+            };
         });
-    }
-
-    // On the high tier, keep frozen and set it on the node; with no node (a
-    // bypass has freed it, emptying its lines) 0 is kept, so a lift never
-    // starts a frozen node (Lua also releases a freeze before it bypasses
-    // and refuses one while bypassed: docs/notes/engine/reverb.md, Freeze
-    // by bypass). On the standard tier (FreeVerb2) there is no freeze: 0
-    // is kept and nothing is sent. The node is set here, not in the
-    // command's body
-    setReverbFrozen { arg value;
-        if (tier == \high) {
-            this.keepEffectControls(\reverb, (frozen: if (synths[\reverb].notNil) { value } { 0 }));
-            this.setSynth(\reverb, \frozen, value);
-        } {
-            this.keepEffectControls(\reverb, (frozen: 0));
-        };
     }
 }

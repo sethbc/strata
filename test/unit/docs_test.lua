@@ -470,7 +470,9 @@ end)
 test("the FX SynthDefs' defaults equal the Lua param defaults (#25)", function()
   local context = load_strata()
   local fx_commands = engine_spec.fx_commands
-  for _, name in ipairs({"setFilter", "setDelay", "setReverb", "setMasterDrift"}) do
+  -- (3.9: the two freezes set their nodes in their command bodies, so their
+  -- params' defaults are checked too, #819)
+  for _, name in ipairs({"setFilter", "setDelay", "setReverb", "setMasterDrift", "setDelayFreeze", "setReverbFreeze"}) do
     assert_true(fx_commands[name] ~= nil, "engine." .. name .. " sets an FX synth")
   end
   local group_index

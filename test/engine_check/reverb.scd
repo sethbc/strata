@@ -46,9 +46,15 @@ SynthDef(\strataCheckReverbInput, { arg out, level = 0.25, white = 0, from = 0, 
 }).add;
 // Reseeds the default random generator (rgen 0, which the FDN's drift
 // draws from) at the start of every control block: a seeder just before
-// each of two nodes makes their drifts the same (as shimmer.scd's)
-SynthDef(\strataCheckReverbSeed, { arg out, seed = 1234;
-    Out.kr(out, A2K.kr(RandSeed.ar(Impulse.ar(ControlRate.ir), seed)));
+// each of two nodes makes their drifts the same (as shimmer.scd's). With
+// step 0 the seed is the same every block, so LFNoise1 draws the same
+// target at each of its segments and a drift stops moving after its first
+// (about 2.3 and 3.2 s); with step 1 the seed is seed + the block's count,
+// the same for both nodes in a block but new at every segment, so the
+// drifts keep moving
+SynthDef(\strataCheckReverbSeed, { arg out, seed = 1234, step = 0;
+    var block = Impulse.ar(ControlRate.ir);
+    Out.kr(out, A2K.kr(RandSeed.ar(block, seed + (step * PulseCount.ar(block)))));
 }).add;
 // A control bus's value over time from the synth's start: values[0], then
 // values[i] from times[i - 1] (s; rising, 1e9 for none)
@@ -156,7 +162,7 @@ startCheckNode = { arg def, inBus, outBus, silent, buffers, controls, target;
 // server time: each case an Event of def (\strataReverbFDN unless given),
 // controls (the node's), input (\strataCheckReverbInput's controls) or
 // inputFrom (an earlier case's index, whose input it shares), seed (a
-// seeder just before the node), sweeps (control -> [from, to, seconds]: a
+// seeder just before the node; seedStep its step, 0 unless given), sweeps (control -> [from, to, seconds]: a
 // \strataCheckReverbSweep mapped to the node's control), steps (control ->
 // [values, times]: a \strataCheckReverbSteps mapped to it), ref (an earlier
 // case's index, whose output the difference is taken from) and windows (up
@@ -197,7 +203,8 @@ runCases = { arg cases, seconds;
                 maps.add([control, bus]);
                 Synth(\strataCheckReverbSteps, [\out, bus] ++ stepsArgs.(spec), group, \addToTail);
             });
-            case[\seed] !? { arg seed; Synth(\strataCheckReverbSeed, [\out, seedBus, \seed, seed], group, \addToTail) };
+            case[\seed] !? { arg seed;
+                Synth(\strataCheckReverbSeed, [\out, seedBus, \seed, seed, \step, case[\seedStep] ? 0], group, \addToTail) };
             node = startCheckNode.(case[\def] ? \strataReverbFDN, each[\inBus], each[\outBus], silent, each[\buffers],
                 case[\controls] ? [], group);
             maps.do({ arg pair; node.map(pair[0], pair[1]) });
@@ -296,20 +303,31 @@ startHigh = {
 // 100 Hz; shimmer's ratio 2). Every case's three figures are a check of
 // their own, with the band's own step at the freeze against the window
 // before it (the design asks the builder to look at it: above
-// bandStepLookDb the rising gain is tried)
+// bandStepLookDb the rising gain is tried). The twelve pairs' drifts stop
+// moving after their first segment (the seeder's step 0: about 2.3 and
+// 3.2 s), so they freeze still drifts; a thirteenth pair (size 0.8, damp
+// 0.5, pink noise, shimmer 0) is seeded with step 1, so its drifts keep
+// moving, and freezes at 1.5 s, its input stopping at 2.5 s: the bar also
+// holds a drift frozen while it moves (fdnHeldDrift; a plain drift keeps
+// moving under the frozen loop, and its level falls)
 checkHold = {
-    var freezeAt = 12, inputTo = 13, seconds = 72.05;
-    var before = [freezeAt - 0.9, freezeAt], after = [freezeAt + 0.1, freezeAt + 1.0], held = [freezeAt + 59.1, freezeAt + 60.0];
+    var seconds = 72.05, freezeAts;
     var settings = [[0.5, 0, \pink, 0], [0.5, 0.5, \pink, 0], [0.8, 0, \pink, 0], [0.8, 0.5, \pink, 0], [1, 0.5, \pink, 0],
         [0.2, 1, \pink, 0], [0.5, 1, \white, 0], [0.8, 0.5, \white, 0], [1, 1, \white, 0], [0.2, 0, \white, 0],
-        [0.8, 0.5, \pink, 1], [1, 0.5, \pink, 1]];
+        [0.8, 0.5, \pink, 1], [1, 0.5, \pink, 1], [0.8, 0.5, \pink, 0, 1.5]];
     var cases = List.new, results, figures, steps, levels, bands, silent;
+    // each case's freeze (s): 12 (the network at its level), or its fifth entry
+    freezeAts = settings.collect({ arg setting; setting[4] ? 12 });
     settings.do({ arg setting, index;
+        var freezeAt = freezeAts[index], inputTo = freezeAt + 1;
+        var before = [freezeAt - 0.9, freezeAt], after = [freezeAt + 0.1, freezeAt + 1.0], held = [freezeAt + 59.1, freezeAt + 60.0];
         var controls = [\size, setting[0], \damp, setting[1], \shimmer, setting[3], \shimmerRatio, 2];
         var input = [\level, 0.25, \white, if (setting[2] == \white) { 1 } { 0 }, \to, inputTo];
         var first = cases.size, windows = [before, after, held];
-        cases.add((controls: controls, input: input, seed: 2000 + index, steps: (frozen: [[0, 1], [freezeAt]]), windows: windows));
-        cases.add((controls: controls, inputFrom: first, seed: 2000 + index, windows: windows));
+        var seedStep = if (setting[4].notNil) { 1 } { 0 };
+        cases.add((controls: controls, input: input, seed: 2000 + index, seedStep: seedStep, steps: (frozen: [[0, 1], [freezeAt]]),
+            windows: windows));
+        cases.add((controls: controls, inputFrom: first, seed: 2000 + index, seedStep: seedStep, windows: windows));
     });
     results = runCases.(cases.asArray, seconds);
     figures = settings.collect({ arg setting, index;
@@ -325,8 +343,8 @@ checkHold = {
     settings.do({ arg setting, index;
         var each = figures[index];
         check.(each.copyRange(0, 2).every({ arg value; value.abs < barDb }),
-            "reverb: the bar at size %, damp %, % noise, shimmer %: step %, level after 60 s %, band above 6 kHz after 60 s % dB (the band's own step at the freeze % dB, looked at above %; the twin after 60 s % dB)".format(
-                setting[0], setting[1], setting[2], setting[3], each[0].round(0.01), each[1].round(0.01), each[2].round(0.01),
+            "reverb: the bar at size %, damp %, % noise, shimmer %, frozen at % s: step %, level after 60 s %, band above 6 kHz after 60 s % dB (the band's own step at the freeze % dB, looked at above %; the twin after 60 s % dB)".format(
+                setting[0], setting[1], setting[2], setting[3], freezeAts[index], each[0].round(0.01), each[1].round(0.01), each[2].round(0.01),
                 each[3].round(0.01), bandStepLookDb, each[4].round(0.01)));
     });
     steps = figures.collect(_[0]); levels = figures.collect(_[1]); bands = figures.collect(_[2]); silent = figures.collect(_[4]);
