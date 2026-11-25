@@ -70,13 +70,13 @@ The check (`test/engine_check/voices.scd`): the note controls' neutral defaults 
 
 ## The engine's states Lua cannot see
 
-Lua keeps its own record of each voice (`S.voices`, the params) and hears from the engine only through the polls (`docs/notes/engine/buffers.md`, Polls). These are the states the engine can be in that Lua's record does not show, and what tells Lua (or the player) that each ended. None needs a report beyond what it has: a new poll would earn its place only for a failed start, which needs the real-time pool exhausted and is measured on a device first (#939).
+Lua keeps its own record of each voice (`S.voices`, the params) and hears from the engine only through the polls (`docs/notes/engine/buffers.md`, Polls). These are the states the engine can be in that Lua's record does not show, and what tells Lua (or the player) that each ended. None needs a report beyond what it has: a new poll would earn its place only for a failed start, which needs the real-time pool exhausted and is checked on a device (#6 §14).
 
 | Engine state | What tells Lua it ended |
 |---|---|
 | a voice releasing (its tail, up to `releaseTimeRange`'s 30 s; `docs/notes/engine/lifecycle.md`) | nothing: Lua's `active` is false from the `voiceOff` on, and a `voiceOn` re-gates what still releases |
 | fading and cutting synths (a switch's, a type change's) | nothing, and nothing is needed: they end within `grainRelease` or `switchCutTime` |
-| a failed start: a voice, grain or mod synth whose `/s_new` the server refused, the voice silent while Lua shows it running | nothing; it ends at the voice's next `voiceOn` (`forgetFailedStarts`), which Lua sends only from a stop and a start, or at a source or type switch's `freeCuttingSynths`, which forgets it and starts what that switch starts (`docs/notes/engine/lifecycle.md`, the confirm-timeout row; #939 holds a report for a device) |
+| a failed start: a voice, grain or mod synth whose `/s_new` the server refused, the voice silent while Lua shows it running | nothing; it ends at the voice's next `voiceOn` (`forgetFailedStarts`), which Lua sends only from a stop and a start, or at a source or type switch's `freeCuttingSynths`, which forgets it and starts what that switch starts (`docs/notes/engine/lifecycle.md`, the confirm-timeout row; checked on a device, #6 §14) |
 | a synth that freed itself while the voice used it (a late gate), started again; past `restartLimit` restarts in `restartWindow` between two `voiceOn`s, refused, the voice left without that synth (#940) | nothing for a restart (harmless); a refusal posts one `Strata invariant broken` line and ends at the voice's next `voiceOn` |
 | a freeze's copy pending, or late (`docs/notes/engine/freeze.md`, State by event) | a console line only, once the copy is late twice (`copyLateLineAttempt`); `[F]` already shows the freeze |
 | a freeze the engine abandoned (its copy never in, or its span refused) | `freezeEnded` (#858), the only freeze report: Lua sets `v<i>_freeze` 0 with no unfreeze sent back |
