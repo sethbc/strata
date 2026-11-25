@@ -1820,6 +1820,11 @@ local PARAM_FIXTURE_ALLOWED = {
     why = "1d: a voice can grain another voice's output ring, or its own (design section 5)"},
   {kind = "added", id = "v<v>_input_channel", after = "v<v>_history", why = "1d: an input voice reads stereo, left or right (design section 5)",
     record = {t = T.option, name = "input channel", default = 1, options = {"stereo", "left", "right"}}},
+  -- gs-1a: the step gate's floor (3.9 grid sequencer design section 1, The floor)
+  {kind = "added", id = "v<v>_seq_gate_floor", after = "v<v>_seq_gate_release",
+    why = "gs-1a: a closed gate lets the floor of the voice through (grid sequencer design section 1)",
+    record = {t = T.control, name = "seq gate floor", default = 0, min = 0, max = 1, warp = "lin", step = 0.01,
+      quantum = 0.01, units = "", string = "0 %"}},
   -- 2b: the arpeggiator (design §4.3)
   {kind = "added", id = "v<v>_arp", after = "v<v>_release", why = "2b: each voice's arpeggiator (design section 4.3)",
     record = {t = T.option, name = "arp", default = 1, options = {"off", "up", "down", "up-down", "shuffle"}}},

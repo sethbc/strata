@@ -131,6 +131,7 @@ No table of its own: a first hit sets them (the two machines below); every end i
   | `seq_gate` | option off, on; grain key `seqGate` (index - 1) | off | discrete |
   | `seq_gate_length` | control 0.05-16 steps, exp | 0.5 | crossfades (`scene_ranges`) |
   | `seq_gate_release` | control 0.005-4 s, exp; grain key `gateRelease` | 0.1 | crossfades (`scene_ranges`) |
+  | `seq_gate_floor` | control 0-1, linear, shown in %; grain key `gateFloor` (3.9, grid sequencer 1a: what a closed gate lets through) | 0 | crossfades (`scene_ranges`) |
   | `seq_swing` | number 50-75 (%) | 50 | discrete |
   | `seq_direction` | option `SEQ.directions` (forward, reverse, ping-pong, random; 3.7) | 1 (forward) | discrete |
   | `seq_misstep` | number 0-100 (%; 3.7) | 0 | discrete |

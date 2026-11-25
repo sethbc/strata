@@ -2063,6 +2063,9 @@ local START_CALLS_ALLOWED = {
     why = "2b: a start sends the arpeggiator, 0: off (design section 4.3)"},
   {kind = "drop", match = '^setGrainParam%(<v0>, "arpFold", 0%)$', count = 1,
     why = "2b: a start sends the arpeggiator's fold, 0 (design section 4.3)"},
+  -- gs-1a: the step gate's floor, 0 (3.9 grid sequencer design §1)
+  {kind = "drop", match = '^setGrainParam%(%d+, "gateFloor", 0%)$', count = 1,
+    why = "gs-1a: a start sends the gate's floor, 0: a closed gate is silent (grid sequencer design section 1)"},
 }
 local START_LABELS = {voice_1 = true, voice_4 = true, buffer_voice_3 = true}
 -- The entries of START_CALLS_ALLOWED that apply to the start label

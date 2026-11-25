@@ -409,3 +409,7 @@ Shimmer (`docs/notes/engine/shimmer.md`) adds a stereo shifter to `\strataDelay`
 | eight recordings, high | 4470 | 4450 | 4450 | 3072 |
 
 Shimmer costs 10-50 KB at the worst cases (one delay node and one reverb node: +8.4, +22.0 and +21.1 KB by the def figures; the design's §1 counted 40). The tightest case, high synth -> buffer -> synth, keeps 4290 KB free, 706 above its floor; the tightest pool case, high synth -> buffer -> synth with the pool full, 2000, 720 above 1280. `\strataReverb` is 4.4 KB under its limit of 130. No log printed `alloc failed`.
+
+## 3.9: the step gate's floor (grid sequencer, package 1a)
+
+The stage gains `gateFloor`, its clip and lag and the floor's term in `voiceGate` (`docs/notes/engine/modulation.md`, The gate and mute): 170 to 175 UGens. `\strataVoiceMix` reads 40.45 KB on 3.13 and 40.87 KB on 3.14.1, against 39.6 KB on both before (main at 71c03cec, the same runs' memory area: `STRATA_ENGINE_CHECK_AREAS=modulation,mix,memory test/run_engine_check_313.sh` with and without `-s 3.14`, in Docker), so 1.13 KB, 2.7 of the forty stages' 0.42 KB steps, stay under the 42 KB limit on the larger reading. The worst cases move by 0-20 KB at the probes' 10 KB resolution: the tightest, high synth -> buffer -> synth with the pool full, reads 1950 KB free on 3.14.1 and 1970 on 3.13 (1970 on both before), 670 above 1280. No log printed `alloc failed`.

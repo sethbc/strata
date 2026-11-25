@@ -1520,6 +1520,63 @@ test("scenes switch the gate at a transition's end and crossfade its length and 
   assert_equal(next(old.data.steps[1]), nil, "every step plain")
 end)
 
+-- 3.9's grid sequencer, package 1a (design section 1, The floor): a closed
+-- gate lets v<i>_seq_gate_floor of the voice through. The floor is a
+-- scene key that fades, a PSET param, and the stage's gateFloor
+test("the floor fades in a scene transition and is a PSET param", function()
+  local context, S = setup()
+  local NUM_VOICES = S.constants.NUM_VOICES
+  local path = context.data_dir .. "strata-01.pset"
+  for voice = 1, NUM_VOICES do
+    local param = params:lookup_param("v" .. voice .. "_seq_gate_floor")
+    assert_equal(param.t, params.tCONTROL, "voice " .. voice .. "'s floor is a control")
+    assert_equal(param.controlspec.minval, 0); assert_equal(param.controlspec.maxval, 1)
+    assert_equal(param.controlspec.warp_name, "lin", "linear")
+    assert_equal(params:get("v" .. voice .. "_seq_gate_floor"), 0, "at 0: a closed gate is silent")
+  end
+  capture_scene(1)
+  for voice = 1, NUM_VOICES do params:set("v" .. voice .. "_seq_gate_floor", 0.8) end
+  capture_scene(2)
+  params:write(path)
+  recall_scene(1)
+  for voice = 1, NUM_VOICES do
+    assert_near(params:get("v" .. voice .. "_seq_gate_floor"), 0, 1e-9, "scene 1: voice " .. voice .. " at 0")
+  end
+  recall_scene(2, 1)
+  context.clock.run_for(0.5)
+  for voice = 1, NUM_VOICES do
+    local floor = params:get("v" .. voice .. "_seq_gate_floor")
+    assert_true(floor > 0.2 and floor < 0.6, "half way, voice " .. voice .. "'s floor fades: " .. floor)
+  end
+  context.clock.run_for(0.6)
+  for voice = 1, NUM_VOICES do
+    assert_near(params:get("v" .. voice .. "_seq_gate_floor"), 0.8, 1e-6, "at the end, voice " .. voice .. " at 0.8")
+  end
+  recall_scene(1)
+  params:read(path)
+  for voice = 1, NUM_VOICES do
+    assert_near(params:get("v" .. voice .. "_seq_gate_floor"), 0.8, 1e-6, "the PSET's floor, voice " .. voice)
+  end
+  -- a scene saved before the floor recalls it at 0
+  local old = h.deep_copy(S.scenes[2])
+  for _, voice in ipairs(old.data.voices) do voice.values.seq_gate_floor = nil end
+  fill_scene(old)
+  assert_true(validate_scene(old), "a scene without the floor loads")
+  for voice = 1, NUM_VOICES do
+    assert_equal(old.data.voices[voice].values.seq_gate_floor, 0, "voice " .. voice .. "'s floor filled at 0")
+  end
+end)
+
+test("the floor reaches a running voice's stage as gateFloor", function()
+  local context, S = setup()
+  for voice = 1, S.constants.NUM_VOICES do
+    if not S.voices[voice].active then toggle_voice(voice) end
+    context.clear_engine_calls()
+    params:set("v" .. voice .. "_seq_gate_floor", 0.25)
+    assert_list_near(grain_values(context, voice - 1, "gateFloor"), {0.25}, 1e-9, "voice " .. voice .. "'s floor sent")
+  end
+end)
+
 test("a step's gate validates in 0.05..16", function()
   local _, S = setup()
   local seq = S.lib.sequencer

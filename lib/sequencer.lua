@@ -43,6 +43,9 @@ return function(S)
     gate_length_default = 0.5,
     gate_release = {0.005, 4},       -- s
     gate_release_default = 0.1,
+    -- 3.9 grid sequencer (design section 1): v<i>_seq_gate_floor, what a
+    -- closed gate lets through (the stage's gateFloor; 0 silent, as 3.8)
+    gate_floor = {0, 1, step = 0.01, default = 0},
     gate_seconds = {0.005, 120},     -- what gateSeconds may carry
     swing = {50, 75},                -- percent: 50 straight
     group_params = 10,               -- strata_seq's own (the quantizer adds PARAM_COUNT)
@@ -1695,12 +1698,12 @@ return function(S)
   end
 
   -- The per-voice seq params (design 8.1, 8.12, 8.13): a registered record
-  -- with discrete scene keys (length, division, gate, swing) and two that
-  -- crossfade (the gate's length and release), no VOICE rows
+  -- with discrete scene keys (length, division, gate, swing) and three that
+  -- crossfade (the gate's length, release and floor), no VOICE rows
   local record
   record = {
     name = "seq",
-    count = 8,
+    count = 9,
     add = function(voice_idx)
       local add = S.lib.params_setup.add_voice_param
       add(voice_idx, record, "seq_length", {type = "number", name = "seq length", min = 1, max = PATTERN_LENGTH,
@@ -1720,6 +1723,11 @@ return function(S)
       add(voice_idx, record, "seq_gate_release", {type = "control", name = "seq gate release",
         controlspec = controlspec.new(SEQ.gate_release[1], SEQ.gate_release[2], "exp", 0, SEQ.gate_release_default,
           "s")})
+      -- 3.9 grid sequencer (design section 1, The floor): shown in percent
+      add(voice_idx, record, "seq_gate_floor", {type = "control", name = "seq gate floor",
+        controlspec = controlspec.new(SEQ.gate_floor[1], SEQ.gate_floor[2], "lin", SEQ.gate_floor.step,
+          SEQ.gate_floor.default),
+        formatter = function(param) return string.format("%d %%", math.floor(param:get() * 100 + 0.5)) end})
       add(voice_idx, record, "seq_swing", {type = "number", name = "seq swing", min = SEQ.swing[1], max = SEQ.swing[2],
         default = SEQ.swing[1]})
       -- 3.7 (design §5.5)
@@ -1729,7 +1737,7 @@ return function(S)
         default = 0, formatter = percent})
     end,
     grain_keys = {seq_gate = {name = "seqGate", value = function(option) return option - 1 end},
-      seq_gate_release = "gateRelease"},
+      seq_gate_release = "gateRelease", seq_gate_floor = "gateFloor"},
     -- the voice sync and a start (before voiceOn: grain params only): a
     -- gated voice's gate length, when it changed
     sync = function(voice_idx)
@@ -1737,12 +1745,13 @@ return function(S)
     end,
     scene_defaults = {seq_length = PATTERN_LENGTH, seq_division = SEQ.default_division, seq_gate = 1,
       seq_gate_length = SEQ.gate_length_default, seq_gate_release = SEQ.gate_release_default, seq_swing = SEQ.swing[1],
-      seq_direction = SEQ.forward, seq_misstep = 0},
+      seq_direction = SEQ.forward, seq_misstep = 0, seq_gate_floor = SEQ.gate_floor.default},
     discrete = {seq_length = {1, PATTERN_LENGTH}, seq_division = {1, #SEQ.division_names},
       seq_gate = {1, #SEQ.gate_options}, seq_swing = {SEQ.swing[1], SEQ.swing[2]},
       seq_direction = {1, #SEQ.directions}, seq_misstep = {0, SEQ.max_misstep}},
     scene_ranges = {seq_gate_length = {SEQ.gate_steps[1], SEQ.gate_steps[2]},
-      seq_gate_release = {SEQ.gate_release[1], SEQ.gate_release[2]}},
+      seq_gate_release = {SEQ.gate_release[1], SEQ.gate_release[2]},
+      seq_gate_floor = {SEQ.gate_floor[1], SEQ.gate_floor[2]}},
     fader = false,
   }
   S.register_voice_params(record)
