@@ -457,4 +457,458 @@ h.transition_table({
   },
 })
 
+-- 5b: the roll ------------------------------------------------------------
+
+-- A 1/16 step at the stub clock's 120 BPM, in seconds
+local STEP_SECONDS = 0.125
+-- matron's tick, which a wake may land up to one of late (the stub's)
+local TICK_SECONDS = 0.0015
+
+-- The times (from now) of voice 1's retriggers over the next `seconds`,
+-- the clocks run a scheduler step at a time; those already sent since the
+-- calls were cleared count at 0
+local function retrigger_times(context, seconds)
+  local start, times, seen = util.time(), {}, 0
+  local function catch()
+    local count = retriggers(context)
+    while seen < count do
+      seen = seen + 1
+      times[#times + 1] = util.time() - start
+    end
+  end
+  catch()
+  for _ = 1, 100000 do
+    if util.time() - start >= seconds - 1e-9 then break end
+    context.clock.advance()
+    if util.time() - start >= seconds - 1e-9 then break end
+    catch()
+  end
+  return times
+end
+
+-- The gaps between successive times
+local function gaps(times)
+  local list = {}
+  for index = 2, #times do list[#list + 1] = times[index] - times[index - 1] end
+  return list
+end
+
+local function assert_gaps(times, seconds, what)
+  assert_true(#times >= 3, what .. ": at least three hits, saw " .. #times)
+  for index, gap in ipairs(gaps(times)) do
+    assert_true(math.abs(gap - seconds) <= TICK_SECONDS,
+      what .. ": gap " .. index .. " is " .. gap .. " s, not " .. seconds)
+  end
+end
+
+-- A step output that logs every hit's event of voice 1 (the registry stays open)
+local function hit_log(S)
+  local log = {}
+  S.register_step_output({name = "roll probe", play = function(event)
+    if event.voice == 1 then log[#log + 1] = event end
+  end})
+  return log
+end
+
+-- The events in log the voice's own steps played (not a roll's)
+local function own_hits(log)
+  local list = {}
+  for _, event in ipairs(log) do
+    if not event.rolled then list[#list + 1] = event end
+  end
+  return list
+end
+
+-- A test page in the fx page's place whose keys 1 to 4 of lines 1 and 2
+-- roll voice 1 at their rate, held by the key's own still (as 5c's perform
+-- side will), on a 128 showing it
+local function roll_keys(context, S)
+  local index = S.constants.GRID_PAGES.fx
+  local probe = h.probe_grid_page(index)
+  probe.press = function(pane, x, y, z)
+    if z == 1 and y <= 2 and x <= 4 then S.lib.loop_roll.roll(1, x, pane.still(x, y)) end
+  end
+  local pane = h.grid_pane(context, "128h")
+  pane.show(index)
+  return pane
+end
+
+test("a roll replays the last hit at its rate", function()
+  local context, S = setup()
+  pattern_clock_start()
+  context.clear_engine_calls()
+  assert_equal(S.lib.sequencer.step_seconds(1), STEP_SECONDS, "a 1/16 step at 120 BPM")
+  S.lib.loop_roll.roll(1, 4, (key()))
+  assert_equal(S.lib.loop_roll.rolling(1), 4, "rolling at 4")
+  assert_equal(retriggers(context), 1, "its first hit at once")
+  assert_gaps(retrigger_times(context, 0.2), STEP_SECONDS / 4, "rate 4: a retrigger every 31.25 ms")
+  for rate = 1, 3 do
+    context.clear_engine_calls()
+    S.lib.loop_roll.roll(1, rate, (key()))
+    assert_gaps(retrigger_times(context, 3 * STEP_SECONDS / rate + 0.001), STEP_SECONDS / rate, "rate " .. rate)
+  end
+  pattern_clock_stop()
+end)
+
+test("a roll is never faster than 20 ms", function()
+  local context, S = setup()
+  params:set("v1_seq_division", 1)  -- 1/32: 62.5 ms, a quarter of it 15.6 ms
+  pattern_clock_start()
+  context.clear_engine_calls()
+  S.lib.loop_roll.roll(1, 4, (key()))
+  assert_gaps(retrigger_times(context, 0.1), S.lib.sequencer.SEQ.min_ratchet_seconds, "20 ms apart")
+  pattern_clock_stop()
+end)
+
+test("a roll's refusals: a bad voice, rate or still, and the patterns stopped", function()
+  local _, S = setup()
+  local loop_roll = S.lib.loop_roll
+  loop_roll.roll(1, 2, (key()))
+  assert_equal(loop_roll.rolling(1), nil, "the patterns stopped: nothing")
+  pattern_clock_start()
+  for _, bad in ipairs({{0, 2}, {h.voice_count() + 1, 2}, {1, 0}, {1, 5}, {1, 1.5}, {1, "2"}}) do
+    loop_roll.roll(bad[1], bad[2], (key()))
+    assert_equal(loop_roll.rolling(1), nil, "refuses voice " .. tostring(bad[1]) .. ", rate " .. tostring(bad[2]))
+  end
+  loop_roll.roll(1, 2, "held")
+  assert_equal(loop_roll.rolling(1), nil, "still is a function")
+  loop_roll.roll(1, 2, (key()))
+  assert_equal(loop_roll.rolling(1), 2, "a good one rolls")
+  loop_roll.end_roll(1)
+  assert_equal(loop_roll.rolling(1), nil, "end_roll ends it")
+  assert_equal(loop_roll.rolling(0), nil, "no voice 0")
+  pattern_clock_stop()
+end)
+
+test("the voice's own steps are silent under a roll and its position moves on", function()
+  local context, S = setup()
+  local log = hit_log(S)
+  local still, release = key()
+  pattern_clock_start()
+  S.lib.loop_roll.roll(1, 2, still)
+  assert_equal(played(context, S, 3), "2 3 4", "the voice's position takes steps 2 to 4")
+  assert_equal(#own_hits(log), 1, "and plays none of them: only step 1's own hit")
+  release()
+  assert_equal(played(context, S, 1), "5", "let go, the next step is the one the pattern reached")
+  local own = own_hits(log)
+  assert_equal(#own, 2, "and it plays")
+  assert_equal(own[2].step, 5, "step 5")
+  pattern_clock_stop()
+end)
+
+test("a roll stops a ratcheted step's later hits", function()
+  local context, S = setup()
+  S.lib.sequencer.set_step_attr(1, 1, "ratchet", 4)
+  local log = hit_log(S)
+  pattern_clock_start()
+  assert_equal(#own_hits(log), 1, "step 1's first hit")
+  S.lib.loop_roll.roll(1, 1, (key()))
+  context.clock.run_for(STEP_SECONDS - 0.01)
+  assert_equal(#own_hits(log), 1, "its three later hits are not played under the roll")
+  pattern_clock_stop()
+end)
+
+test("a rolled hit in move swells at the hit's level and sets the held values again", function()
+  local context, S = setup()
+  S.buffers[1].seconds = 8
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  params:set("v1_buf_pos", 0.2)
+  for step = 2, S.constants.PATTERN_LENGTH do S.lib.sequencer.set_level(1, step, 0) end
+  S.lib.sequencer.set_level(1, 1, 9)
+  S.lib.sequencer.set_step_attr(1, 1, "va", 12)
+  params:set("v1_seq_gate", option_index("v1_seq_gate", "move"))
+  local log = hit_log(S)
+  local function positions()
+    local sent = {}
+    for _, call in ipairs(context.calls_named("setGrainParam")) do
+      if call.args[1] == 0 and call.args[2] == "bufPos" then sent[#sent + 1] = call.args[3] end
+    end
+    return sent
+  end
+  context.clear_engine_calls()
+  pattern_clock_start()
+  local own_retrigger = context.calls_named("retrigger")[1]
+  assert_equal(own_retrigger.args[2], 0, "the move hit itself: no swell")
+  local moved = positions()
+  assert_true(#moved >= 1, "the move hit set its position")
+  local value = moved[#moved]
+  assert_true(math.abs(value - 0.2) > 0.01, "a position of its own: " .. value)
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 12, "held")
+  context.clear_engine_calls()
+  S.lib.loop_roll.roll(1, 2, (key()))
+  local rolled = context.calls_named("retrigger")
+  assert_equal(#rolled, 1, "one rolled hit at once")
+  h.assert_near(rolled[1].args[2], 9 / 15, 1e-9, "at the hit's level, 9: a swell")
+  local again = positions()
+  assert_equal(#again, 1, "the held value set again")
+  h.assert_near(again[1], value, 1e-9, "to the value it holds")
+  h.assert_near(log[#log].velocity, 9 / 15, 1e-9, "the outputs hear the level too")
+  assert_true(log[#log].rolled == true and log[#log].first == false, "a rolled hit, not a step's first")
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 12, "still held")
+  pattern_clock_stop()
+end)
+
+test("a roll tells the targets each hit", function()
+  local context, S = setup()
+  local calls = {}
+  S.register_note_target({name = "roll target", routed = function(voice) return voice == 1 end,
+    note_on = function(voice, id, pitch, velocity) calls[#calls + 1] = {"on", voice, id, velocity} end,
+    note_off = function(voice, id) calls[#calls + 1] = {"off", voice, id} end,
+    stop_all = function() end})
+  S.lib.sequencer.set_level(1, 1, 6)
+  pattern_clock_start()
+  local function ons()
+    local n = 0
+    for _, call in ipairs(calls) do if call[1] == "on" then n = n + 1 end end
+    return n
+  end
+  assert_equal(ons(), 1, "step 1's own note")
+  calls = {}
+  S.lib.loop_roll.roll(1, 4, (key()))
+  context.clock.run_for(STEP_SECONDS - 0.005)
+  assert_equal(ons(), 4, "a note on at each of four rolled hits")
+  for _, call in ipairs(calls) do
+    if call[1] == "on" then h.assert_near(call[4], 6 / 15, 1e-9, "at the hit's level") end
+  end
+  pattern_clock_stop()
+end)
+
+test("a rolled hit's gate is its interval times the voice's gate length in steps", function()
+  local context, S = setup()
+  params:set("v1_seq_gate_length", 2)
+  S.lib.sequencer.set_step_attr(1, 1, "gate", 8)  -- the step's own gate is not the roll's
+  local log = hit_log(S)
+  pattern_clock_start()  -- a pulse voice with steps: gated
+  context.clear_engine_calls()
+  S.lib.loop_roll.roll(1, 4, (key()))
+  local gates = {}
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainParam" and call.args[1] == 0 and call.args[2] == "gateSeconds" then gates[#gates + 1] = call.args[3] end
+    if call.name == "retrigger" then break end
+  end
+  assert_equal(#gates, 1, "a gate length before the rolled hit")
+  h.assert_near(gates[1], 2 * STEP_SECONDS / 4, 1e-9, "2 steps of 31.25 ms")
+  h.assert_near(log[#log].gate_beats, 2 / 4 / 4, 1e-9, "the outputs' gate in beats")
+  pattern_clock_stop()
+end)
+
+test("a roll before any hit plays nothing", function()
+  local context, S = setup()
+  for step = 1, S.constants.PATTERN_LENGTH do S.lib.sequencer.set_level(1, step, 0) end
+  pattern_clock_start()
+  assert_equal(S.lib.sequencer.replay_hit(1), false, "no hit since the patterns started")
+  context.clear_engine_calls()
+  S.lib.loop_roll.roll(1, 4, (key()))
+  assert_equal(S.lib.loop_roll.rolling(1), 4, "it rolls")
+  S.lib.sequencer.set_level(1, 3, 15)
+  context.clock.run_for(4 * STEP_SECONDS)
+  assert_equal(retriggers(context), 0, "and plays nothing: no hit to replay, and the voice's own steps are silent")
+  pattern_clock_stop()
+end)
+
+test("of two roll keys the last pressed rolls, and the first's release changes nothing", function()
+  local context, S = setup()
+  local first, release_first = key()
+  pattern_clock_start()
+  S.lib.loop_roll.roll(1, 1, first)
+  S.lib.loop_roll.roll(1, 3, (key()))
+  assert_equal(S.lib.loop_roll.rolling(1), 3, "the last pressed rolls")
+  release_first()
+  context.clear_engine_calls()
+  assert_equal(S.lib.loop_roll.rolling(1), 3, "the first's release changes nothing")
+  assert_gaps(retrigger_times(context, 4 * STEP_SECONDS / 3 + 0.001), STEP_SECONDS / 3, "rate 3 goes on")
+  pattern_clock_stop()
+end)
+
+test("a page change and an unplug end a roll at its next hit", function()
+  for _, case in ipairs({"page change", "unplug"}) do
+    local context, S = setup()
+    local pane = roll_keys(context, S)
+    pattern_clock_start()
+    pane.press(2, 1, 1)
+    assert_equal(S.lib.loop_roll.rolling(1), 2, case .. ": key 2 rolls at 2")
+    if case == "page change" then pane.show(S.constants.GRID_PAGES.patterns) else context.grid.unplug(1) end
+    assert_equal(S.lib.loop_roll.rolling(1), nil, case .. ": no longer rolling")
+    context.clear_engine_calls()
+    context.clock.run_for(STEP_SECONDS / 2 - 0.005)
+    assert_equal(retriggers(context), 0, case .. ": its next hit plays nothing")
+    assert_equal(played(context, S, 1), "2", case .. ": the voice plays its own step 2")
+    assert_equal(retriggers(context), 1, case .. ": and only that")
+    pattern_clock_stop()
+  end
+end)
+
+test("a letter's switch under an order leaves a held roll", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  letters.switch_now(1, "B")
+  S.lib.sequencer.set_level(1, 1, 7)
+  letters.switch_now(1, "A")
+  letters.set_order(1, {"A", "B"})
+  pattern_clock_start()
+  S.lib.loop_roll.roll(1, 2, (key()))
+  context.clock.run_for(4 * 4 * STEP_SECONDS + 0.01)  -- past the second bar's start
+  assert_equal(letters.current(1), "B", "the order switched to B at the bar")
+  assert_equal(S.lib.loop_roll.rolling(1), 2, "the roll is held")
+  context.clear_engine_calls()
+  assert_gaps(retrigger_times(context, 4 * STEP_SECONDS / 2 + 0.001), STEP_SECONDS / 2, "and rolls on")
+  pattern_clock_stop()
+end)
+
+test("a stop and cleanup end a roll", function()
+  local context, S = setup()
+  pattern_clock_start()
+  S.lib.loop_roll.roll(1, 4, (key()))
+  pattern_clock_stop()
+  assert_equal(S.lib.loop_roll.rolling(1), nil, "a stop ends it")
+  context.clear_engine_calls()
+  context.clock.run_for(STEP_SECONDS)
+  assert_equal(retriggers(context), 0, "no hit after the stop, and no clock error at its wake")
+  pattern_clock_start()
+  S.lib.loop_roll.roll(1, 4, (key()))
+  context.clock.run_for(0.01)
+  cleanup()
+  assert_equal(S.lib.loop_roll.rolling(1), nil, "cleanup ends it")
+  context.clear_engine_calls()
+  context.clock.run_for(STEP_SECONDS)
+  assert_equal(retriggers(context), 0, "no hit after cleanup")
+end)
+
+test("a roll repaints the grid no more than once a beat", function()
+  local counts = {}
+  for _, rolls in ipairs({false, true}) do
+    local context, S = setup()
+    pattern_clock_start()
+    if rolls then S.lib.loop_roll.roll(1, 4, (key())) end
+    local count, real_grid_redraw = 0, grid_redraw
+    grid_redraw = function(...) count = count + 1; return real_grid_redraw(...) end
+    context.clock.run_for(8 * STEP_SECONDS - 0.005)
+    grid_redraw = real_grid_redraw
+    counts[#counts + 1] = count
+    pattern_clock_stop()
+  end
+  assert_equal(counts[2], counts[1], "a roll adds no repaint to the steps' own")
+  assert_true(counts[2] <= 8, "one a 16th at most: " .. counts[2])
+end)
+
+test("the roll invariant fails on a roll with the patterns stopped", function()
+  local _, S = setup()
+  local invariant = h.registered_invariant("roll")
+  pattern_clock_start()
+  S.lib.loop_roll.roll(1, 2, (key()))
+  assert_equal(invariant.check(), nil, "it holds")
+  h.allow_broken_invariants("the test breaks the roll invariant on purpose")
+  S.pattern_playing = false  -- as though the patterns stopped without their stop
+  assert_true((invariant.check() or ""):find("voice 1", 1, true) ~= nil, "a roll with the patterns stopped")
+  S.pattern_playing = true
+  pattern_clock_stop()
+  assert_equal(invariant.check(), nil, "the stop ended it")
+end)
+
+-- The machine `roll` (docs/notes/lua/loop-roll.md): voice 1, every step
+-- set, the patterns playing (step 1 played), a 128 showing roll_keys'
+-- test page (keys 1 to 4 of lines 1 and 2 roll voice 1 at their rate, held
+-- by the key's still). rolling: key 1 then key 2 of line 1 pressed, so the
+-- roll is key 2's at rate 2, key 1 still down
+local roll_machine = {pane = nil, log = nil}
+
+local function roll_state(kind)
+  return function(context)
+    local S = local_value("S")
+    for step = 1, S.constants.PATTERN_LENGTH do S.lib.sequencer.set_level(1, step, 15) end
+    roll_machine.log = hit_log(S)
+    roll_machine.pane = roll_keys(context, S)
+    pattern_clock_start()
+    if kind == "rolling" then roll_machine.pane.press(1, 1, 1); roll_machine.pane.press(2, 1, 1) end
+  end
+end
+
+-- The row's check: rolling at rate, its first hit at once
+local function rolls_at(rate)
+  return function()
+    local S = local_value("S")
+    assert_equal(S.lib.loop_roll.rolling(1), rate, "rolling at " .. rate)
+    local last = roll_machine.log[#roll_machine.log]
+    assert_true(last.rolled == true and math.abs(last.beat - clock.get_beats()) < 1e-9, "its first hit at once")
+  end
+end
+
+-- The row's check: still rolling at rate
+local function still_rolls(rate)
+  return function() assert_equal(local_value("S").lib.loop_roll.rolling(1), rate, "rolling at " .. rate) end
+end
+
+-- The row's check: the roll's next hit (within its interval) plays nothing
+local function next_hit_silent(context)
+  local log = roll_machine.log
+  local before = #log
+  context.clock.run_for(0.06)
+  for index = before + 1, #log do assert_true(not log[index].rolled, "no rolled hit after the end") end
+end
+
+-- The row's check: the voice's next tick plays its own step 2
+local function own_step_plays(context)
+  local S = local_value("S")
+  if S.lib.sequencer.sounding_step(1) ~= 2 then tick(context, S) end
+  local own = own_hits(roll_machine.log)
+  assert_equal(own[#own].step, 2, "the voice's own step 2 plays")
+end
+
+local function silent_then_own(context)
+  next_hit_silent(context)
+  own_step_plays(context)
+end
+
+-- The row's check: the voice's tick took step 2 and played nothing of its own
+local function own_step_silent()
+  local S = local_value("S")
+  assert_equal(S.lib.sequencer.sounding_step(1), 2, "the position took step 2")
+  assert_equal(#own_hits(roll_machine.log), 1, "only step 1's own hit")
+end
+
+h.transition_table({
+  name = "roll",
+  notes = {"docs/notes/lua/loop-roll.md", "roll"},
+  states = {
+    off = roll_state("off"),
+    rolling = roll_state("rolling"),
+  },
+  events = {
+    ["a rate set"] = function() roll_machine.pane.press(2, 2, 1) end,
+    ["another rate"] = function() roll_machine.pane.press(4, 1, 1) end,
+    ["the key's release"] = function() roll_machine.pane.press(2, 1, 0) end,
+    ["an earlier key's release"] = function() roll_machine.pane.press(1, 1, 0) end,
+    ["a page change"] = function() roll_machine.pane.show(local_value("S").constants.GRID_PAGES.patterns) end,
+    ["an unplug"] = function(context) context.grid.unplug(1) end,
+    ["a stop"] = function() pattern_clock_stop() end,
+    ["a replacement"] = function()
+      local levels = {}
+      for step = 1, local_value("S").constants.PATTERN_LENGTH do levels[step] = 15 end
+      local_value("S").lib.sequencer.replace_pattern(1, levels)
+    end,
+    ["a hit that would have played"] = function(context) tick(context, local_value("S")) end,
+  },
+  state_of = function() return local_value("S").lib.loop_roll.rolling(1) and "rolling" or "off" end,
+  rows = {
+    {"off", "a rate set", "rolling", check = rolls_at(2)},
+    {"off", "another rate", "rolling", check = rolls_at(4)},
+    {"off", "the key's release", "off"},
+    {"off", "an earlier key's release", "off"},
+    {"off", "a page change", "off"},
+    {"off", "an unplug", "off"},
+    {"off", "a stop", "off"},
+    {"off", "a replacement", "off"},
+    {"off", "a hit that would have played", "off", check = own_step_plays},
+    {"rolling", "a rate set", "rolling", check = rolls_at(2)},
+    {"rolling", "another rate", "rolling", check = rolls_at(4)},
+    {"rolling", "the key's release", "off", check = silent_then_own},
+    {"rolling", "an earlier key's release", "rolling", check = still_rolls(2)},
+    {"rolling", "a page change", "off", check = silent_then_own},
+    {"rolling", "an unplug", "off", check = silent_then_own},
+    {"rolling", "a stop", "off", check = next_hit_silent},
+    {"rolling", "a replacement", "rolling", check = still_rolls(2)},
+    {"rolling", "a hit that would have played", "rolling", check = own_step_silent},
+  },
+})
+
 end

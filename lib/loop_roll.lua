@@ -8,8 +8,12 @@
 -- pane.still), asked at every tick the voice takes, or by its latch
 -- (press_latch: 5c's LP key). It is the sequencer's state, never a param,
 -- a scene field or a PSET field. The sequencer asks played_step for the
--- step it plays at each tick, played or skipped. 5b adds the roll here.
--- See docs/notes/lua/loop-roll.md.
+-- step it plays at each tick, played or skipped. 5b's roll (design
+-- section 4, R1 to R4, call 21): while a roll key is held its voice's last
+-- played hit plays again (S.lib.sequencer.replay_hit) 1 to 4 times a step,
+-- never closer than 20 ms, from a clock of its own (S.lib.clocks), and the
+-- voice's own steps take their positions and play nothing; the roll asks
+-- its key's own still at every hit. See docs/notes/lua/loop-roll.md.
 
 return function(S)
   local M = {}
@@ -168,6 +172,120 @@ return function(S)
     loop.last = next_loop_step(voice_idx, loop)
     return loop.last
   end
+
+  -- The roll (5b) ----------------------------------------------------------
+
+  -- Per voice: its roll {rate, still, handle (its clock's, S.lib.clocks)}
+  -- or nil; max_rate, the fastest (four hits a step)
+  local ROLL = {rolls = {}, max_rate = 4}
+
+  local function valid_rate(rate)
+    return type(rate) == "number" and rate == math.floor(rate) and rate >= 1 and rate <= ROLL.max_rate
+  end
+
+  -- The voice's roll if its key still holds it. A roll whose key has gone
+  -- is dead: no reader sees it, and its clock ends it at its next hit
+  local function live_roll(voice_idx)
+    local record = ROLL.rolls[voice_idx]
+    if record and record.still() then return record end
+    return nil
+  end
+
+  -- The seconds between a roll's hits at rate: the voice's step over the
+  -- rate, never under SEQ.min_ratchet_seconds
+  local function interval_at(voice_idx, rate)
+    local SEQ = S.lib.sequencer.SEQ
+    return math.max(S.lib.sequencer.step_seconds(voice_idx) / rate, SEQ.min_ratchet_seconds)
+  end
+
+  -- The voice's roll rate (1 to 4) while it rolls, or nil (a dead roll is none)
+  function M.rolling(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    local record = live_roll(voice_idx)
+    return record and record.rate or nil
+  end
+
+  -- The seconds between the voice's rolled hits while it rolls, or nil
+  function M.interval(voice_idx)
+    local rate = M.rolling(voice_idx)
+    return rate and interval_at(voice_idx, rate) or nil
+  end
+
+  -- A roll's clock: a hit at once, then one every interval (worked out
+  -- again at each hit, so a tempo or division change is heard), each on
+  -- the roll's own grid of times from its first. A late wake plays one hit
+  -- and moves the grid by the intervals that passed, never a burst. It
+  -- ends, playing nothing, at a hit where the roll is no longer the voice's
+  -- (a new roll, end_roll, a stop) or its key's still is false (the roll
+  -- then ends). An error in the hit stops the patterns and is raised again,
+  -- as a voice clock's step's is
+  local function roll_body(voice_idx, record)
+    return function(handle)
+      local at = util.time()
+      while true do
+        if ROLL.rolls[voice_idx] ~= record then return end
+        if not record.still() then
+          ROLL.rolls[voice_idx] = nil
+          return
+        end
+        local ran, problem = xpcall(function() S.lib.sequencer.replay_hit(voice_idx) end, debug.traceback)
+        if not ran then
+          if ROLL.rolls[voice_idx] == record then ROLL.rolls[voice_idx] = nil end
+          pattern_clock_stop()
+          error(problem, 0)
+        end
+        if ROLL.rolls[voice_idx] ~= record then return end
+        local interval, now = interval_at(voice_idx, record.rate), util.time()
+        at = at + interval
+        if at < now then at = at + interval * math.ceil((now - at) / interval) end
+        if not handle.sleep(at - now) then return end
+      end
+    end
+  end
+
+  -- Roll the voice at rate (1 to 4 hits a step), held by still (a function
+  -- of no argument: the key's own answer to "still held?"). It replaces the
+  -- voice's roll, if any, so the last pressed rolls; an earlier key's
+  -- release ends nothing, since the roll asks only its own still. Its
+  -- first hit plays at once. With the patterns stopped, or anything out of
+  -- range, it does nothing. It repaints nothing
+  function M.roll(voice_idx, rate, still)
+    if not valid_voice(voice_idx) or not valid_rate(rate) or type(still) ~= "function" then return end
+    if not S.pattern_playing then return end
+    M.end_roll(voice_idx)
+    local record = {rate = rate, still = still}
+    ROLL.rolls[voice_idx] = record
+    record.handle = S.lib.clocks.run(roll_body(voice_idx, record))
+  end
+
+  -- End the voice's roll (a stop of the patterns ends every voice's): its
+  -- clock stopped through the helper, so its wake does nothing
+  function M.end_roll(voice_idx)
+    if not valid_voice(voice_idx) then return end
+    local record = ROLL.rolls[voice_idx]
+    ROLL.rolls[voice_idx] = nil
+    if record then S.lib.clocks.stop(record.handle) end
+  end
+
+  -- roll (design section 7): a roll exists only while the patterns play,
+  -- has a rate of 1 to 4 and a still function, and its clock runs (a
+  -- replaced or ended roll's clock was stopped with it, so every running
+  -- roll clock is a voice's roll's); its still was true at its last hit,
+  -- since the clock ends the roll before a hit at which it is false
+  S.register_invariant("roll", function()
+    for voice_idx = 1, NUM_VOICES do
+      local record = ROLL.rolls[voice_idx]
+      if record then
+        if not S.pattern_playing then return "voice " .. voice_idx .. " rolls with the patterns stopped" end
+        if not valid_rate(record.rate) or type(record.still) ~= "function" then
+          return "voice " .. voice_idx .. "'s roll has rate " .. tostring(record.rate) .. " or no still function"
+        end
+        if record.handle and not S.lib.clocks.alive(record.handle) then
+          return "voice " .. voice_idx .. "'s roll clock does not run"
+        end
+      end
+    end
+  end)
 
   -- loop (design section 7): a loop lies inside 1 to the voice's length
   -- with lo <= hi, carries its key's still (a function) and a latch flag;

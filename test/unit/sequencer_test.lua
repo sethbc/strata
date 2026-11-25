@@ -6274,4 +6274,63 @@ do
   })
 end
 
+
+-- 5b: a hit kept and replayed (the roll's, lib/loop_roll.lua) -----------------
+
+test("step_seconds is the voice's nominal step in seconds", function()
+  load_strata()
+  local S = local_value("S")
+  assert_equal(S.lib.sequencer.step_seconds(1), 0.125, "1/16 at 120 BPM")
+  params:set("v2_seq_division", 5)  -- 1/8
+  assert_equal(S.lib.sequencer.step_seconds(2), 0.25, "1/8")
+  params:set("clock_tempo", 60)
+  assert_equal(S.lib.sequencer.step_seconds(2), 0.5, "1/8 at 60 BPM")
+  assert_equal(S.lib.sequencer.step_seconds(0), nil, "no voice 0")
+  assert_equal(S.lib.sequencer.step_seconds(h.voice_count() + 1), nil, "none past the last")
+end)
+
+test("replay_hit plays the voice's last hit again through every output, at its level", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  params:set("v1_seq_gate", 1)  -- accent
+  seq.set_level(1, 1, 6)
+  seq.set_step_attr(1, 1, "notes", {0, 4})
+  local log = {}
+  S.register_step_output({name = "replay probe", play = function(event) log[#log + 1] = event end})
+  assert_equal(seq.replay_hit(1), false, "stopped: none")
+  pattern_clock_start()
+  assert_equal(seq.replay_hit(2), false, "voice 2 has played no hit")
+  assert_equal(seq.replay_hit(0), false, "no voice 0")
+  local own = log[#log]
+  assert_equal(own.step, 1, "step 1 played")
+  context.clear_engine_calls()
+  context.clock.run_for(0.01)
+  assert_equal(seq.replay_hit(1), true, "replayed")
+  local again = log[#log]
+  assert_true(again ~= own, "a fresh event")
+  assert_equal(again.step, 1, "the same step")
+  assert_equal(again.level, 6, "its level")
+  assert_near(again.velocity, 6 / 15, 1e-9, "as its velocity")
+  assert_true(again.rolled == true and again.first == false, "a rolled hit, never a step's first")
+  assert_near(again.beat, clock.get_beats(), 1e-9, "at the beat it plays")
+  assert_equal(#again.pitches, #own.pitches, "its pitches")
+  assert_true(again.pitches ~= own.pitches, "a copy of them")
+  assert_equal(table.concat(again.notes, " "), "0 4", "its notes")
+  local retriggers = context.calls_named("retrigger")
+  assert_equal(#retriggers, 1, "one retrigger")
+  assert_near(retriggers[1].args[2], 6 / 15, 1e-9, "at the level")
+  assert_equal(#context.calls_named("voiceOn"), 0, "and no node")
+  pattern_clock_stop()
+  assert_equal(seq.replay_hit(1), false, "a stop forgets it")
+  pattern_clock_start()
+  seq.set_level(1, 1, 0)
+  assert_equal(seq.replay_hit(1), true, "a start keeps the hit it played")
+  pattern_clock_stop()
+  seq.set_level(1, 1, 0)
+  pattern_clock_start()
+  assert_equal(seq.replay_hit(1), false, "a start with no hit of its own has none")
+  pattern_clock_stop()
+end)
+
 end

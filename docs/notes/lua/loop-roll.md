@@ -5,6 +5,11 @@
 - **Nothing outlives its key**: an unlatched loop carries its key's own `still` (the grid's `pane.still` of the held step key, `docs/notes/lua/grid/keys.md`), asked at every tick: one whose `still` is false (the key's release, a page, side or half change of its pane, an unplug) is dead. No reader sees a dead loop (`loop`, `latched`, the lights), and the next tick (`played_step`) or a write drops it, so the voice plays its own step at that tick. A pattern's replacement (`replace_pattern`, `replace_whole`: a letter's switch, a chain link, a recall, a paste) never ends a `still` and never ends a loop.
 - **A loop is never stored**: no param, scene field or PSET field holds it, nor its latch. A stop of the patterns keeps a loop (its key or latch still holds it) and a start plays it from its first step (`start`, called by `start_position`).
 - **A loop lies inside the voice's length**: `set_loop` cuts it to 1 and `seq_length` (one wholly past the length is none), and the length's action calls `fit_length`: a length below `lo` ends the loop, latched or not, and one below `hi` cuts it there; a longer length gives nothing back. The gate rule counts the steps inside the length, not the loop (call 10), so a pulse voice looped over empty steps stays open and silent.
+- **A roll replays, never plays a step** (5b, design section 4, call 21): its hits are `S.lib.sequencer.replay_hit(voice)`, the voice's last played hit again as a later hit of its step (`first` false, `rolled` true), through every step output: never `begin_voice_step`, never `apply_step`, never a node. So a voice's own note never gets a node from a roll, and the step's locks, note and chord stand as held. It swells at the hit's level in every mode (`modes.own_event` passes a rolled event as it is, move included); the voices output sets the held values again first (`values.set_again`, not where a lock of the last step holds the param), and a gated voice's gate is the event's own, the interval times `v<i>_seq_gate_length`.
+- **Under a roll the voice's own steps play nothing** (`S.lib.loop_roll.rolling(voice)` in `begin_voice_step` and `play_voice_hit`): `take_position`, `played_step` (a loop), the lanes' reads and `advance` run as at every tick, so its position, passes and lanes move on and let go it plays the step it would have reached; the step draws nothing and records no outcome, as a skipped tick. A ratchet's later hits stop too.
+- **A roll asks its own key at every hit**: `roll(voice, rate, still)` keeps the key's `still` (the grid's `pane.still`), and its clock ends the roll, playing nothing, before any hit at which `still()` is false: a release, a page, side or half change of its pane, an unplug end it at its next hit. A new roll replaces the voice's roll (its clock stopped), so the last pressed rolls and an earlier key's release ends nothing. A pattern's replacement (a letter's switch, an order's next letter, a chain link, a recall, a paste) never ends a roll. No reader sees a dead roll (`rolling` is nil).
+- **A roll lives only while the patterns play**: `roll` with the patterns stopped does nothing, and `pattern_clock_stop` ends every roll (ruling 5b-1), so cleanup's own stop (`CLEANUP_ORDER.pattern_clock`) does too: no `CLEANUP_ORDER` entry of its own. A roll is never stored: no param, scene field or PSET field.
+- **A roll's clock goes through `S.lib.clocks`** (`run`, `stop`): `end_roll` stops it through the helper, so a wake already posted does nothing (no clock error). It sleeps, never syncs: its hits are `max(step_seconds / rate, SEQ.min_ratchet_seconds)` apart (`S.lib.sequencer.step_seconds`, the voice's nominal step), the first at once, each on the roll's grid of times from its first; a late wake plays one hit and moves the grid on by the intervals that passed, never a burst. A roll repaints nothing: the steps' own repaint (`finish_beat`) stays the grid's one a step.
 - **The latch** (`press_latch`, 5c's `LP` key): a latched loop ends, and the latch with it; a held loop becomes latched; with no loop the latch is armed, or disarmed if it was. An armed latch makes the next loop latched at once and is no longer armed, so a latch is armed only with no loop. A new loop over a latched one is latched too: the latch holds the voice's loop until `press_latch` or a length below it ends it.
 
 ## Machines
@@ -55,9 +60,37 @@ The events: `second key` (key 5 pressed if it is not down, then key 12 pressed a
 | `latched` | `replacement` | `latched` | the loop stays, 5 to 8 |
 | `latched` | `stop` | `latched` | the loop stays |
 
+### roll
+- **State:** per voice, `ROLL.rolls[voice]` (a module local: `{rate, still, handle}` or nil), read as `rolling` while `rolling(voice)` gives a rate (a roll whose key still holds it) and `off` otherwise (a dead roll is `off`). The table follows voice 1 with every step set, the patterns playing (step 1 played), a 128 showing a test page in the fx page's place whose keys 1 to 4 of lines 1 and 2 roll voice 1 at their rate, held by the key's `pane.still` (as 5c's `R1` to `R4` will), and a step output that logs every hit. `rolling` is key 1 then key 2 of line 1 pressed: key 2's roll at rate 2, key 1 still down.
+- **Invariant:** `roll`: a roll exists only while the patterns play, has a rate of 1 to 4 and a `still` function, and its clock runs (`S.lib.clocks.alive`); a replaced or ended roll's clock is stopped with it, so every roll clock that runs is its voice's roll's. Its `still` was true at its last hit, since the clock ends the roll before a hit at which it is false; the rows' checks of the next hit show it.
+- **Test:** `test/unit/loop_roll_test.lua`: "roll: every cell is decided" and its rows, "the roll invariant fails on a roll with the patterns stopped" and the named tests beside them ("a roll replays the last hit at its rate", "a roll is never faster than 20 ms", "the voice's own steps are silent under a roll and its position moves on", "a rolled hit in move swells at the hit's level and sets the held values again", "a roll tells the targets each hit", "a roll before any hit plays nothing", "of two roll keys the last pressed rolls, and the first's release changes nothing", "a page change and an unplug end a roll at its next hit", "a letter's switch under an order leaves a held roll", "a stop and cleanup end a roll", "a roll repaints the grid no more than once a beat"); `test/unit/sequencer_test.lua`: "replay_hit plays the voice's last hit again through every output, at its level" and "step_seconds is the voice's nominal step in seconds".
+
+The events: `a rate set` (line 2's key 2 pressed: a roll at rate 2 by another key), `another rate` (line 1's key 4: rate 4), `the key's release` (line 1's key 2 let go), `an earlier key's release` (line 1's key 1 let go), `a page change` (the pane shows patterns), `an unplug` (the grid of port 1), `a stop` (the patterns), `a replacement` (`replace_pattern` with every step set) and `a hit that would have played` (voice 1's next tick, step 2, set). Where the Effect names the next hit, the row's check runs the clocks on through it.
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| `off` | `a rate set` | `rolling` | the roll at 2, its first hit at once |
+| `off` | `another rate` | `rolling` | the roll at 4, its first hit at once |
+| `off` | `the key's release` | `off` | nothing |
+| `off` | `an earlier key's release` | `off` | nothing |
+| `off` | `a page change` | `off` | nothing |
+| `off` | `an unplug` | `off` | nothing |
+| `off` | `a stop` | `off` | nothing |
+| `off` | `a replacement` | `off` | nothing |
+| `off` | `a hit that would have played` | `off` | the voice plays its own step 2 |
+| `rolling` | `a rate set` | `rolling` | the new key's roll at 2 replaces it, its first hit at once |
+| `rolling` | `another rate` | `rolling` | the roll at 4, its first hit at once |
+| `rolling` | `the key's release` | `off` | the roll is dead; its next hit plays nothing, and the voice plays its own step 2 |
+| `rolling` | `an earlier key's release` | `rolling` | nothing: the roll asks only its own key |
+| `rolling` | `a page change` | `off` | key 2's still ends; its next hit plays nothing, and the voice plays its own step 2 |
+| `rolling` | `an unplug` | `off` | the port is forgotten; the same |
+| `rolling` | `a stop` | `off` | the roll and its clock end; no hit after it |
+| `rolling` | `a replacement` | `rolling` | the roll stays |
+| `rolling` | `a hit that would have played` | `rolling` | the position takes step 2, which plays nothing |
+
 ## Owns
 
-`lib/loop_roll.lua` (`S.lib.loop_roll`), included after `lib/lanes.lua` and before `lib/sequencer.lua` (whose include runs `start_position` for every voice). 5b adds the roll here.
+`lib/loop_roll.lua` (`S.lib.loop_roll`), included after `lib/lanes.lua` and before `lib/sequencer.lua` (whose include runs `start_position` for every voice): the loop (5a) and the roll (5b).
 
 - **`loop(voice) -> lo, hi | nil`**, **`armed(voice)`**, **`latched(voice)`**: reads, never writes; a dead loop is none.
 - **`set_loop(voice, a, b, still)`**: ordered, cut to the length; `still` a function of no argument. Anything out of range does nothing. It repaints the grid.
@@ -66,4 +99,12 @@ The events: `second key` (key 5 pressed if it is not down, then key 12 pressed a
 - **`fit_length(voice, length)`**: the length's action (`lib/sequencer.lua`'s seq record).
 - **`start(voice)`**: `start_position`'s, the loop back to its first step.
 
-The patterns page (side 1) makes a loop with its second key and dims a looped voice's set steps outside the loop (`docs/notes/lua/grid/pages/patterns.md`); 5c's perform side reads `loop`, `armed` and `latched` for its `LP` light and calls `press_latch`.
+The roll's (5b):
+
+- **`roll(voice, rate, still)`**: rate a whole 1 to 4, `still` a function of no argument; it replaces the voice's roll and plays its first hit at once. Anything out of range, or the patterns stopped, does nothing. It repaints nothing.
+- **`end_roll(voice)`**: ends it, its clock stopped through the helper (`pattern_clock_stop` calls it for every voice).
+- **`rolling(voice) -> rate | nil`** and **`interval(voice) -> seconds | nil`** (the seconds between its hits, which `replay_hit` reads for a rolled hit's gate): reads; a dead roll is none.
+
+The sequencer's side (`lib/sequencer.lua`): **`replay_hit(voice) -> boolean`** (false, playing nothing, with the patterns stopped or no hit played since they started; the kept hit is `play.last_hits[voice]`, a copy of the last event `play_outputs` played that was not itself rolled, emptied by `end_clocks` at every start and stop) and **`step_seconds(voice) -> seconds`** (the voice's division at the tempo now). A rolled event is a copy of the kept one with `first` false, `rolled` true, `beat` now, `velocity` its level over 15, `gate_beats` the interval (times the gate length on a gated voice) and, gated, `gate_seconds`.
+
+The patterns page (side 1) makes a loop with its second key and dims a looped voice's set steps outside the loop (`docs/notes/lua/grid/pages/patterns.md`); 5c's perform side reads `loop`, `armed` and `latched` for its `LP` light and calls `press_latch`, and its `R1` to `R4` keys call `roll` with their `pane.still` and read `rolling`.
