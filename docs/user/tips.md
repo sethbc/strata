@@ -48,7 +48,7 @@ Everything here works from the norns alone.
 - Give a lane a length of its own for patterns that shift against themselves: tap LN, then key 5 of the value A line, and value A repeats every five steps over the hits' sixteen
 - On the voices page's perform side, tap B while the patterns play: the voice plays a copy of its pattern from the next bar, which you can change while A stays as it was. Hold OR, tap A A B A and let go: the voice walks those letters by itself, one a bar
 - Hold a step on the patterns page's side 1 and press another key of its line to loop between them; let go and the voice is back in time with the others. LP on the perform side keeps the next loop after you let go, and R1 to R4 roll the voice for as long as you hold them
-- A scene saved in 3.8 comes back with its voices in `accent`, where steps only swell the sound: press PU (or MV) to hear them pulse
+- A scene saved in 3.8 comes back with its voices in `accent`, where steps only swell the sound: press PU to hear them pulse, or MV to move them
 
 ## Playing Chords and MPE
 
