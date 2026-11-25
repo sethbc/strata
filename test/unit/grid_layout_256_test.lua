@@ -59,7 +59,7 @@ test("grid LEDs follow non-grid state changes (I9) and the played step (M7)", fu
   toggle_pattern_step(1, 1)
   pattern_toggle()
   assert_equal(device:get_led(1, 1), 15, "step 1 highlighted while it plays")
-  assert_equal(device:get_led(2, 1), 0, "step 2 not highlighted")
+  assert_equal(device:get_led(2, 1), 1, "step 2 not highlighted: empty, at 1 as the picked voice's")
   assert_equal(device:get_led(1, 2), 4, "empty step under the playhead shows dim")
   pattern_toggle()
 

@@ -562,7 +562,11 @@ OPS.page = { 2, "page", function(state, random)
   local page = (pick == 1 and S.constants.GRID_PAGES.patterns) or (pick == 2 and S.constants.GRID_PAGES.positions)
     or random(S.constants.GRID_PAGES.count)
   local record = S.registry.grid_pages[page]
-  state.core.set_page(WALK.port, page, pane, random(record and record.sides or 1))
+  local side = random(record and record.sides or 1)
+  -- the model knows patterns' side 1 only: 3.9's lane side (3b) is not
+  -- walked here yet (the draw is kept, so the seeds walk as before)
+  if page == S.constants.GRID_PAGES.patterns then side = 1 end
+  state.core.set_page(WALK.port, page, pane, side)
   if layout_kind == "64" and random(2) == 1 then state.core.set_half(WALK.port, pane, random(2)) end
   grid_redraw()
 end }
