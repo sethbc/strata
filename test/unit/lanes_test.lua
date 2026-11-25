@@ -183,6 +183,64 @@ test("a value stays through steps without one", function()
   pattern_clock_stop()
 end)
 
+-- Fix round 1 (finding 1): a jump ends a held position value, so it is
+-- heard at once, whichever way it comes: the grid's position page,
+-- recall_bookmark, a step's bookmark (S.lib.positions.jump in each)
+test("a jump ends a held position value: the grid's position page, recall_bookmark, a step's bookmark", function()
+  local routes = {
+    {"the grid's position page", function(context, S)
+      -- a 128h grid on its position page: voice 1's line, cell 13 of 16
+      local pane = h.grid_pane(context, "128h")
+      pane.show(S.constants.GRID_PAGES.positions, 1)
+      pane.tap(13, 1)
+      return 12 / 16
+    end},
+    {"recall_bookmark", function(_, S)
+      params:set("v1_bookmark_2", 0.75)
+      S.lib.positions.recall_bookmark(1, 2)
+      return 0.75
+    end},
+    {"a step's bookmark", function(context, S)
+      params:set("v1_bookmark_3", 0.4)
+      set_step(S, 2, {bookmark = 3})
+      tick(context, S)
+      return 0.4
+    end},
+  }
+  for _, route in ipairs(routes) do
+    local context, S = setup()
+    set_step(S, 1, {va = 15})
+    pattern_clock_start()
+    assert_equal(S.lib.sequencer.held_value(1, "position"), 15, route[1] .. ": held")
+    local position = route[2](context, S)
+    assert_equal(S.lib.sequencer.held_value(1, "position"), nil, route[1] .. ": the jump ends the value")
+    assert_near(params:get("v1_buf_pos"), position, 1e-9, route[1] .. ": the jump's position stored")
+    assert_near(S.lib.engine_sync.engine_base_value("v1_buf_pos"), position, 1e-9, route[1] .. ": and heard")
+    local values = sent(context, "bufPos")
+    assert_near(values[#values], position, 1e-9, route[1] .. ": sent last")
+    pattern_clock_stop()
+  end
+end)
+
+-- Fix round 1 (finding 4): a morph's discrete source switch runs inside
+-- a recall's setting, where the source change hooks do not run
+test("a morph that switches the source ends the held value", function()
+  local context, S = setup()
+  set_step(S, 1, {va = 15})
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 2)
+  capture_scene(2)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  capture_scene(1)
+  pattern_clock_start()
+  assert_equal(S.lib.sequencer.held_value(1, "position"), 15, "held")
+  params:set("morph", 1)
+  context.clock.run_for(0.3)
+  assert_equal(S.voices[1].source, S.constants.SOURCE_SYNTH + 2, "the morph switched voice 1 to buffer 2")
+  assert_equal(S.lib.sequencer.held_value(1, "position"), nil, "and ended the value")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_buf_pos"), params:get("v1_buf_pos"), 1e-9, "no override")
+  pattern_clock_stop()
+end)
+
 -- ruling 2a-1: no grain restart hook ends a value, so the hit that starts
 -- a stopped voice keeps the value it set, and its start plays it
 test("the hit that starts a stopped voice sets its value, and the start keeps it", function()
@@ -225,6 +283,21 @@ local function holding(context, S)
   context.clear_engine_calls()
 end
 
+-- Review Focus 2 (fix round 1, finding 2): from step 4 of length 8, the
+-- voice's steps turned off one by one while it plays, a tick apart (the
+-- value's own step 3 first: the value stays), then the wrap to step 1,
+-- the pass's end with no set step. before_wrap(context, S) runs before it
+local function empty_pass(context, S, before_wrap)
+  for _, step in ipairs({3, 1, 2, 4}) do
+    S.lib.sequencer.set_level(1, step, 0)
+    tick(context, S)
+  end
+  assert_equal(S.lib.sequencer.sounding_step(1), 8, "the walk reaches step 8")
+  if before_wrap then before_wrap(context, S) end
+  tick(context, S)
+  assert_equal(S.lib.sequencer.sounding_step(1), 1, "and wraps to step 1")
+end
+
 local ENDS = {
   {"a stop", function() pattern_clock_stop() end},
   -- the edit's own action sends first, under the override (the engine
@@ -236,8 +309,10 @@ local ENDS = {
   {"a source switch", function(_, S) params:set("v1_source", S.constants.SOURCE_SYNTH + 2) end, nil, "sync"},
   {"a type switch", function() params:set("v1_type", 2) end, nil, "sync"},
   {"an empty pass", function(context, S)
-    for step = 1, 4 do S.lib.sequencer.set_level(1, step, 0) end
-    for _ = 5, 9 do tick(context, S) end
+    empty_pass(context, S, function()
+      assert_equal(S.lib.sequencer.held_value(1, "position"), 15, "an empty pass: the value stays until the wrap")
+      assert_sends(context, "bufPos", {}, "an empty pass: nothing sent before the wrap")
+    end)
   end},
   {"a length cut", function() params:set("v1_seq_length", 2) end},
 }
@@ -500,6 +575,17 @@ end
 
 local EDITED = OWN_POSITION + 0.01
 
+-- Fix round 1 (finding 3): the row's check, then the lock followed to its
+-- end (a hit without), which brings no value back: 0.2 is sent and played
+local function then_lock_ends(check)
+  return function(context)
+    check(context)
+    next_hit(nil)(context)
+    assert_near(last_position(context), OWN_POSITION, 1e-9, "the lock's end sends the voice's own position")
+    assert_near(base_position(), OWN_POSITION, 1e-9, "and the engine starts from it")
+  end
+end
+
 h.transition_table({
   name = "held values",
   notes = {"docs/notes/lua/lanes.md", "held values"},
@@ -520,11 +606,7 @@ h.transition_table({
     ["mode change"] = function() params:set("v1_seq_gate", 1) end,
     ["source switch"] = function() params:set("v1_source", local_value("S").constants.SOURCE_SYNTH + 2) end,
     ["type switch"] = function() params:set("v1_type", 2) end,
-    ["empty pass"] = function(context)
-      local S = local_value("S")
-      for step = 1, 4 do S.lib.sequencer.set_level(1, step, 0) end
-      for _ = 5, 9 do tick(context, S) end
-    end,
+    ["empty pass"] = function(context) empty_pass(context, local_value("S")) end,
     ["length cut"] = function() params:set("v1_seq_length", 2) end,
   },
   state_of = function()
@@ -568,10 +650,10 @@ h.transition_table({
     {"a lock over a value", "stop", "none", check = sends(OWN_POSITION)},
     {"a lock over a value", "hand edit", "none", check = sends(EDITED)},
     {"a lock over a value", "replace", "none", check = sends(OWN_POSITION)},
-    {"a lock over a value", "target change", "none", check = sends(nil, 0.6)},
-    {"a lock over a value", "mode change", "none", check = sends(nil, 0.6)},
-    {"a lock over a value", "source switch", "none", check = sends(0.6)},
-    {"a lock over a value", "type switch", "none", check = sends(0.6)},
+    {"a lock over a value", "target change", "none", check = then_lock_ends(sends(nil, 0.6))},
+    {"a lock over a value", "mode change", "none", check = then_lock_ends(sends(nil, 0.6))},
+    {"a lock over a value", "source switch", "none", check = then_lock_ends(sends(0.6))},
+    {"a lock over a value", "type switch", "none", check = then_lock_ends(sends(0.6))},
     {"a lock over a value", "empty pass", "none", check = sends(OWN_POSITION)},
     {"a lock over a value", "length cut", "none", check = sends(OWN_POSITION)},
   },

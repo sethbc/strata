@@ -173,6 +173,10 @@ return function(S)
   function M.jump(voice_idx, p)
     if not buffer_voice(voice_idx) or type(p) ~= "number" or p ~= p then return end
     p = math.max(0, math.min(1, p))
+    -- 3.9 grid sequencer (2a, fix round 1): a held step value on the
+    -- position ends first, so the jump is heard (a step's own bookmark wins
+    -- over that step's value)
+    S.lib.sequencer.end_held_value(voice_idx, "position")
     local start, length = loop_of(voice_idx)
     if p >= start - JUMP_TOLERANCE and p < start + length - JUMP_TOLERANCE then
       params:set(param_id(voice_idx, "buf_pos"), math.max(0, math.min(1, (p - start) / length)))

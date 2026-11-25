@@ -488,7 +488,7 @@ return function(S)
     if value ~= nil then set_override(voice_idx, param_id, value) else clear_override(voice_idx, param_id) end
   end
 
-  -- End the voice's held values that keep(entry) does not keep (all with
+  -- End the voice's held values that keep(entry, target) does not keep (all with
   -- no keep): each override cleared, the param back to its own value, but
   -- where a lock of the last played step holds the param, which stays the
   -- lock's until it ends (it then finds no value to bring back)
@@ -497,7 +497,7 @@ return function(S)
     if not held then return end
     for _, target in ipairs(sorted_keys(held)) do
       local entry = held[target]
-      if not (keep and keep(entry)) then
+      if not (keep and keep(entry, target)) then
         held[target] = nil
         if not (overrides[voice_idx] and overrides[voice_idx][entry.param]) then clear_override(voice_idx, entry.param) end
       end
@@ -538,6 +538,13 @@ return function(S)
     if valid_voice(voice_idx) then values.end_held(voice_idx) end
   end
 
+  -- The voice's held value on one target ends (fix round 1: a jump,
+  -- S.lib.positions.jump, ends a held position value, so the jump is heard)
+  function M.end_held_value(voice_idx, target)
+    if not valid_voice(voice_idx) then return end
+    values.end_held(voice_idx, function(_, held_target) return held_target ~= target end)
+  end
+
   -- A hand edit of a param ends the held value on it: the engine sync's
   -- own touch hook has cleared its override already, so the record goes
   -- with it and nothing is sent
@@ -549,8 +556,6 @@ return function(S)
       if held_values[voice_idx] and next(held_values[voice_idx]) == nil then held_values[voice_idx] = nil end
     end
   end)
-
-  S.register_source_change(function(voice_idx) M.end_held_values(voice_idx) end)
 
   -- End every override a voice's step set, and its chord: each param goes
   -- back to its stored value at once. Its held values end too, but with

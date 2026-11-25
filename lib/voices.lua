@@ -353,6 +353,10 @@ return function(S)
             -- never run during one. Each is contained (#910): one that raises
             -- is printed once per distinct message, and the next and the sync
             -- still run
+            -- 3.9 grid sequencer (2a, fix round 1): the voice's held step
+            -- values end, a morph's switch too (it sets the source inside a
+            -- recall's setting, where the hooks below never run)
+            S.lib.sequencer.end_held_values(voice_idx)
             if not S.scene_recall_in_progress then
               for index, hook in ipairs(S.registry.source_change) do
                 S.lib.ui_frame.contained_call(source_change_errors, index, "source change hook", hook, voice_idx, x)
