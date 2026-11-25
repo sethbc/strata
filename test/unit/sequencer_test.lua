@@ -1211,6 +1211,44 @@ test("a chain link loads the scene's letters", function()
   assert_equal(S.scenes[2].data.variations[1].slots.A.levels[2], 15, "an edit after the link leaves the scene")
 end)
 
+-- 4b: the bar hook (S.lib.sequencer.on_bar)
+test("on_bar runs at each bar, the first beat included, after the bar's chain link and before its first step", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  for step = 1, 16 do seq.set_level(1, step, 15) end
+  capture_scene(1); capture_scene(2)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 2)
+  params:set("seq_chain_bars", 1)
+  local log = {}
+  S.register_step_output({name = "bar probe", play = function(event)
+    if event.voice == 1 and event.first and (event.step == 1 or event.step == 16) then
+      log[#log + 1] = "step " .. event.step
+    end
+  end})
+  seq.on_bar(function() log[#log + 1] = "bar, scene " .. tostring(seq.chain_place()) end)
+  seq.on_bar(function() log[#log + 1] = "second hook" end)
+  pattern_clock_start()
+  assert_equal(table.concat(log, "; "), "bar, scene 1; second hook; step 1", "the start's own bar")
+  context.clock.run_for(2.0 + 0.01)  -- one bar at 120 BPM
+  assert_equal(table.concat(log, "; "),
+    "bar, scene 1; second hook; step 1; step 16; bar, scene 2; second hook; step 1", "the second bar")
+  context.clock.run_for(2.0)
+  assert_equal(table.concat(log, "; ", 8), "step 16; bar, scene 1; second hook; step 1", "the third bar: once more")
+  pattern_clock_stop()
+  context.clock.run_for(4.0)
+  assert_equal(#log, 11, "stopped: no bar")
+  -- the chain off, a bar still comes every four beats of the count
+  params:set("seq_chain", 0)
+  log = {}
+  pattern_clock_start()
+  context.clock.run_for(4.0 + 0.01)
+  assert_equal(table.concat(log, "; "),
+    "bar, scene nil; second hook; step 1; step 16; bar, scene nil; second hook; step 1; step 16; "
+      .. "bar, scene nil; second hook; step 1", "three bars with no chain")
+  pattern_clock_stop()
+  assert_true(not pcall(seq.on_bar, 1), "a hook is a function")
+end)
+
 test("seq_division_reset puts every voice back at step 1 at the next bar", function()
   local context, S = setup()
   local seq = S.lib.sequencer

@@ -8,7 +8,9 @@
 -- untouched, and only the patterns not playing are kept here. A switch
 -- stores the playing pattern under its letter and loads the other through
 -- the sequencer's one door (replace_whole). The scene block variations
--- keeps them, with each voice's order (4b gives it behavior). See
+-- keeps them, with each voice's order. 4b: while the patterns play a
+-- switch waits for the next bar of the sequencer's own count
+-- (S.lib.sequencer.on_bar), and an order walks its letters a bar each. See
 -- docs/notes/lua/pattern-letters.md.
 
 return function(S)
@@ -57,6 +59,12 @@ return function(S)
   local voices = {}
   for voice_idx = 1, NUM_VOICES do voices[voice_idx] = fresh_voice() end
 
+  -- 4b: what lives only while the patterns play, never stored: per voice
+  -- the letter waiting for the next bar (nil for none) and the order's
+  -- place, the index of the entry it played last (nil: its first entry at
+  -- the next bar)
+  local live = {waiting = {}, place = {}}
+
   -- The letter the voice plays (nil for no voice)
   function M.current(voice_idx)
     if not valid_voice(voice_idx) then return nil end
@@ -75,19 +83,137 @@ return function(S)
   -- the playing letter, then the other is loaded through replace_whole. A
   -- letter never used is first given a copy of the playing pattern, so
   -- the voice plays on unchanged; a used one is loaded as it is, empty or
-  -- not. The playing letter, a bad voice or a bad letter does nothing
-  function M.switch_now(voice_idx, letter)
-    if not valid_voice(voice_idx) or not is_letter[letter] then return end
+  -- not. The playing letter, a bad voice or a bad letter does nothing.
+  -- 4b: it leaves nothing waiting for the voice. load_letter is the switch
+  -- without the grid's repaint, for the bar (whose step repaints the grid once);
+  -- true when it loaded a pattern
+  local function load_letter(voice_idx, letter)
     local state = voices[voice_idx]
-    if state.current == letter then return end
+    live.waiting[voice_idx] = nil
+    if state.current == letter then return false end
     local seq = S.lib.sequencer
     local playing = seq.whole(voice_idx)
     local pattern = state.slots[letter] or seq.whole(voice_idx)
     state.slots[state.current], state.slots[letter], state.current = playing, nil, letter
     seq.replace_whole(voice_idx, pattern)
+    request_redraw()
+    return true
+  end
+
+  function M.switch_now(voice_idx, letter)
+    if not valid_voice(voice_idx) or not is_letter[letter] then return end
+    if load_letter(voice_idx, letter) then grid_redraw() end
+  end
+
+  -- 4b: the bar and the order ----------------------------------------------
+
+  -- The letter waiting for the voice's next bar, or nil
+  function M.waiting(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    return live.waiting[voice_idx]
+  end
+
+  -- The voice's order, a copy of its letters, and whether it is on (nil
+  -- for no voice)
+  function M.order(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    local state = voices[voice_idx]
+    return copy_of(state.order), state.order_on
+  end
+
+  -- A switch by hand (the grid's letter keys, SEQ): it turns the voice's
+  -- order off. With the patterns stopped it switches now (switch_now);
+  -- while they play the letter waits for the next bar, the waiting letter
+  -- again switches now, another letter replaces the one waiting, and the
+  -- playing letter cancels the wait. A bad voice or letter does nothing
+  function M.switch(voice_idx, letter)
+    if not valid_voice(voice_idx) or not is_letter[letter] then return end
+    voices[voice_idx].order_on = false
+    if not S.pattern_playing or live.waiting[voice_idx] == letter then
+      M.switch_now(voice_idx, letter)
+    elseif voices[voice_idx].current == letter then
+      live.waiting[voice_idx] = nil
+    else
+      live.waiting[voice_idx] = letter
+    end
     grid_redraw()
     request_redraw()
   end
+
+  -- Turn the voice's order on (clearing a letter waiting; its place is its
+  -- first entry, taken at the next bar) or off. An order with no letter is
+  -- never on
+  function M.set_order_on(voice_idx, on)
+    if not valid_voice(voice_idx) or type(on) ~= "boolean" then return end
+    local state = voices[voice_idx]
+    on = on and #state.order > 0
+    if on and not state.order_on then live.waiting[voice_idx], live.place[voice_idx] = nil, nil end
+    state.order_on = on
+    grid_redraw()
+    request_redraw()
+  end
+
+  -- Set the voice's order, up to max_order letters, each one of LETTERS
+  -- (anything else is refused), and turn it on, from its first entry; an
+  -- empty one turns it off
+  function M.set_order(voice_idx, letters)
+    if not valid_voice(voice_idx) or type(letters) ~= "table" or #letters > VARIATIONS.max_order then return end
+    local order = {}
+    for index, letter in pairs(letters) do
+      if not whole_between(index, 1, #letters) or not is_letter[letter] then return end
+      order[index] = letter
+    end
+    voices[voice_idx].order, voices[voice_idx].order_on = order, false
+    M.set_order_on(voice_idx, true)
+  end
+
+  -- A stop of the patterns (lib/sequencer.lua's pattern_clock_stop): no
+  -- letter waits once they are stopped
+  function M.end_waits()
+    for voice_idx = 1, NUM_VOICES do live.waiting[voice_idx] = nil end
+  end
+
+  -- At each bar of the sequencer's own count (S.lib.sequencer.on_bar,
+  -- after a chain link due then and before the bar's first step): each
+  -- voice takes the letter waiting, or, with its order on, the order's next
+  -- entry, wrapping (its first at the patterns' start, first, and after
+  -- the order was turned on); an entry equal to the playing letter
+  -- switches nothing. The grid is repainted by the bar's step (one repaint
+  -- a beat), so no switch here repaints it
+  local function at_bar(first)
+    for voice_idx = 1, NUM_VOICES do
+      local state, letter = voices[voice_idx], live.waiting[voice_idx]
+      if first then live.place[voice_idx] = nil end
+      if letter then
+        load_letter(voice_idx, letter)
+      elseif state.order_on and #state.order > 0 then
+        local place = live.place[voice_idx]
+        place = place and place % #state.order + 1 or 1
+        live.place[voice_idx] = place
+        load_letter(voice_idx, state.order[place])
+      end
+    end
+  end
+  S.lib.sequencer.on_bar(at_bar)
+
+  -- The invariant pattern letters (docs/notes/lua/pattern-letters.md): a
+  -- letter waits only while the patterns play and no order is on, and is
+  -- not the one playing; every voice plays one of LETTERS
+  S.register_invariant("pattern letters", function()
+    for voice_idx = 1, NUM_VOICES do
+      local state, letter = voices[voice_idx], live.waiting[voice_idx]
+      if not is_letter[state.current] then
+        return "voice " .. voice_idx .. " plays " .. tostring(state.current) .. ", none of the letters"
+      end
+      if letter ~= nil and (not S.pattern_playing or state.order_on or letter == state.current
+          or not is_letter[letter]) then
+        return "voice " .. voice_idx .. ": " .. tostring(letter) .. " waits with the patterns "
+          .. (S.pattern_playing and "playing" or "stopped") .. ", the order " .. (state.order_on and "on" or "off")
+          .. " and " .. tostring(state.current) .. " playing"
+      end
+    end
+    return nil
+  end)
 
   -- The block's check -------------------------------------------------------
 
@@ -177,9 +303,12 @@ return function(S)
   -- undo (lib/mutation.lua). A voice the block lacks is on A alone. The
   -- playing pattern is not touched: a recall and a link load it with the
   -- patterns, steps and lanes blocks. Redraws are the caller's, as for
-  -- every block
+  -- every block. 4b (ruling 4b-3): it clears every waiting letter and
+  -- order's place, so a recall or a link on the bar of a wait wins,
+  -- whichever runs first
   function M.apply_block(block)
     for voice_idx = 1, NUM_VOICES do
+      live.waiting[voice_idx], live.place[voice_idx] = nil, nil
       local entry = type(block) == "table" and block[voice_idx]
       voices[voice_idx] = type(entry) == "table" and copy_of(entry) or fresh_voice()
     end
