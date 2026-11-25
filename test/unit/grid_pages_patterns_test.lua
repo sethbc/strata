@@ -152,6 +152,76 @@ test("a variation switch leaves a loop, and its key's release still ends it", fu
   pattern_clock_stop()
 end)
 
+-- The final review's I1: a pattern's replacement ends every step gesture
+-- but a held loop's, which writes nothing, so a further key of the line
+-- still moves the loop's other end and toggles nothing. `replace` runs one
+-- replacement with the loop's keys down: a letter switch, a chain link, an
+-- order's next letter at the bar
+local function loop_end_after(replace)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local top = grid_pane(context, "256 top")
+  top.show(S.constants.GRID_PAGES.patterns)
+  top.press(2, 3, 1); top.press(6, 3, 1); top.press(6, 3, 0)
+  local lo, hi = S.lib.loop_roll.loop(3)
+  assert_equal(lo .. " " .. hi, "2 6", "the held step 2 and key 6 loop 2 to 6")
+  replace(context, S)
+  assert_equal(select(2, S.lib.loop_roll.loop(3)), 6, "the replacement leaves the loop")
+  top.press(10, 3, 1)
+  context.clock.run_for(0.35)
+  top.press(10, 3, 0)
+  lo, hi = S.lib.loop_roll.loop(3)
+  assert_equal(tostring(lo) .. " " .. tostring(hi), "2 10", "a further key moves the loop's other end to 10")
+  assert_equal(S.patterns[3][10], 0, "and toggles nothing")
+  assert_equal(shown_step_editor(), nil, "nor opens the editor")
+  top.press(12, 3, 1); top.press(12, 3, 0)
+  assert_equal(select(2, S.lib.loop_roll.loop(3)), 12, "a key after that moves it again")
+  top.press(2, 3, 0)
+  assert_equal(S.lib.loop_roll.loop(3), nil, "the held key's release ends the loop")
+  assert_equal(S.patterns[3][2], 0, "and toggles nothing")
+  top.tap(9, 3)
+  assert_equal(S.patterns[3][9], 15, "the next tap of the line is a step of its own again")
+  return context, S
+end
+
+test("after a letter switch a further key moves a held loop's end and toggles nothing", function()
+  loop_end_after(function(_, S)
+    S.lib.pattern_letters.switch_now(3, "B")
+    assert_equal(S.lib.pattern_letters.current(3), "B", "B plays")
+  end)
+end)
+
+test("after a chain link a further key moves a held loop's end and toggles nothing", function()
+  local replaced
+  loop_end_after(function(_, S)
+    local real = S.lib.sequencer.replace_pattern
+    S.lib.sequencer.replace_pattern = function(voice_idx, ...)
+      if voice_idx == 3 then replaced = true end
+      return real(voice_idx, ...)
+    end
+    S.lib.sequencer.set_level(3, 4, 9)
+    capture_scene(1)
+    S.lib.sequencer.set_level(3, 4, 0)
+    params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
+    pattern_clock_start()
+    S.lib.sequencer.replace_pattern = real
+    assert_true(replaced, "the start's link replaced voice 3's pattern")
+    assert_equal(S.patterns[3][4], 9, "the link brought scene 1's step 4")
+  end)
+  pattern_clock_stop()
+end)
+
+test("after an order's next letter at the bar a further key moves a held loop's end and toggles nothing", function()
+  loop_end_after(function(context, S)
+    local letters = S.lib.pattern_letters
+    letters.set_order(3, {"A", "B"})
+    pattern_clock_start()
+    context.clock.run_for(4 * 4 * 0.125 + 0.01)  -- past the second bar's start
+    assert_equal(letters.current(3), "B", "the order switched to B at the bar")
+  end)
+  pattern_clock_stop()
+end)
+
 test("on a 64 both keys are in the half shown", function()
   for _, case in ipairs({{"64 left", 2, 5}, {"64 right", 10, 13}}) do
     local context = load_strata(); finish_startup(context)
@@ -263,6 +333,34 @@ test("both panes on patterns: steps held above and below are each their voice's 
   local lo, hi = loop_roll.loop(6)
   assert_equal(lo, 2, "a voice has one held step on a port: the loop from 2"); assert_equal(hi, 12, "to 12")
   top.press(12, 6, 0); bottom.press(2, 6, 0)
+end)
+
+-- The final review's M1: a held step pairs only with a second key from its
+-- own view (the pane's page and side), so on a 256 with side 1 above and
+-- side 2 below each pane's key of one voice is a step of its own
+test("a side 1 key and a side 2 hits key of one voice make no gesture across the panes", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pages = S.constants.GRID_PAGES
+  local top, bottom = grid_pane(context, "256 top"), grid_pane(context, "256 bottom")
+  top.show(pages.patterns); bottom.show(pages.patterns, 2)
+  S.lib.grid_pages_patterns.pick(1, 3)
+  local hits = 1
+  -- side 1 held, side 2's hits key pressed
+  top.press(2, 3, 1)
+  bottom.press(9, hits, 1)
+  assert_equal(S.lib.loop_roll.loop(3), nil, "side 2's key makes no loop of side 1's held step")
+  bottom.press(9, hits, 0); top.press(2, 3, 0)
+  assert_equal(S.patterns[3][9], 15, "the hits key toggles its own step")
+  assert_equal(S.patterns[3][2], 15, "and side 1's key its own")
+  -- side 2's hits key held, side 1 pressed
+  bottom.press(4, hits, 1)
+  top.press(12, 3, 1)
+  assert_equal(S.patterns[3][4], 0, "side 1's key sets no level on side 2's held step")
+  top.press(12, 3, 0); bottom.press(4, hits, 0)
+  assert_equal(S.patterns[3][4], 15, "the hits key toggles its own step at its release")
+  assert_equal(S.patterns[3][12], 15, "and side 1's key its own")
+  assert_equal(S.lib.loop_roll.loop(3), nil, "no loop")
 end)
 
 -- 3.9's lane side (package 3b, design section 4) --------------------------

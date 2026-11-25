@@ -514,7 +514,10 @@ return function(S)
   -- it (S.lib.loop_roll.set_loop)
   local function loop_second(pane)
     return function(voice_idx, held_step, second_step, held_x, held_y)
-      S.lib.loop_roll.set_loop(voice_idx, held_step, second_step, pane.still(held_x, held_y))
+      local still = pane.still(held_x, held_y)
+      S.lib.loop_roll.set_loop(voice_idx, held_step, second_step, still)
+      if not S.lib.loop_roll.held_by(voice_idx, still) then return nil end
+      return function() return S.lib.loop_roll.held_by(voice_idx, still) end
     end
   end
 

@@ -195,7 +195,9 @@ end
 -- key whose voice a letter's switch replaced since)}. The rest of the
 -- model: the patterns, the open editor's key, the chooser, the picked
 -- voice and LN's arming (patterns' page state, {pane}), and per voice the
--- key whose loop and whose roll it holds
+-- key whose loop and whose roll it holds, and the key whose press the
+-- voice's loop carries (`carriers`: the last held step whose second key
+-- made it, kept when it latches, the final review's I1)
 local Model = {}
 
 function Model.new(S)
@@ -205,7 +207,7 @@ function Model.new(S)
     for step = 1, S.constants.PATTERN_LENGTH do patterns[voice][step] = S.patterns[voice][step] end
   end
   return { entries = {}, patterns = patterns, editor = nil, chooser = false, order = 0, picked = 1, ln = nil,
-    loops = {}, rolls = {}, last = {} }
+    loops = {}, rolls = {}, carriers = {}, last = {} }
 end
 
 -- Whether an entry's press still stands (its key's still): held, its
@@ -320,22 +322,34 @@ function Model.forget(state)
 end
 
 -- The voice's pattern replaced: its step keys' gestures end, on every
--- pane (a lane's held cell stays); a letter's switch (`switched`) is
--- noted on the key holding the voice's loop
+-- pane (a lane's held cell stays), but the held step whose press the
+-- voice's live loop carries (the final review's I1: a loop's end writes
+-- nothing, so a further key still moves it); a letter's switch
+-- (`switched`) is noted on the key holding the voice's loop. Whether the
+-- loop lives is read as given: the walk does not predict a length cut's
 function Model.replaced(state, voice, switched)
   local model = state.model
+  local carrier = model.carriers[voice]
+  local kept = Model.live(model, carrier) and state.S.lib.loop_roll.loop(voice) ~= nil and carrier or nil
   for _, entry in pairs(model.entries) do
-    if entry.voice == voice and (entry.kind == "step" or entry.kind == "level") then Model.drop(state, entry) end
+    if entry.voice == voice and (entry.kind == "step" or entry.kind == "level") and entry ~= kept then
+      Model.drop(state, entry)
+    end
   end
+  if kept and not kept.dropped then kept.kept_loop = true end
   local holder = model.loops[voice]
   if switched and Model.live(model, holder) then holder.switched = true end
 end
 
--- The voice's held step on the port: a step entry (not a second key)
--- whose gesture stands
-function Model.held_step(model, voice)
+-- The voice's held step on the port and view: a step entry (not a second
+-- key) whose gesture stands, pressed on the same view (`second`: "loop"
+-- is patterns' side 1, "hits" side 2's line 1; the final review's M1: a
+-- second key pairs only with a held step of its own view)
+function Model.held_step(model, voice, second)
   for _, entry in pairs(model.entries) do
-    if entry.kind == "step" and entry.voice == voice and not entry.dropped then return entry end
+    if entry.kind == "step" and entry.voice == voice and entry.second == second and not entry.dropped then
+      return entry
+    end
   end
   return nil
 end
@@ -502,8 +516,9 @@ function Walk.second_effect(state, held, second_step)
       lo, hi = S.lib.loop_roll.loop(voice)
     else
       hi = math.min(hi, length)
-      model.loops[voice] = held
+      model.loops[voice], model.carriers[voice] = held, held
       held.made_loop = voice
+      if held.kept_loop then state.counts.loop_end_after_replacement = state.counts.loop_end_after_replacement + 1 end
       state.counts.loop_made = state.counts.loop_made + 1
     end
     Walk.expect(state, function()
@@ -530,7 +545,7 @@ end
 -- A step key of `voice` (side 1's line, side 2's hits): its voice's
 -- second key if the voice has a held step, else a held step
 function Walk.step_press(state, entry, voice, step, second)
-  local held = Model.held_step(state.model, voice)
+  local held = Model.held_step(state.model, voice, second)
   entry.voice = voice
   if held then
     held.consumed, held.deadline = true, nil
@@ -1846,7 +1861,7 @@ local COUNTERS = { "hold_fired", "hold_ended_by_page", "release_under_chooser", 
   "ln_disarmed_by_page", "view_opened", "view_other_pane_held", "view_bar", "k2_closed", "loop_made",
   "loop_released_after_switch", "roll_pressed", "roll_ended_by_page", "order_bar", "pulse_opened",
   "editor_without_view", "b_target", "latch_pressed", "latch_held", "latched_loop_released", "roll_replaced",
-  "roll_earlier_released", "press_ended" }
+  "roll_earlier_released", "press_ended", "loop_end_after_replacement" }
 
 -- The walk's state on a fresh script with a grid of the layout, every
 -- pattern step as `fill` says (a function of voice and step), and every
@@ -2064,8 +2079,10 @@ end)
 
 -- The perform side by hand, on the 128h with the patterns playing: a roll
 -- key held rolls its voice at its rate, and a page change ends the roll;
--- a loop's key let go after its voice's letter switched ends the loop
-h.test("the grid walk's model: a roll ended by a page change and a loop let go after a letter's switch, by hand",
+-- after its voice's letter switched a further key moves the loop's end
+-- (the final review's I1, which no seed reaches), and the loop's key let
+-- go ends the loop
+h.test("the grid walk's model: a roll ended by a page change and a loop moved and let go after a letter's switch, by hand",
   function()
   local context = h.load_strata()
   h.finish_startup(context)
@@ -2089,6 +2106,10 @@ h.test("the grid walk's model: a roll ended by a page change and a loop let go a
   ok(run_op(state, Walk.clock, WALK.bar_seconds), "the bar: B plays")
   h.assert_equal(S.lib.pattern_letters.current(3), "B", "B")
   h.assert_true(S.lib.loop_roll.loop(3) ~= nil, "the loop outlived the switch")
+  ok(run_op(state, Walk.press, 12, 3), "a further key: the loop 4 to 12")
+  ok(run_op(state, Walk.release, key_name(12, 3)), "the further key up toggles nothing")
+  h.assert_equal(select(2, S.lib.loop_roll.loop(3)), 12, "the loop's end moved")
+  h.assert_equal(state.counts.loop_end_after_replacement, 1, "the model kept the loop's key across the switch")
   ok(run_op(state, Walk.release, key_name(4, 3)), "the loop's key up ends it")
   h.assert_equal(S.lib.loop_roll.loop(3), nil, "no loop")
   h.assert_true(state.counts.roll_ended_by_page == 1 and state.counts.loop_released_after_switch == 1,

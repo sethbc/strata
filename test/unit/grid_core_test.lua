@@ -1733,6 +1733,16 @@ local function loops(on)
     step_level(0)()
   end
 end
+-- The final review's I1: the loop's held step keeps its gesture across a
+-- replacement, so a further key of the line moves the loop's other end
+local function loop_end_moves(context)
+  local further = 12
+  context.grid.press(KEY.port, further, KEY.y, 1)
+  context.grid.press(KEY.port, further, KEY.y, 0)
+  local lo, hi = local_value("S").lib.loop_roll.loop(KEY.voice)
+  assert_equal(tostring(lo) .. " " .. tostring(hi), KEY.step .. " " .. further, "a further key moves the loop's end")
+  assert_equal(local_value("patterns")[KEY.voice][further], 0, "and toggles nothing")
+end
 local function key_enter(...)
   local steps = {...}
   return function(context)
@@ -1801,7 +1811,7 @@ h.transition_table({
     {"consumed", "hold time", "consumed"},
     {"consumed", "page change", "consumed"},
     {"consumed", "second key", "consumed", check = loops(true)},
-    {"consumed", "pattern replaced", "consumed"},
+    {"consumed", "pattern replaced", "consumed", check = loop_end_moves},
     {"consumed", "unplug", "up"},
     {"editing", "press", "waiting", check = released_toggles(true)},
     {"editing", "release", "up", check = function() editor_closed(); step_level(0)() end},

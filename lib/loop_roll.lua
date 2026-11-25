@@ -59,6 +59,16 @@ return function(S)
     return loop.lo, loop.hi
   end
 
+  -- Whether the voice's loop holds (latched, or its key still held) and
+  -- carries still, the very function set_loop was given (the final
+  -- review's I1: the grid keeps the key's loop gesture across a pattern's
+  -- replacement while this is true)
+  function M.held_by(voice_idx, still)
+    if not valid_voice(voice_idx) then return false end
+    local loop = live(voice_idx)
+    return loop ~= nil and loop.still == still
+  end
+
   -- Whether the voice's latch is armed (its next loop is kept)
   function M.armed(voice_idx)
     return valid_voice(voice_idx) and LOOP.armed[voice_idx] == true
