@@ -30,13 +30,18 @@
 -- clock is pending or retired, no roll lives, no positions record holds a
 -- key, no scan is held, no step editor is open, every running voice's
 -- last seqGate is the rule's, LN tapped and taken through a page change is
--- disarmed, and with the patterns stopped no letter waits. The model reads
--- the rules from docs/notes/lua/grid-core.md and the pages' notes (the
--- lane side, the step view, the perform side, the loop and the roll), not
--- from their code; it reads a lane's values, lengths and the voice's mode
--- as given, and observes only when a pattern was replaced (every
--- whole-pattern change goes through replace_pattern: a scene recall, CL
--- and RN, a paste, a letter's switch), which it wraps and passes on.
+-- disarmed, and with the patterns stopped no letter waits. It also holds
+-- each key's press against the core's still, and at each key event the
+-- cell value, the loop, the length, the mode and the latch the key leaves
+-- against 3b's rules, worked out by hand (VALUES). The model reads the
+-- rules from the notes (docs/notes/lua/grid/walk.md says which, what it
+-- checks and what it does not), not from the code; it reads as given only
+-- what no key of the walk decides (a cell's value before a key acts on it,
+-- a lane's length before LN's key, the voice's length, its mode once a
+-- mode key's press is checked), and observes only
+-- when a pattern was replaced (every whole-pattern change goes through
+-- replace_pattern: a scene recall, CL and RN, a paste, a letter's switch),
+-- which it wraps and passes on.
 -- Run alone: lua test/run.lua grid_walk
 
 return function(h)
@@ -63,6 +68,7 @@ local GRID_WALK = {
   hold_mark = 7,         -- positions side 2: x 7 is the voice's HD key
   buffer_voices = 3,     -- voices 1-3 read buffer slots 1-3 (positions keys act)
   stop_share = 4,        -- the play op stops playing patterns one time in stop_share
+  order_letters = 3,     -- an order op taps one to order_letters letters
   bar_seconds = 2.2,     -- past a bar at 120 BPM (a loop op waits it for a switch under the loop)
   finish_seconds = 1,    -- after the last key up: every retired clock wakes, every stale record ends
 }
@@ -73,9 +79,27 @@ local WALK = GRID_WALK
 -- its lines (line 1 the hits, 2-6 the lanes) and its utility line (LN, B,
 -- the voices from first_voice_x); the voices page's perform side (the roll
 -- keys from first_roll, FL)
-local UTILITY = { line = 7, ln_x = 4, b_x = 9, first_voice_x = 10 }
+local UTILITY = { line = 7, modes = { "pulse", "move", "accent" }, ln_x = 4, first_target_x = 5, targets = 4, b_x = 9,
+  first_voice_x = 10 }
 local LANE_LINES = { "hits", "a", "b", "chance", "repeats", "gate" }
-local PERFORM_KEYS = { first_letter = 3, order = 7, latch = 8, first_roll = 9, rolls = 4, fill = 16 }
+local PERFORM_KEYS = { mute = 1, solo = 2, first_letter = 3, order = 7, latch = 8, first_roll = 9, rolls = 4,
+  first_mode = 13, fill = 16 }
+
+-- 3b's values from a key's place along the keys shown (16, or a 64's 8),
+-- worked out by hand from the patterns page's notes (norns' util.round
+-- rounds halves up), never by the page's code: the level (the hits, value
+-- A and B) max(1, round(place * 15 / keys)); repeats max(1, round(place *
+-- 4 / keys)); chance by level, round(level * 100 / 15). Gate is the
+-- level's place on the voice's gate length spec: the walk knows its two
+-- ends (level 1 its minimum, 15 its maximum) and only a range between.
+-- What a tap gives an empty cell before any value is set on its lane
+-- (gate: the voice's gate length)
+local VALUES = {
+  level = { [16] = { 1, 2, 3, 4, 5, 6, 7, 8, 8, 9, 10, 11, 12, 13, 14, 15 }, [8] = { 2, 4, 6, 8, 9, 11, 13, 15 } },
+  repeats = { [16] = { 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4 }, [8] = { 1, 1, 2, 2, 3, 3, 4, 4 } },
+  chance = { 7, 13, 20, 27, 33, 40, 47, 53, 60, 67, 73, 80, 87, 93, 100 },
+  first = { a = 15, b = 15, chance = 53, repeats = 2 },
+}
 
 -- The arrangements a walk starts on, by layout (h.grid_pane's names)
 local LAYOUT_START = { ["256"] = "256 top", ["128h"] = "128h", ["128v"] = "128v", ["64"] = "64 left" }
@@ -181,7 +205,7 @@ function Model.new(S)
     for step = 1, S.constants.PATTERN_LENGTH do patterns[voice][step] = S.patterns[voice][step] end
   end
   return { entries = {}, patterns = patterns, editor = nil, chooser = false, order = 0, picked = 1, ln = nil,
-    loops = {}, rolls = {} }
+    loops = {}, rolls = {}, last = {} }
 end
 
 -- Whether an entry's press still stands (its key's still): held, its
@@ -198,7 +222,11 @@ function Walk.view(state)
   local editor, layout = state.model.editor, Walk.layout(state)
   if editor == nil or layout == nil then return nil end
   local S, core = state.S, state.core
+  -- while settle ends a changed pane's keys, the pane's page before the
+  -- change: the core reads the view in set_pane before it keeps the new one
+  local before = state.view_pages or {}
   local function lane_side(pane)
+    if before[pane] then return before[pane] == S.constants.GRID_PAGES.patterns .. ":2" end
     return core.page(WALK.port, pane) == S.constants.GRID_PAGES.patterns and core.side(WALK.port, pane) == 2
   end
   local pane = editor.pane and lane_side(editor.pane) and editor.pane
@@ -288,7 +316,7 @@ end
 function Model.forget(state)
   local model = state.model
   for _, entry in pairs(model.entries) do entry.gone = true end
-  model.entries, model.editor, model.chooser, model.picked, model.ln = {}, nil, false, 1, nil
+  model.entries, model.editor, model.chooser, model.picked, model.ln, model.last = {}, nil, false, 1, nil, {}
 end
 
 -- The voice's pattern replaced: its step keys' gestures end, on every
@@ -373,7 +401,9 @@ function Walk.settle(state)
             end
           end
         end
+        state.view_pages = { [pane] = state.pages[pane] }
         Model.end_pane(state, pane)
+        state.view_pages = nil
       end
     end
   end
@@ -400,15 +430,88 @@ function Walk.value_set(state, voice, lane, cell)
   end
 end
 
+-- A lane's value from a key's place (3b's rules, VALUES): {exact = v},
+-- or for gate between its ends {low, high} (both excluded)
+function Walk.lane_value(state, voice, lane, position, keys)
+  local level = VALUES.level[keys][position]
+  if lane == "a" or lane == "b" then return { exact = level } end
+  if lane == "chance" then return { exact = VALUES.chance[level] } end
+  if lane == "repeats" then return { exact = VALUES.repeats[keys][position] } end
+  local spec = params:lookup_param("v" .. voice .. "_seq_gate_length").controlspec
+  if level == 1 then return { exact = spec.minval } end
+  if level == state.S.constants.MAX_STEP_LEVEL then return { exact = spec.maxval } end
+  return { low = spec.minval, high = spec.maxval }
+end
+
+-- Whether a value is the one predicted (nil: none)
+function Walk.value_matches(predicted, value)
+  if predicted == nil then return value == nil end
+  if value == nil then return false end
+  if predicted.exact ~= nil then return math.abs(value - predicted.exact) < 1e-9 end
+  return value > predicted.low and value < predicted.high
+end
+
+function Walk.value_text(predicted)
+  if predicted == nil then return "none" end
+  if predicted.exact ~= nil then return tostring(predicted.exact) end
+  return "between " .. predicted.low .. " and " .. predicted.high
+end
+
+-- A check the press or release being modeled must pass once the core has
+-- it (run by Walk.press and Walk.release after the key event): fn returns
+-- a problem, or nil
+function Walk.expect(state, fn) state.expect[#state.expect + 1] = fn end
+
+function Walk.run_expected(state)
+  for _, fn in ipairs(state.expect) do
+    local problem = fn()
+    if problem then state.problems[#state.problems + 1] = problem end
+  end
+  state.expect = {}
+end
+
+-- The cell's value must be `predicted` after the key event
+function Walk.expect_value(state, voice, cell, lane, predicted, what)
+  Walk.expect(state, function()
+    local value = state.S.lib.sequencer.step_attr(voice, cell, state.S.lib.lanes.STEP_KEYS[lane])
+    if Walk.value_matches(predicted, value) then return nil end
+    return "voice " .. voice .. " cell " .. cell .. " " .. lane .. ": " .. tostring(value) .. " after " .. what
+      .. ", 3b's rules give " .. Walk.value_text(predicted)
+  end)
+end
+
+-- What a tap gives an empty cell: the port's last value set on the lane,
+-- else the lane's first (gate: the voice's gate length)
+function Walk.tap_value(state, voice, lane)
+  return state.model.last[lane] or (VALUES.first[lane] and { exact = VALUES.first[lane] })
+    or { exact = params:get("v" .. voice .. "_seq_gate_length") }
+end
+
 -- A held step's second key, before its hold fired: on side 1 the voice
--- loops (no level), held by the held key; on side 2's line 1 the held
--- step takes the level from the second key's place along the held key's
--- pane, in move value A (an off step on at 15)
+-- loops between the two keys (cut to its length; no level), held by the
+-- held key; on side 2's line 1 the held step takes the level from the
+-- second key's place along the held key's pane, in move value A (an off
+-- step on at 15)
 function Walk.second_effect(state, held, second_step)
   local S, model = state.S, state.model
   if held.second == "loop" then
-    model.loops[held.voice] = held
-    state.counts.loop_made = state.counts.loop_made + 1
+    local voice, length = held.voice, params:get("v" .. held.voice .. "_seq_length")
+    local lo, hi = math.min(held.step, second_step), math.max(held.step, second_step)
+    if lo > length then
+      -- wholly past the length: no loop is made, the voice's stays
+      lo, hi = S.lib.loop_roll.loop(voice)
+    else
+      hi = math.min(hi, length)
+      model.loops[voice] = held
+      held.made_loop = voice
+      state.counts.loop_made = state.counts.loop_made + 1
+    end
+    Walk.expect(state, function()
+      local got_lo, got_hi = S.lib.loop_roll.loop(voice)
+      if got_lo == lo and got_hi == hi then return nil end
+      return "voice " .. voice .. ": the loop " .. tostring(got_lo) .. " to " .. tostring(got_hi) .. " after its second key, "
+        .. "the keys give " .. tostring(lo) .. " to " .. tostring(hi)
+    end)
     return
   end
   local offset, width = Walk.geometry(state, held.pane)
@@ -418,8 +521,9 @@ function Walk.second_effect(state, held, second_step)
   local pattern = model.patterns[held.voice]
   if S.lib.sequencer.step_mode(held.voice) == "move" then
     if pattern[held.step] == 0 then pattern[held.step] = S.constants.MAX_STEP_LEVEL end
+    Walk.expect_value(state, held.voice, held.step, "a", { exact = VALUES.level[width][position] }, "a hits second key")
   else
-    pattern[held.step] = S.lib.grid_core.level_for_position(position, width)
+    pattern[held.step] = VALUES.level[width][position]
   end
 end
 
@@ -450,9 +554,24 @@ function Walk.cell_press(state, entry, voice, lane, x)
     entry.kind, entry.consumed = "cell second", true
     Walk.value_set(state, voice, lane, held.index)
     state.counts.cell_second = state.counts.cell_second + 1
+    -- the held cell takes the value of this key's place along its own pane,
+    -- kept as the port's last for the lane
+    local offset, width = Walk.geometry(state, entry.pane)
+    local predicted = Walk.lane_value(state, voice, lane, x - offset, width)
+    state.model.last[lane] = predicted
+    Walk.expect_value(state, voice, held.index, lane, predicted, "a second key")
   else
     entry.kind, entry.index = "cell", x
   end
+end
+
+-- A mode key: the voice's mode is the key's after its press
+function Walk.expect_mode(state, voice, mode)
+  Walk.expect(state, function()
+    local got = state.S.lib.sequencer.step_mode(voice)
+    if got == mode then return nil end
+    return "voice " .. voice .. ": mode " .. tostring(got) .. " after its " .. mode .. " key"
+  end)
 end
 
 -- The utility line (side 2's line 7), acting at its press: x 4 arms LN on
@@ -460,7 +579,9 @@ end
 -- B change no level)
 function Walk.utility_press(state, entry, x, pane)
   local model = state.model
-  if x == UTILITY.ln_x then
+  if UTILITY.modes[x] then
+    Walk.expect_mode(state, model.picked, UTILITY.modes[x])
+  elseif x == UTILITY.ln_x then
     if model.ln and model.ln.pane == pane then
       model.ln = nil
     else
@@ -469,7 +590,7 @@ function Walk.utility_press(state, entry, x, pane)
     end
   elseif x == UTILITY.b_x then
     entry.b = true
-  elseif x > UTILITY.ln_x and x < UTILITY.b_x then
+  elseif x >= UTILITY.first_target_x and x < UTILITY.first_target_x + UTILITY.targets then
     for _, other in pairs(model.entries) do
       if other.b and other.pane == pane and Model.live(model, other) then
         state.counts.b_target = state.counts.b_target + 1
@@ -491,20 +612,48 @@ function Walk.view_press(state, view, x, y, pane)
   local position, lane = x - offset, LANE_LINES[y]
   if lane == nil then return end
   state.counts.view_bar = state.counts.view_bar + 1
+  local voice, step = view.voice, view.step
   if lane == "hits" then
-    state.model.patterns[view.voice][view.step] = S.lib.grid_core.level_for_position(position, width)
+    state.model.patterns[voice][step] = VALUES.level[width][position]
     return
   end
-  if (lane ~= "a" and lane ~= "b") or S.lib.lanes.length(view.voice, lane) then return end
-  local value = S.lib.sequencer.step_attr(view.voice, view.step, S.lib.lanes.STEP_KEYS[lane])
-  if value ~= nil then
-    local key = width
-    for place = width, 1, -1 do
-      if S.lib.grid_core.level_for_position(place, width) >= value then key = place end
-    end
-    if key == position then return end  -- the value's own key clears the cell
+  local before = S.lib.sequencer.step_attr(voice, step, S.lib.lanes.STEP_KEYS[lane])
+  if S.lib.lanes.length(voice, lane) then  -- a free lane's bar: nothing
+    Walk.expect_value(state, voice, step, lane, before ~= nil and { exact = before } or nil, "a free lane's bar key")
+    return
   end
-  Walk.value_set(state, view.voice, lane, view.step)
+  -- the bar's value (chance: 100 for a set step with no prob) and its
+  -- key, the first place whose value reaches it (gate's: not known)
+  local shown = before
+  if lane == "chance" and shown == nil and state.model.patterns[voice][step] > 0 then shown = 100 end
+  local key
+  if shown ~= nil and lane ~= "gate" then
+    key = width
+    for place = width, 1, -1 do
+      if Walk.lane_value(state, voice, lane, place, width).exact >= shown then key = place end
+    end
+  end
+  local predicted = Walk.lane_value(state, voice, lane, position, width)
+  if key == position then  -- the value's own key clears the cell
+    Walk.expect_value(state, voice, step, lane, nil, "its value key on the step view")
+    return
+  end
+  if lane == "gate" and shown ~= nil then
+    -- the key of a gate value is not known: cleared, or the place's value
+    -- (then the port's last for gate)
+    Walk.expect(state, function()
+      local value = S.lib.sequencer.step_attr(voice, step, S.lib.lanes.STEP_KEYS.gate)
+      if value == nil then return nil end
+      state.model.last.gate = predicted
+      if Walk.value_matches(predicted, value) then return nil end
+      return "voice " .. voice .. " cell " .. step .. " gate: " .. value .. " after a step view bar key, 3b's rules give "
+        .. Walk.value_text(predicted) .. " or none"
+    end)
+    return
+  end
+  state.model.last[lane] = predicted
+  Walk.expect_value(state, voice, step, lane, predicted, "a step view bar key")
+  Walk.value_set(state, voice, lane, step)
 end
 
 -- A key of the patterns page: side 1's step keys (a press picks the
@@ -527,12 +676,23 @@ function Walk.press_patterns(state, entry, where, side)
     Walk.utility_press(state, entry, where.x, where.pane)
     return
   end
+  local lane = LANE_LINES[where.y]
   if model.ln and model.ln.pane == where.pane then
+    -- LN's spent press: line 1 sets the voice's length to x; a lane's
+    -- length is x, or follows again when x is its length already
     entry.consumed, model.ln = true, nil
     state.counts.ln_spent = state.counts.ln_spent + 1
+    local S, voice, x = state.S, model.picked, where.x
+    local expected = x
+    if lane ~= "hits" and S.lib.lanes.length(voice, lane) == x then expected = nil end
+    Walk.expect(state, function()
+      local got = lane == "hits" and params:get("v" .. voice .. "_seq_length") or S.lib.lanes.length(voice, lane)
+      if got == expected then return nil end
+      return "voice " .. voice .. " " .. lane .. ": length " .. tostring(got) .. " after LN's key " .. x .. ", not "
+        .. tostring(expected)
+    end)
     return
   end
-  local lane = LANE_LINES[where.y]
   if lane == "hits" then
     Walk.step_press(state, entry, model.picked, where.x, "hits")
   else
@@ -557,7 +717,36 @@ function Walk.press_perform(state, entry, where)
     entry.fill, entry.perform_fill = true, true
   elseif where.x == PERFORM_KEYS.latch then
     state.counts.latch_pressed = state.counts.latch_pressed + 1
+    Walk.expect_latch(state, where.y)
+  elseif where.x >= PERFORM_KEYS.first_mode and UTILITY.modes[where.x - PERFORM_KEYS.first_mode + 1] then
+    Walk.expect_mode(state, where.y, UTILITY.modes[where.x - PERFORM_KEYS.first_mode + 1])
   end
+end
+
+-- LP (press_latch, docs/notes/lua/loop-roll.md): a latched loop ends with
+-- its latch; a held loop is latched, the same loop; with no loop the latch
+-- is armed, or disarmed if it was
+function Walk.expect_latch(state, voice)
+  local roll = state.S.lib.loop_roll
+  local lo, hi = roll.loop(voice)
+  local latched, armed = roll.latched(voice), roll.armed(voice)
+  if lo and not latched then state.counts.latch_held = state.counts.latch_held + 1 end
+  Walk.expect(state, function()
+    local got_lo, got_hi = roll.loop(voice)
+    local now = "loop " .. tostring(got_lo) .. " to " .. tostring(got_hi) .. ", latched " .. tostring(roll.latched(voice))
+      .. ", armed " .. tostring(roll.armed(voice))
+    local right
+    if lo and latched then
+      right = got_lo == nil and not roll.latched(voice) and not roll.armed(voice)
+    elseif lo then
+      right = got_lo == lo and got_hi == hi and roll.latched(voice)
+    else
+      right = got_lo == nil and roll.armed(voice) == not armed
+    end
+    if right then return nil end
+    return "voice " .. voice .. ": LP left " .. now .. " (before: loop " .. tostring(lo) .. " to " .. tostring(hi)
+      .. ", latched " .. tostring(latched) .. ", armed " .. tostring(armed) .. ")"
+  end)
 end
 
 -- A press of physical key (px, py)
@@ -581,6 +770,7 @@ function Walk.press(state, px, py)
     model.entries[name] = nil
   end
   model.order = model.order + 1
+  state.expect = {}
   local entry = { name = name, px = px, py = py, kind = "other", order = model.order,
     pane = where and not where.strip and where.pane }
   local _, layout_kind = Walk.layout(state)
@@ -603,6 +793,9 @@ function Walk.press(state, px, py)
   end
   model.entries[name] = entry
   state.context.grid.press(WALK.port, px, py, 1)
+  -- the press's own still, which compare holds against the model's `gone`
+  entry.still = core.still(WALK.port, px, py)
+  Walk.run_expected(state)
 end
 
 -- A release's model: a held step toggles, a held cell taps (a value
@@ -641,37 +834,54 @@ function Walk.release(state, name)
   local S, model, core = state.S, state.model, state.core
   local entry = model.entries[name]
   local _, layout_kind = Walk.layout(state)
-  local loop_voice
+  local loop_voice, loop_live
+  state.expect = {}
+  -- every latched loop, which no key's release ends
+  local latched = {}
+  for voice = 1, S.constants.NUM_VOICES do
+    if S.lib.loop_roll.latched(voice) then latched[voice] = { S.lib.loop_roll.loop(voice) } end
+  end
   if entry then
     if layout_kind == "64" and entry.pane and model.chooser then
       state.counts.release_under_chooser = state.counts.release_under_chooser + 1
     end
     if model.loops[entry.voice] == entry and not entry.gone then
       model.loops[entry.voice] = nil
-      if not S.lib.loop_roll.latched(entry.voice) then loop_voice = entry.voice end
+      if not S.lib.loop_roll.latched(entry.voice) then
+        loop_voice, loop_live = entry.voice, S.lib.loop_roll.loop(entry.voice) ~= nil
+      end
+    end
+    -- a lane cell's value: a tap clears it, or gives an empty one the
+    -- port's last value for the lane (else its first); a cell its second
+    -- key consumed, or its pane's change ended, keeps it
+    if entry.kind == "cell" then
+      local before = S.lib.sequencer.step_attr(entry.voice, entry.index, S.lib.lanes.STEP_KEYS[entry.lane])
+      local predicted = before ~= nil and { exact = before } or nil
+      if not entry.consumed and not entry.dropped then
+        predicted = before == nil and Walk.tap_value(state, entry.voice, entry.lane) or nil
+      end
+      Walk.expect_value(state, entry.voice, entry.index, entry.lane, predicted, "its cell key's release")
     end
     Walk.release_model(state, entry)
   end
-  -- a lane cell's value: a tap clears it or gives one; a cell its second
-  -- key consumed, or its pane's change ended, keeps it
-  local cell = entry and entry.kind == "cell" and { voice = entry.voice, index = entry.index,
-    key = S.lib.lanes.STEP_KEYS[entry.lane], tapped = not entry.consumed and not entry.dropped }
-  if cell then cell.before = S.lib.sequencer.step_attr(cell.voice, cell.index, cell.key) end
   state.context.grid.press(WALK.port, finger.px, finger.py, 0)
   if core.hold_pending(WALK.port, finger.px, finger.py) then
     state.problems[#state.problems + 1] = "key " .. name .. ": released and its hold still waits"
   end
-  if cell then
-    local after = S.lib.sequencer.step_attr(cell.voice, cell.index, cell.key)
-    local right = (cell.tapped and (cell.before == nil) == (after ~= nil)) or (not cell.tapped and after == cell.before)
-    if not right then
-      state.problems[#state.problems + 1] = "voice " .. cell.voice .. " cell " .. cell.index .. " " .. cell.key .. ": "
-        .. tostring(cell.before) .. " to " .. tostring(after) .. " at its key's release, "
-        .. (cell.tapped and "a tap" or "no tap")
+  Walk.run_expected(state)
+  for voice, bounds in pairs(latched) do
+    local lo, hi = S.lib.loop_roll.loop(voice)
+    if lo ~= bounds[1] or hi ~= bounds[2] or not S.lib.loop_roll.latched(voice) then
+      state.problems[#state.problems + 1] = "voice " .. voice .. ": its latched loop " .. tostring(bounds[1]) .. " to "
+        .. tostring(bounds[2]) .. " is " .. tostring(lo) .. " to " .. tostring(hi) .. " after key " .. name .. "'s release"
+    elseif entry and entry.made_loop == voice then
+      state.counts.latched_loop_released = state.counts.latched_loop_released + 1
     end
   end
   if loop_voice then
-    if entry.switched then state.counts.loop_released_after_switch = state.counts.loop_released_after_switch + 1 end
+    if entry.switched and loop_live then
+      state.counts.loop_released_after_switch = state.counts.loop_released_after_switch + 1
+    end
     if S.lib.loop_roll.loop(loop_voice) and not S.lib.loop_roll.latched(loop_voice) then
       state.problems[#state.problems + 1] = "voice " .. loop_voice .. ": its unlatched loop outlived its key " .. name
     end
@@ -916,6 +1126,16 @@ function Walk.compare(state)
     end
   end
   Walk.settle_view(state)
+  -- each held key's press: ended (the core's still false) exactly where
+  -- the model's `gone` says (a pane's end, the step view's start or end)
+  for name, entry in pairs(model.entries) do
+    if entry.still and entry.still() == (entry.gone == true) then
+      problems[#problems + 1] = "key " .. name .. ": its press's still is " .. tostring(entry.still())
+        .. ", the model's press " .. (entry.gone and "ended" or "standing")
+    elseif entry.gone then
+      state.counts.press_ended = state.counts.press_ended + 1
+    end
+  end
   local expected = model.editor and (model.editor.voice .. " " .. model.editor.step .. " " .. WALK.port) or "none"
   local shown = editor and (editor.voice .. " " .. editor.step .. " " .. editor.port) or "none"
   if expected ~= shown then problems[#problems + 1] = "step editor: expected " .. expected .. ", open " .. shown end
@@ -1094,8 +1314,8 @@ local SIDE_KEYS = {
   lanes = { { 4, nil, 1 }, { 3, nil, "lane" }, { 2, UTILITY.ln_x, UTILITY.line }, { 1, UTILITY.b_x, UTILITY.line },
     { 1, "target", UTILITY.line }, { 1, "voice", UTILITY.line }, { 1, "mode", UTILITY.line } },
   -- the perform side: the letters, OR, the rolls, FL, LP, the modes, MU/SO
-  perform = { { 3, "letter" }, { 2, 7 }, { 3, "roll" }, { 1, PERFORM_KEYS.fill }, { 1, 8 }, { 1, "mode" },
-    { 1, "mute" } },
+  perform = { { 3, "letter" }, { 2, PERFORM_KEYS.order }, { 3, "roll" }, { 1, PERFORM_KEYS.fill },
+    { 1, PERFORM_KEYS.latch }, { 1, "mode" }, { 1, "mute" } },
 }
 
 function Walk.weighted(list, random)
@@ -1125,10 +1345,10 @@ function Walk.side_key_place(state, random, page, pane)
   local S = state.S
   if page == S.constants.GRID_PAGES.voices then
     local x = Walk.weighted(SIDE_KEYS.perform, random)[2]
-    if x == "letter" then x = 2 + random(4)
+    if x == "letter" then x = PERFORM_KEYS.first_letter - 1 + random(#S.lib.pattern_letters.LETTERS)
     elseif x == "roll" then x = PERFORM_KEYS.first_roll - 1 + random(PERFORM_KEYS.rolls)
-    elseif x == "mode" then x = 12 + random(3)
-    elseif x == "mute" then x = random(2) end
+    elseif x == "mode" then x = PERFORM_KEYS.first_mode - 1 + random(#UTILITY.modes)
+    elseif x == "mute" then x = random(2) == 1 and PERFORM_KEYS.mute or PERFORM_KEYS.solo end
     return x, random(S.constants.NUM_VOICES)
   end
   local view = Walk.view(state)
@@ -1137,9 +1357,9 @@ function Walk.side_key_place(state, random, page, pane)
   local x, y = item[2], item[3]
   if y == "lane" then y = 1 + random(#LANE_LINES - 1) end
   if x == nil then x = random(S.lib.grid_pane.LINE_KEYS)
-  elseif x == "target" then x = UTILITY.ln_x + random(4)
+  elseif x == "target" then x = UTILITY.first_target_x - 1 + random(UTILITY.targets)
   elseif x == "voice" then x = UTILITY.first_voice_x - 1 + random(S.constants.NUM_VOICES)
-  elseif x == "mode" then x = random(3) end
+  elseif x == "mode" then x = random(#UTILITY.modes) end
   return x, y
 end
 
@@ -1157,6 +1377,12 @@ OPS.side_key = { 4, "a new side's key", function(state, random)
     Walk.before(state)
   end
   local x, y = Walk.side_key_place(state, random, page, pane)
+  -- LN armed here: one lane key in two at the lane's length (it follows
+  -- again)
+  local lane = page == pages.patterns and LANE_LINES[y]
+  if lane and lane ~= "hits" and state.model.ln and state.model.ln.pane == pane and random(2) == 1 then
+    x = S.lib.lanes.length(state.model.picked, lane) or x
+  end
   local px, py = Walk.shown_key(state, pane, x, y)
   -- (a 64's half change ends the pane's keys before the press)
   Walk.settle(state)
@@ -1175,17 +1401,68 @@ OPS.side_key = { 4, "a new side's key", function(state, random)
       Walk.press(state, sx, sy)
       Walk.release(state, key_name(sx, sy))
     end
-  elseif state.model.ln and state.model.ln.pane == pane and how == 1 then
-    -- LN just armed, then its pane's side changed (LN disarms)
-    Walk.release(state, key_name(px, py))
-    core.set_page(WALK.port, pages.patterns, pane, 1)
+    -- a cell's: both let go, then another cell of the line tapped (an
+    -- empty one takes the value the second key set)
+    if entry.kind == "cell" then
+      Walk.release(state, key_name(px, py))
+      local tx, ty = S.lib.grid_pane.physical(layout, pane, offset + random(width), y, Walk.half(state, pane))
+      if tx and not state.fingers[key_name(tx, ty)] then
+        Walk.press(state, tx, ty)
+        Walk.release(state, key_name(tx, ty))
+      end
+    end
   elseif entry and entry.b then
     -- B held, then a target (not shown with B on a 64's half), B left down
-    local tx, ty = S.lib.grid_pane.physical(layout, pane, UTILITY.ln_x + random(4), UTILITY.line, Walk.half(state, pane))
+    local target_x = UTILITY.first_target_x - 1 + random(UTILITY.targets)
+    local tx, ty = S.lib.grid_pane.physical(layout, pane, target_x, UTILITY.line, Walk.half(state, pane))
     if tx and not state.fingers[key_name(tx, ty)] then
       Walk.press(state, tx, ty)
       Walk.release(state, key_name(tx, ty))
     end
+  end
+end }
+
+-- LN on purpose: the lane side shown, LN tapped (armed), then one of: a
+-- lane's key (spent: at a lane's length one time in two, which then
+-- follows again, else anywhere on a lane's line), a side change (LN
+-- disarms), a 64's half change (LN stays armed), or nothing
+OPS.ln = { 1, "LN", function(state, random)
+  local layout, kind = Walk.layout(state)
+  if layout == nil or state.model.chooser then return end
+  local S, core = state.S, state.core
+  local pane = random(layout.panes)
+  if core.page(WALK.port, pane) ~= S.constants.GRID_PAGES.patterns or core.side(WALK.port, pane) ~= 2 then
+    core.set_page(WALK.port, S.constants.GRID_PAGES.patterns, pane, 2)
+  end
+  local px, py = Walk.shown_key(state, pane, UTILITY.ln_x, UTILITY.line)
+  Walk.settle(state)
+  Walk.before(state)
+  if px == nil or state.fingers[key_name(px, py)] or Walk.view(state) then return end
+  if state.model.ln and state.model.ln.pane == pane then  -- armed already: the tap disarms, then arms again
+    Walk.press(state, px, py)
+    Walk.release(state, key_name(px, py))
+  end
+  Walk.press(state, px, py)
+  Walk.release(state, key_name(px, py))
+  local how = random(4)
+  if how == 1 then
+    local offset, width = Walk.geometry(state, pane)
+    local line, at = 1 + random(#LANE_LINES - 1), nil
+    if random(2) == 1 then
+      for lane_line = 2, #LANE_LINES do
+        local length = S.lib.lanes.length(state.model.picked, LANE_LINES[lane_line])
+        if length and length > offset and length <= offset + width then line, at = lane_line, length end
+      end
+    end
+    local lx, ly = S.lib.grid_pane.physical(layout, pane, at or offset + random(width), line, Walk.half(state, pane))
+    if lx and not state.fingers[key_name(lx, ly)] then
+      Walk.press(state, lx, ly)
+      Walk.release(state, key_name(lx, ly))
+    end
+  elseif how == 2 then
+    core.set_page(WALK.port, S.constants.GRID_PAGES.patterns, pane, 1)
+  elseif how == 3 and kind == "64" then
+    core.set_half(WALK.port, pane, 3 - Walk.half(state, pane))
   end
 end }
 
@@ -1330,12 +1607,40 @@ OPS.loop = { 1, "a loop", function(state, random)
   if layout == nil or state.model.chooser then return end
   local S, core = state.S, state.core
   local pane = random(layout.panes)
-  if core.page(WALK.port, pane) ~= S.constants.GRID_PAGES.patterns or core.side(WALK.port, pane) ~= 1 then
-    core.set_page(WALK.port, S.constants.GRID_PAGES.patterns, pane, 1)
-  end
   local voice = random(S.constants.NUM_VOICES)
   for candidate = 1, S.constants.NUM_VOICES do
     if select(2, S.lib.pattern_letters.order(candidate)) or S.lib.pattern_letters.waiting(candidate) then voice = candidate end
+  end
+  -- how the loop goes on (when its voice will not switch at the bar): 1,
+  -- the latch armed first (LP on the perform side), so the loop is
+  -- latched at once and its key let go (it stays); 2, on a 256, LP on the
+  -- other pane latches the held loop and one time in two its key goes; 3,
+  -- the key left down; 4, with the patterns playing, a letter of the
+  -- voice tapped first on the perform side (it waits for the bar)
+  local how = random(4)
+  if how == 4 and S.pattern_playing then
+    core.set_page(WALK.port, S.constants.GRID_PAGES.voices, pane, 2)
+    local letter_x = PERFORM_KEYS.first_letter - 1 + random(#S.lib.pattern_letters.LETTERS)
+    local tx, ty = Walk.shown_key(state, pane, letter_x, voice)
+    Walk.settle(state)
+    Walk.before(state)
+    if tx and not state.fingers[key_name(tx, ty)] then
+      Walk.press(state, tx, ty)
+      Walk.release(state, key_name(tx, ty))
+    end
+  end
+  if how == 1 and not S.lib.loop_roll.loop(voice) and not S.lib.loop_roll.armed(voice) then
+    core.set_page(WALK.port, S.constants.GRID_PAGES.voices, pane, 2)
+    local lx, ly = Walk.shown_key(state, pane, PERFORM_KEYS.latch, voice)
+    Walk.settle(state)
+    Walk.before(state)
+    if lx and not state.fingers[key_name(lx, ly)] then
+      Walk.press(state, lx, ly)
+      Walk.release(state, key_name(lx, ly))
+    end
+  end
+  if core.page(WALK.port, pane) ~= S.constants.GRID_PAGES.patterns or core.side(WALK.port, pane) ~= 1 then
+    core.set_page(WALK.port, S.constants.GRID_PAGES.patterns, pane, 1)
   end
   local offset, width = Walk.geometry(state, pane)
   local first, second = offset + random(width), offset + random(width)
@@ -1355,6 +1660,21 @@ OPS.loop = { 1, "a loop", function(state, random)
   if S.pattern_playing and (select(2, letters.order(voice)) or letters.waiting(voice)) then
     Walk.clock(state, WALK.bar_seconds)
     if state.fingers[key_name(px, py)] then Walk.release(state, key_name(px, py)) end
+  elseif how == 1 and S.lib.loop_roll.latched(voice) then
+    Walk.release(state, key_name(px, py))  -- a latched loop's key let go: the loop stays
+  elseif how == 2 and layout.panes == 2 then
+    local other = 3 - pane
+    if core.page(WALK.port, other) ~= S.constants.GRID_PAGES.voices or core.side(WALK.port, other) ~= 2 then
+      core.set_page(WALK.port, S.constants.GRID_PAGES.voices, other, 2)
+    end
+    Walk.settle(state)
+    Walk.before(state)
+    local lx, ly = S.lib.grid_pane.physical(layout, other, PERFORM_KEYS.latch, voice, 1)
+    if lx and not state.fingers[key_name(lx, ly)] then
+      Walk.press(state, lx, ly)
+      Walk.release(state, key_name(lx, ly))
+    end
+    if random(2) == 1 and state.fingers[key_name(px, py)] then Walk.release(state, key_name(px, py)) end
   end
 end }
 
@@ -1392,8 +1712,8 @@ OPS.order = { 1, "an order", function(state, random)
   Walk.before(state)
   if px == nil or state.fingers[key_name(px, py)] then return end
   Walk.press(state, px, py)
-  for _ = 1, random(3) do
-    local lx, ly = S.lib.grid_pane.physical(layout, pane, PERFORM_KEYS.first_letter - 1 + random(4), voice,
+  for _ = 1, random(WALK.order_letters) do
+    local lx, ly = S.lib.grid_pane.physical(layout, pane, PERFORM_KEYS.first_letter - 1 + random(#S.lib.pattern_letters.LETTERS), voice,
       Walk.half(state, pane))
     if lx and not state.fingers[key_name(lx, ly)] then
       Walk.press(state, lx, ly)
@@ -1405,7 +1725,7 @@ end }
 
 local function ops_for(layout)
   local list = { OPS.key_down, OPS.key_up, OPS.clock, OPS.page, OPS.replace, OPS.plug, OPS.rotation, OPS.k2,
-    OPS.side_key, OPS.second, OPS.play, OPS.tap_fewest, OPS.order, OPS.loop, OPS.hd, OPS.two_rolls, OPS.view }
+    OPS.side_key, OPS.second, OPS.play, OPS.tap_fewest, OPS.order, OPS.loop, OPS.hd, OPS.two_rolls, OPS.view, OPS.ln }
   if layout == "64" then list[#list + 1] = OPS.chooser end
   local wrapped = {}
   for _, op in ipairs(list) do
@@ -1525,7 +1845,8 @@ local COUNTERS = { "hold_fired", "hold_ended_by_page", "release_under_chooser", 
   "tied", "lane_side_key", "perform_key", "hits_second", "cell_tap", "cell_second", "ln_armed", "ln_spent",
   "ln_disarmed_by_page", "view_opened", "view_other_pane_held", "view_bar", "k2_closed", "loop_made",
   "loop_released_after_switch", "roll_pressed", "roll_ended_by_page", "order_bar", "pulse_opened",
-  "editor_without_view", "b_target", "latch_pressed", "roll_replaced", "roll_earlier_released" }
+  "editor_without_view", "b_target", "latch_pressed", "latch_held", "latched_loop_released", "roll_replaced",
+  "roll_earlier_released", "press_ended" }
 
 -- The walk's state on a fresh script with a grid of the layout, every
 -- pattern step as `fill` says (a function of voice and step), and every
@@ -1842,9 +2163,14 @@ for _, layout in ipairs({ "256", "128h", "128v", "64" }) do
     "hold_key_released", "page_unplugged", "rotation_unplugged", "lane_side_key", "perform_key", "hits_second",
     "cell_tap", "cell_second", "ln_armed", "ln_spent", "ln_disarmed_by_page", "view_opened", "view_bar", "k2_closed",
     "loop_made", "loop_released_after_switch", "roll_pressed", "roll_ended_by_page", "order_bar", "pulse_opened",
-    "editor_without_view", "latch_pressed", "roll_replaced", "roll_earlier_released" }
-  -- a step view opened with a key held on another pane: the 256's two panes
-  if layout == "256" then reached[#reached + 1] = "view_other_pane_held" end
+    "editor_without_view", "latch_pressed", "latched_loop_released", "roll_replaced", "roll_earlier_released",
+    "press_ended" }
+  -- a step view opened with a key held on another pane, and LP latching a
+  -- held loop (its key on the other pane): the 256's two panes
+  if layout == "256" then
+    reached[#reached + 1] = "view_other_pane_held"
+    reached[#reached + 1] = "latch_held"
+  end
   -- a target with B held: the 64 never shows them together
   if layout ~= "64" then reached[#reached + 1] = "b_target" end
   -- the 64 has the chooser and no fill key; the other layouts the reverse
