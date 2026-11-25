@@ -303,10 +303,10 @@ test("the block refuses a slot with a level of 16 or an unknown step key", funct
   refused(function() block[1].order_on = 1 end, function() block[1].order_on = false end, "order_on not a boolean")
   refused(function() block[1].slots.A = nil; block[1].slots.C = "x" end,
     function() block[1].slots.C = nil; block[1].slots.A = slot end, "a slot not a table")
-  refused(function() block[8] = block[2] end, function() block[8] = nil end, "an eighth voice")
-  local voice_7 = block[h.voice_count()]
-  refused(function() block[h.voice_count()] = nil end, function() block[h.voice_count()] = voice_7 end,
-    "a voice missing")
+  local past, last = h.voice_count() + 1, h.voice_count()
+  refused(function() block[past] = block[2] end, function() block[past] = nil end, "a voice past the last")
+  local last_voice = block[last]
+  refused(function() block[last] = nil end, function() block[last] = last_voice end, "a voice missing")
   refused(function() block[1].shape = 1 end, function() block[1].shape = nil end, "an unknown voice key")
 end)
 

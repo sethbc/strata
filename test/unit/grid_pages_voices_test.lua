@@ -728,7 +728,7 @@ test("the signature follows the lock and the copies", function()
     local signature = record.signature(fake)
     for _, change in ipairs({
       function() toggle_lock(1) end,
-      function() fake.state().patterns = {voice = 1, steps = {}} end,
+      function() fake.state().patterns = {voice = 1, pattern = S.lib.sequencer.whole(1)} end,
       function() fake.state().sound = {voice = 1} end,
     }) do
       change()
