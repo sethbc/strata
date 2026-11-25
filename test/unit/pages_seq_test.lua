@@ -752,10 +752,11 @@ test("SEQ's layout states count a full chord as the sequencer's most notes", fun
   for _, state in ipairs(S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states) do
     if state.name:find("edit view eight notes rows", 1, true) then seen = seen + 1 end
   end
-  -- 3 section labels + 11 voice + 6 step + 8 notes + 3 locks + bookmark + 8
+  -- 3 section labels + 20 voice + 8 step + 8 notes + 3 locks + bookmark + 8
   -- chain rows (3.7: direction, misstep, fill, cond, slice, next, prev,
-  -- random), five to a window: the states' step is a buffer voice's
-  local rows = 3 + 11 + 6 + S.lib.sequencer.SEQ.max_step_notes + 3 + 1 + 8
+  -- random; 3.9's 6a: floor, move A and B, five lane lengths and the letter,
+  -- val A and val B), five to a window: the states' step is a buffer voice's
+  local rows = 3 + 20 + 8 + S.lib.sequencer.SEQ.max_step_notes + 3 + 1 + 8
   assert_equal(seen, math.ceil(rows / 5), "a window for every row of an eight-note step")
 end)
 
@@ -933,9 +934,10 @@ test("the bookmark row shows only when the voice has a set bookmark", function()
   assert_true(not synth:find("bookmark", 1, true), "a synth voice has no bookmark row: " .. synth)
   S.buffers[1].seconds = 8
   params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
-  assert_equal(row_labels(context), "length division swing mode gate len gate rel direction misstep fill euclid "
-    .. "clear level prob ratchet gate cond slice note pos pitch size bookmark chain from scenes bars next prev random "
-    .. "quantize", "every row, in order (3.7: slice after cond, on a buffer voice)")
+  assert_equal(row_labels(context), "length division swing mode floor move A move B len A len B len chance "
+    .. "len repeats len gate letter gate len gate rel direction misstep fill euclid "
+    .. "clear level val A val B prob ratchet gate cond slice note pos pitch size bookmark chain from scenes bars next "
+    .. "prev random quantize", "every row, in order (3.7: slice after cond, on a buffer voice; 3.9's 6a rows)")
   S.buffers[1].seconds = 0
   assert_true(not row_labels(context):find("bookmark", 1, true), "an empty slot has none")
   assert_true(row_labels(context):find("cond slice note", 1, true) ~= nil, "a buffer voice keeps its slice row")
@@ -963,7 +965,9 @@ test("every edit view row lays out with the cursor on it, on voices 1 and 7, wit
         assert_screen_layout(context, where .. ", ALT")
         key(1, 0); context.screen.clear(); redraw()
       end)
-      assert_equal(rows, bookmarks and 30 or 28, "every row visited (a buffer voice's bookmark and slice rows)")
+      -- 3.9's 6a: eleven more (floor, move A and B, five lane lengths, the
+      -- letter, val A and val B)
+      assert_equal(rows, bookmarks and 41 or 39, "every row visited (a buffer voice's bookmark and slice rows)")
     end
   end
 end)
@@ -1136,6 +1140,208 @@ test("SEQ's mode row turns through the four modes and the pattern view marks eac
   end
 end)
 
+-- 3.9's grid sequencer, package 6a (design section 5): the voice rows after
+-- mode (floor, move A and B, a length for each of the five lanes, the
+-- letter) and the step rows after level (val A, val B)
+test("SEQ's new rows show their values at their ends", function()
+  local context, S = started_on_seq()
+  open_edit_view(context)
+  local labels = row_labels(context)
+  assert_true(labels:find("mode floor move A move B len A len B len chance len repeats len gate letter gate len",
+    1, true) ~= nil, "the voice rows after mode: " .. labels)
+  assert_true(labels:find("level val A val B prob", 1, true) ~= nil, "the step rows after level: " .. labels)
+  assert_equal(go_to(context, "floor"), "0.00", "the floor at 0")
+  enc(3, 200); assert_equal(params:get("v1_seq_gate_floor"), 1); assert_equal(shown(context), "1.00", "and at 1")
+  params:set("v1_seq_gate_floor", 0.25); assert_equal(shown(context), "0.25")
+  assert_equal(go_to(context, "move A"), "auto", "A's first option")
+  enc(3, 10); assert_equal(shown(context), "cutoff", "and its last")
+  enc(3, -10); assert_equal(shown(context), "auto")
+  assert_equal(go_to(context, "move B"), "off", "B's first option")
+  enc(3, 1); assert_equal(shown(context), "position")
+  enc(3, 10); assert_equal(shown(context), "cutoff", "and its last")
+  for _, label in ipairs({"len A", "len B", "len chance", "len repeats", "len gate"}) do
+    assert_equal(go_to(context, label), "-", label .. " follows")
+    enc(3, 1); assert_equal(shown(context), "1", label .. " at 1")
+    enc(3, 40); assert_equal(shown(context), "16", label .. " at 16")
+  end
+  assert_equal(S.lib.lanes.length(1, "chance"), 16, "the row sets the lane's length")
+  assert_equal(go_to(context, "letter"), "A", "the first letter")
+  enc(3, 10); assert_equal(shown(context), "D", "and the last")
+  assert_equal(S.lib.pattern_letters.current(1), "D", "stopped, the letter switches at once")
+  enc(3, -10); assert_equal(shown(context), "A")
+  for _, label in ipairs({"val A", "val B"}) do
+    assert_equal(go_to(context, label), "-", label .. ": none")
+    enc(3, 1); assert_equal(shown(context), "1", label .. " at 1")
+    enc(3, 40); assert_equal(shown(context), "15", label .. " at 15")
+  end
+  assert_equal(S.lib.sequencer.step_attr(1, 1, "vb"), 15)
+  assert_screen_layout(context, "SEQ's edit view on val B")
+end)
+
+test("len A turned below 1 follows", function()
+  local context, S = started_on_seq()
+  open_edit_view(context)
+  go_to(context, "len A")
+  enc(3, 3); assert_equal(S.lib.lanes.length(1, "a"), 3, "a turn up from following frees it")
+  enc(3, -10); assert_equal(S.lib.lanes.length(1, "a"), 1, "a turn below 1 lands on 1 first")
+  enc(3, -1); assert_equal(S.lib.lanes.length(1, "a"), nil, "and below 1 follows")
+  assert_equal(shown(context), "-")
+  enc(3, -1); assert_equal(S.lib.lanes.length(1, "a"), nil, "nothing below following")
+  S.lib.lanes.set_length(1, "gate", 7)
+  go_to(context, "len gate"); assert_equal(shown(context), "7")
+  context.screen.clear(); redraw()
+  -- the hint names a lane's length in a form that fits whole ("E3:len
+  -- repeats" would be cut at the row's end)
+  assert_equal(hint_text(context), "K2:back K3:step E3:lane len")
+  go_to(context, "len repeats")
+  context.screen.clear(); redraw()
+  assert_equal(hint_text(context), "K2:back K3:step E3:lane len")
+  go_to(context, "len gate")
+  alt_k2_hold(context)
+  assert_equal(S.lib.lanes.length(1, "gate"), nil, "the held reset makes the lane follow")
+  assert_equal(shown(context), "-")
+end)
+
+test("val A writes va and its reset clears it", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  S.cursors.seq_step = 4
+  open_edit_view(context)
+  go_to(context, "val A")
+  enc(3, 9)
+  assert_equal(seq.step_attr(1, 4, "va"), 9, "E3 writes the step's value A")
+  assert_equal(shown(context), "9")
+  assert_equal(seq.step_attr(1, 4, "vb"), nil, "and leaves value B")
+  assert_true(S.lib.pages_seq.turn_step(1, 4, "va", -8), "turn_step turns it")
+  assert_equal(seq.step_attr(1, 4, "va"), 1)
+  assert_true(S.lib.pages_seq.turn_step(1, 4, "va", -1), "below 1 it is none")
+  assert_equal(seq.step_attr(1, 4, "va"), nil)
+  assert_true(not S.lib.pages_seq.turn_step(1, 4, "va", -1), "nothing below none")
+  enc(3, 6)
+  key(1, 1); key(2, 1)
+  context.clock.run_for(S.constants.ALT_HOLD_SECONDS + 0.05)
+  context.screen.clear(); redraw()
+  assert_true(hint_text(context):find("K2:reset", 1, true) ~= nil, "the row resets: " .. hint_text(context))
+  key(2, 0); key(1, 0)
+  assert_equal(seq.step_attr(1, 4, "va"), nil, "the held reset clears it")
+  assert_equal(shown(context), "-")
+  assert_equal(S.pattern_steps[1][4], nil, "and the step holds nothing")
+end)
+
+test("the mode row turned to move gives the set steps values", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  seq.set_level(1, 3, 9); seq.set_level(1, 7, 4); seq.set_level(1, 12, 15)
+  seq.set_step_attr(1, 12, "va", 6)
+  open_edit_view(context)
+  assert_equal(go_to(context, "mode"), "pulse")
+  enc(3, -1)
+  assert_equal(seq.step_mode(1), "move", "E3 chooses move")
+  for _, step in ipairs({3, 7}) do
+    local value = seq.step_attr(1, step, "va")
+    assert_true(type(value) == "number" and value >= 1 and value <= 15, "set step " .. step .. " has a value A")
+  end
+  assert_equal(seq.step_attr(1, 12, "va"), 6, "a step with a value A keeps it")
+  assert_equal(seq.step_attr(1, 5, "va"), nil, "an empty step gets none")
+  enc(3, -10); assert_equal(seq.step_mode(1), "accent", "the first mode")
+  seq.set_level(1, 5, 8)
+  enc(3, -1); assert_equal(seq.step_attr(1, 5, "va"), nil, "a turn at the end chooses nothing")
+  -- move A turned to cutoff opens a closed filter, as the grid's key does
+  params:set("v1_filter_mix", 0)
+  go_to(context, "move A"); enc(3, 4)
+  assert_equal(S.lib.lanes.target(1, "a"), "cutoff")
+  assert_equal(params:get("v1_filter_mix"), 1, "the hand's choice of cutoff opens the filter")
+end)
+
+test("letter waits on the bar and shows it", function()
+  local context, S = started_on_seq()
+  local letters = S.lib.pattern_letters
+  open_edit_view(context)
+  go_to(context, "letter")
+  pattern_toggle()
+  enc(3, 1)
+  assert_equal(letters.current(1), "A", "while the patterns play the letter waits")
+  assert_equal(letters.waiting(1), "B")
+  assert_equal(shown(context), "A>B", "the row shows the letter waiting")
+  enc(3, 1); assert_equal(letters.waiting(1), "C", "a further turn moves the wait")
+  assert_equal(shown(context), "A>C")
+  enc(3, -2); assert_equal(letters.waiting(1), nil, "back to the playing letter: nothing waits")
+  assert_equal(shown(context), "A")
+  enc(3, 1)
+  context.clock.run_for(2.1)  -- a bar at 120 BPM
+  assert_equal(letters.current(1), "B", "the bar switches it")
+  assert_equal(shown(context), "B")
+  letters.set_order(1, {"A", "A", "B", "A"})
+  assert_equal(shown(context), "B AABA", "the order after the letter while it is on")
+  enc(3, 1)
+  local _, on = letters.order(1)
+  assert_true(not on, "a switch by hand turns the order off")
+  assert_equal(shown(context), "B>C")
+  pattern_toggle()
+  assert_equal(shown(context), "B", "a stop ends the wait")
+end)
+
+-- Design section 3: a switch ends the step editor "unless the switch is its
+-- own" (run_replacement, ruling 71): the editor's letter row switching now
+-- keeps it open on its grid key; a switch from elsewhere closes it
+test("the step editor's own letter switch keeps it open", function()
+  local context, S = started_on_seq()
+  context.grid.plug(1, 16, 16)
+  context.grid.press(1, 5, 3, 1); context.clock.run_for(0.35)
+  local editor = S.lib.pages_seq.step_editor()
+  assert_true(editor ~= nil and editor.voice == 3 and editor.step == 5, "the grid key opened voice 3's step 5")
+  go_to(context, "letter")
+  enc(3, 1)
+  assert_equal(S.lib.pattern_letters.current(3), "B", "stopped, the editor's row switches at once")
+  assert_true(S.lib.pages_seq.step_editor() ~= nil, "and the editor stays open")
+  assert_equal(shown(context), "B")
+  S.lib.pattern_letters.switch(3, "C")
+  assert_equal(S.lib.pages_seq.step_editor(), nil, "a switch from elsewhere closes it")
+  context.grid.press(1, 5, 3, 0)
+end)
+
+-- Every new row at its widest in the layout states (the layout tests draw
+-- them: ui_layout_pages_1_test.lua)
+test("SEQ's layout states draw every new row at its widest", function()
+  local _, S = started_on_seq()
+  local states = S.registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states
+  local want = {floor = "0.25", ["move A"] = "position", ["move B"] = "position", ["len A"] = "16",
+    ["len B"] = "16", ["len chance"] = "16", ["len repeats"] = "16", ["len gate"] = "16",
+    letter = "A ABDABDAB", ["val A"] = "15", ["val B"] = "15"}
+  local seen, letters, drawn = {}, {}, {}
+  for index, state in ipairs(states) do
+    if state.name:find("^edit view v7 step 16 bookmarks") or state.name:find("letter", 1, true) then
+      local context = load_strata(); finish_startup(context)
+      show_page("SEQ")
+      local_value("S").registry.pages[S.constants.UI_PAGES.index.SEQ].layout_states[index].setup(context)
+      context.screen.clear(); redraw()
+      for _, entry in ipairs(context.screen.texts) do
+        if entry.x == EDIT.field_x and state.name:find("^edit view v7") then drawn[entry.text] = true end
+      end
+      for _, entry in ipairs(context.screen.texts) do
+        if entry.x == EDIT.field_x and want[entry.text] then
+          for _, other in ipairs(context.screen.texts) do
+            if other.y == entry.y and other.x == EDIT.value_right and other.align == "right" then
+              seen[entry.text] = other.text
+              if entry.text == "letter" then letters[other.text] = true end
+            end
+          end
+        end
+      end
+    end
+  end
+  for label, text in pairs(want) do
+    if label ~= "letter" then assert_equal(seen[label], text, label .. " at its widest") end
+  end
+  assert_true(letters[want.letter], "the letter with an order of eight at its widest")
+  assert_true(letters["A>B"], "and a letter waiting")
+  -- the windows draw every row (a window whose second row is a section's
+  -- label starts a row early, so none is skipped)
+  local count = 0
+  for _ in pairs(drawn) do count = count + 1 end
+  assert_equal(count, 42, "voice 7's windows draw all 42 rows of a buffer voice's one-note step (its add note row too)")
+end)
+
 -- The level's one writer (S.lib.sequencer.set_level): SEQ's encoder, its
 -- edit view's level row and its reset row write through it, and so ask
 -- the gate rule
@@ -1180,7 +1386,7 @@ test("open_step_editor shows the editor over any page and close_step_editor retu
   assert_equal(S.patterns[3][5], 4, "E3 sets the editor's step's level")
   local selected = S.selected_voice
   enc(2, 1); context.screen.clear(); redraw()
-  assert_equal((cursor_row(context)), "prob", "E2 moves the editor's row")
+  assert_equal((cursor_row(context)), "val A", "E2 moves the editor's row (3.9's 6a: val A after level)")
   assert_equal(S.selected_voice, selected, "the selected voice stays")
   pages_seq.close_step_editor(1)
   assert_equal(pages_seq.step_editor(), nil, "closed")
@@ -1237,7 +1443,7 @@ test("the step editor's keys act on its own voice and step", function()
   for step = 1, 16 do
     assert_equal(S.patterns[4][step], step == 6 and 15 or 0, "a second quick press undoes it: step " .. step)
   end
-  enc(2, 1); enc(3, -10)
+  enc(2, 3); enc(3, -10)  -- 3.9's 6a: past val A and val B to prob
   assert_equal(seq.step_attr(4, 8, "prob"), 90)
   key(1, 1); key(2, 1); context.clock.run_for(0.6)
   context.screen.clear(); redraw()

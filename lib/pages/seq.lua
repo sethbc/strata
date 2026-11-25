@@ -93,13 +93,29 @@ return function(S)
   -- S.lib.sequencer.step_attr) or the step's level; format: how a param's
   -- value reads. bookmark shows only while the voice has a set bookmark
   -- (S.lib.bookmarks.is_set). 3.7: direction, misstep, fill, cond and the
-  -- chain's three chances, and slice, shown while the voice reads a buffer
+  -- chain's three chances, and slice, shown while the voice reads a buffer.
+  -- 3.9 (grid sequencer 6a, design section 5): mode turns through the
+  -- hand's choice (S.lib.lanes.choose_mode), as move A and B (move: the
+  -- lane, choose_target); floor; a length for each of the five lanes
+  -- (lane: S.lib.lanes' name, "-" while it follows; hint: E3's word in the
+  -- hint row, where the label is too long); the letter
+  -- (S.lib.pattern_letters); a step's values A and B (attr va, vb)
+  local LANE_HINT = "lane len"  -- "E3:len repeats" would pass the hint row's end
   local EDIT_ROWS = {
     {section = "voice"},
     {row = "length", label = "length", voice_param = "seq_length", format = "%d"},
     {row = "division", label = "division", voice_param = "seq_division"},
     {row = "swing", label = "swing", voice_param = "seq_swing", format = "%d%%"},
-    {row = "mode", label = "mode", voice_param = "seq_gate"},  -- 3.9: the step mode
+    {row = "mode", label = "mode", voice_param = "seq_gate", mode = true},  -- 3.9: the step mode
+    {row = "floor", label = "floor", voice_param = "seq_gate_floor", format = "%.2f"},
+    {row = "move_a", label = "move A", voice_param = "seq_move_a", move = "a"},
+    {row = "move_b", label = "move B", voice_param = "seq_move_b", move = "b"},
+    {row = "len_a", label = "len A", lane = "a", hint = LANE_HINT},
+    {row = "len_b", label = "len B", lane = "b", hint = LANE_HINT},
+    {row = "len_chance", label = "len chance", lane = "chance", hint = LANE_HINT},
+    {row = "len_repeats", label = "len repeats", lane = "repeats", hint = LANE_HINT},
+    {row = "len_gate", label = "len gate", lane = "gate", hint = LANE_HINT},
+    {row = "letter", label = "letter", letter = true},
     {row = "gate_length", label = "gate len", voice_param = "seq_gate_length", format = "%.2f st"},
     {row = "gate_release", label = "gate rel", voice_param = "seq_gate_release", format = "%.2f s"},
     {row = "direction", label = "direction", voice_param = "seq_direction"},
@@ -109,6 +125,8 @@ return function(S)
     {row = "clear", label = "clear"},
     {section = "step"},
     {row = "level", label = "level", attr = "level"},
+    {row = "val_a", label = "val A", attr = "va"},
+    {row = "val_b", label = "val B", attr = "vb"},
     {row = "prob", label = "prob", attr = "prob"},
     {row = "ratchet", label = "ratchet", attr = "ratchet"},
     {row = "step_gate", label = "gate", attr = "gate"},
@@ -134,6 +152,8 @@ return function(S)
   -- param a step's gate moves on (the voice's gate length's range). The
   -- step locks' params are the sequencer's (SEQ.lock_params: lock_param_name)
   local ATTR_FORMATS = {pos = "%.2f", pitch = "%.2fx", size = "%.2f s", gate = "%.2f st"}
+  -- 3.9 (6a): a step's values, 1 to MAX_STEP_LEVEL or none ("-")
+  local VALUE_KEYS = {va = true, vb = true}
   local STEP_GATE_PARAM = "seq_gate_length"
 
   -- The chord's rows (design 9.4): note k of a step's list has row key
@@ -427,7 +447,8 @@ return function(S)
   local replacing = false
 
   -- Turn voice's step's key by d whole steps ("level", "prob", "ratchet",
-  -- "notes", "bookmark", "cond", "slice"), or a continuous lock ("pos", "pitch", "size",
+  -- "notes", "bookmark", "cond", "slice", 3.9's values "va" and "vb": from
+  -- none 1 to MAX_STEP_LEVEL, below 1 none), or a continuous lock ("pos", "pitch", "size",
   -- "gate") by d detents of its param's quantum (opts.fine: a tenth of it)
   -- or, with opts.raw, by that much of its range (the arc). Locks and notes
   -- from off start at the stored value or 0 (turned_lock, turned_optional);
@@ -452,6 +473,8 @@ return function(S)
     elseif key == "notes" then
       turn_note(voice_idx, step, d, opts.index or 1)
       return notes_signature(voice_idx, step) ~= notes_before
+    elseif VALUE_KEYS[key] then
+      seq.set_step_attr(voice_idx, step, key, turned_optional(before, 0, 1, MAX_STEP_LEVEL, d))
     elseif key == "bookmark" then
       if not M.has_bookmarks(voice_idx) then return false end
       seq.set_step_attr(voice_idx, step, key, turned_optional(before, 0, 1, NUM_BOOKMARKS, d))
@@ -568,6 +591,18 @@ return function(S)
 
   local function whole_text(value) return string.format("%d", math.floor(value + 0.5)) end
 
+  -- 3.9 (6a): the letter row's text: the playing letter, "B>C" while C
+  -- waits for the bar, and "B AABA" while an order is on (S.lib.pattern_
+  -- letters: a letter never waits while an order is on)
+  local function letter_text(voice_idx)
+    local letters = S.lib.pattern_letters
+    local current, waiting = letters.current(voice_idx), letters.waiting(voice_idx)
+    if waiting then return current .. ">" .. waiting end
+    local order, on = letters.order(voice_idx)
+    if on then return current .. " " .. table.concat(order) end
+    return current
+  end
+
   -- A row's value as drawn ("" for the clear row)
   local function row_text(voice_idx, step, row)
     local spec = row.spec
@@ -584,6 +619,11 @@ return function(S)
       return (params:string(row.param_id):gsub("%s+$", ""))
     end
     if spec.row == "clear" then return "" end
+    if spec.lane then
+      local length = S.lib.lanes.length(voice_idx, spec.lane)
+      return length and whole_text(length) or "-"
+    end
+    if spec.letter then return letter_text(voice_idx) end
     if spec.row == "euclid" then
       local fill = S.seq_euclid[voice_idx]
       if fill == nil then return "-" end
@@ -595,6 +635,7 @@ return function(S)
     if spec.attr == "level" then return tostring(value) end
     if spec.attr == "prob" then return whole_text(value or SEQ.max_prob) .. "%" end
     if spec.attr == "ratchet" then return "x" .. whole_text(value or 1) end
+    if VALUE_KEYS[spec.attr] then return value and whole_text(value) or "-" end
     if value == nil then return "off" end
     if spec.attr == "notes" then return (value > 0 and "+" or "") .. whole_text(value) end
     if spec.attr == "bookmark" or spec.attr == "slice" then return whole_text(value) end
@@ -659,11 +700,49 @@ return function(S)
     S.lib.sequencer.euclid(voice_idx, hits, fill[2] + rotation_d)
   end
 
+  -- The entry of list d places from name's (clamped to the list), or nil
+  -- where the turn moves nowhere
+  local function turned_entry(list, name, d)
+    for index, entry in ipairs(list) do
+      if entry == name then
+        local turned = util.clamp(index + d, 1, #list)
+        return turned ~= index and list[turned] or nil
+      end
+    end
+    return nil
+  end
+
   -- E3 on view's row (ALT+E3: fine on a control row, the rotation on
-  -- euclid; a whole-number row steps as E3 does)
+  -- euclid; a whole-number row steps as E3 does). 3.9 (6a): mode and move
+  -- A and B through the hand's choices (S.lib.lanes.choose_mode,
+  -- choose_target), a lane's length from following ("-") up to 1 to
+  -- PATTERN_LENGTH and below 1 back to following, the letter from the one
+  -- waiting (else the one playing) through S.lib.pattern_letters.switch,
+  -- which waits for the bar while the patterns play; a turn at a list's
+  -- end chooses nothing
   local function turn_row(view, voice_idx, step, row, d)
     local spec = row.spec
-    if spec.row == "euclid" then
+    local lanes = S.lib.lanes
+    if spec.mode then
+      local modes = S.lib.sequencer.SEQ.modes
+      local mode = turned_entry(modes, modes[params:get(row.param_id)], d)
+      if mode then lanes.choose_mode(voice_idx, mode) end
+    elseif spec.move then
+      local options = lanes.options(spec.move)
+      local target = turned_entry(options, options[params:get(row.param_id)], d)
+      if target then lanes.choose_target(voice_idx, spec.move, target) end
+    elseif spec.lane then
+      lanes.set_length(voice_idx, spec.lane,
+        turned_optional(lanes.length(voice_idx, spec.lane), 0, 1, PATTERN_LENGTH, d))
+    elseif spec.letter then
+      local letters = S.lib.pattern_letters
+      local from = letters.waiting(voice_idx) or letters.current(voice_idx)
+      local letter = turned_entry(letters.LETTERS, from, d)
+      -- a switch made now is the view's own replacement (the step
+      -- editor's stays open, design section 3); one waiting for the bar is
+      -- the sequencer's, which closes it then
+      if letter then run_replacement(view, function() letters.switch(voice_idx, letter) end) end
+    elseif spec.row == "euclid" then
       run_replacement(view, function()
         if S.alt_held then turn_euclid(voice_idx, 0, d) else turn_euclid(voice_idx, d, 0) end
       end)
@@ -721,7 +800,8 @@ return function(S)
 
   -- ALT+K2 held, the view's alt_hold: the row back to its default (a lock,
   -- a note, a step's gate or bookmark off, prob 100 %, one hit, the level
-  -- 0, a param its default); euclid and clear keep everything
+  -- 0, a param its default; 3.9: a value none, a lane following); euclid,
+  -- clear and the letter keep everything
   local function reset_row(view)
     local voice_idx, step = view_place(view)
     local rows, cursor = sync_view(view)
@@ -731,6 +811,8 @@ return function(S)
       set_binary_param(row.param_id, param_default(row.param_id))  -- echoes to a MIDI map (#519)
     elseif row.param_id then
       params:set(row.param_id, param_default(row.param_id))
+    elseif spec.lane then
+      S.lib.lanes.set_length(voice_idx, spec.lane, nil)
     elseif spec.attr == "level" then
       S.lib.sequencer.set_level(voice_idx, step, 0)
     elseif spec.attr == "notes" then
@@ -748,12 +830,12 @@ return function(S)
   end
 
   -- Whether reset_row has a default to put the view's row back to: every
-  -- row but euclid, clear and add note (#596: the held hint names the reset only
+  -- row but euclid, clear, add note and the letter (#596: the held hint names the reset only
   -- where letting go resets; elsewhere it cancels the quick press)
   local function row_resets(view)
     local rows, cursor = sync_view(view)
     local row = rows[cursor]
-    return row.param_id ~= nil or (row.spec.attr ~= nil and not row.spec.add)
+    return row.param_id ~= nil or (row.spec.attr ~= nil and not row.spec.add) or row.spec.lane ~= nil
   end
 
   -- The note index the step editor's cursor is on (1 off the note rows and
@@ -774,7 +856,7 @@ return function(S)
     local row = rows[cursor]
     if row.spec.row == "clear" then return "K2:back K3:clr" end
     if row.spec.fill then return "K2:back K3:fill" end
-    return "K2:back K3:step E3:" .. row.label
+    return "K2:back K3:step E3:" .. (row.spec.hint or row.label)
   end
 
   -- The page --------------------------------------------------------------
@@ -1082,6 +1164,14 @@ return function(S)
     seq.set_step_attr(voice_idx, step, "pos", 0.88)  -- "0.88": no narrow 1 in it
     seq.set_step_attr(voice_idx, step, "pitch", 4)
     seq.set_step_attr(voice_idx, step, "size", 0.5)
+    -- 3.9 (6a): the floor's 0.25 (no narrow 1), both targets position,
+    -- every lane at 16, an order of eight of the widest letters, both values 15
+    set("seq_gate_floor", 0.25)
+    set("seq_move_a", 2); set("seq_move_b", 2)
+    for _, lane in ipairs(S.lib.lanes.LANES) do S.lib.lanes.set_length(voice_idx, lane, PATTERN_LENGTH) end
+    S.lib.pattern_letters.set_order(voice_idx, {"A", "B", "D", "A", "B", "D", "A", "B"})
+    seq.set_step_attr(voice_idx, step, "va", MAX_STEP_LEVEL)
+    seq.set_step_attr(voice_idx, step, "vb", MAX_STEP_LEVEL)
     params:set("seq_chain_from", S.constants.NUM_SCENES)
     params:set("seq_chain_scenes", S.constants.NUM_SCENES)
     params:set("seq_chain_bars", SEQ.max_chain_bars)
@@ -1089,8 +1179,22 @@ return function(S)
     params:set("quantize_actions", 2)    -- beat
   end
 
+  -- The cursors of the windows that draw every one of rows: each window
+  -- starts at the row after the last one drawn (the cursor its second row,
+  -- field_list.first_visible), or a row early where that second row is a
+  -- section's label, which takes no cursor (3.9, 6a: so no row is skipped)
+  local function window_cursors(rows)
+    local cursors, drawn = {}, 0
+    while drawn < #rows do
+      local cursor = field_list.clamp(rows, drawn + 2)
+      cursors[#cursors + 1] = cursor
+      drawn = math.min(field_list.first_visible(rows, cursor, SEQ_EDIT.visible) + SEQ_EDIT.visible - 1, #rows)
+    end
+    return cursors
+  end
+
   -- The edit view on voice_idx's step, its cursor so that the view shows
-  -- rows (window - 1) * visible + 1 on (the last window: the last rows)
+  -- its window'th window of rows (window_cursors; the last rows past the last)
   local function edit_state(voice_idx, step, bookmarks, window)
     return {
       name = string.format("edit view v%d step %d%s rows %d", voice_idx, step, bookmarks and " bookmarks" or "", window),
@@ -1098,7 +1202,8 @@ return function(S)
         show_cursor(voice_idx, step)()
         widest_values(voice_idx, step, bookmarks)
         edit_open = true
-        place_view(views.page, (window - 1) * SEQ_EDIT.visible + 2)
+        local cursors = window_cursors(edit_rows(voice_idx, step))
+        place_view(views.page, cursors[math.min(window, #cursors)])
       end,
     }
   end
@@ -1109,11 +1214,21 @@ return function(S)
 
   -- How many windows of SEQ_EDIT.visible rows the edit view's rows fill when
   -- the chord has note_rows rows (its notes and the add row): a layout state
-  -- for each, so every row is drawn. bookmarks: a buffer voice with set
+  -- for each, so every row is drawn (window_cursors, on the rows' shape:
+  -- where the section labels fall). bookmarks: a buffer voice with set
   -- bookmarks, whose bookmark and slice rows show (a synth voice has neither)
   local function edit_windows(note_rows, bookmarks)
-    local total = #EDIT_ROWS - 1 + note_rows - (bookmarks and 0 or 2)
-    return math.ceil(total / SEQ_EDIT.visible)
+    local rows = {}
+    for _, spec in ipairs(EDIT_ROWS) do
+      if spec.section then
+        rows[#rows + 1] = {selectable = false}
+      elseif spec.chord then
+        for _ = 1, note_rows do rows[#rows + 1] = {} end
+      elseif bookmarks or (spec.row ~= "bookmark" and spec.row ~= "slice") then
+        rows[#rows + 1] = {}
+      end
+    end
+    return #window_cursors(rows)
   end
 
   -- A step with the most notes, every one at its widest (-14)
@@ -1289,6 +1404,16 @@ return function(S)
       widest_values(NUM_VOICES, PATTERN_LENGTH, true)
       M.open_step_editor(NUM_VOICES, PATTERN_LENGTH, 1)
     end},
+    -- 3.9 (6a): a letter waiting for the bar (A>B), the cursor on its row
+    {name = "edit view, a letter waiting", setup = function()
+      show_cursor(NUM_VOICES, PATTERN_LENGTH)()
+      edit_open = true
+      pattern_toggle()
+      S.lib.pattern_letters.switch(NUM_VOICES, "B")
+      for index, row in ipairs(edit_rows(NUM_VOICES, PATTERN_LENGTH)) do
+        if row.spec and row.spec.row == "letter" then place_view(views.page, index) end
+      end
+    end},
     -- 3.5: a three-note step in the step editor, on its add row
     {name = "a step with three notes", setup = function()
       widest_values(NUM_VOICES, PATTERN_LENGTH, true)
@@ -1317,7 +1442,8 @@ return function(S)
         widest_values(NUM_VOICES, PATTERN_LENGTH, true)
         eight_notes(NUM_VOICES, PATTERN_LENGTH)
         edit_open = true
-        place_view(views.page, (window - 1) * SEQ_EDIT.visible + 2)
+        local cursors = window_cursors(edit_rows(NUM_VOICES, PATTERN_LENGTH))
+        place_view(views.page, cursors[math.min(window, #cursors)])
       end,
     })
   end
