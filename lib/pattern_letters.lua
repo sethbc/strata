@@ -107,6 +107,17 @@ return function(S)
 
   -- 4b: the bar and the order ----------------------------------------------
 
+  -- Up to max_order letters, keyed 1..n with no hole
+  local function valid_order(order)
+    if type(order) ~= "table" then return false end
+    local count, last = 0, 0
+    for index, letter in pairs(order) do
+      if not whole_between(index, 1, VARIATIONS.max_order) or not is_letter[letter] then return false end
+      count, last = count + 1, math.max(last, index)
+    end
+    return count == last
+  end
+
   -- The letter waiting for the voice's next bar, or nil
   function M.waiting(voice_idx)
     if not valid_voice(voice_idx) then return nil end
@@ -130,7 +141,7 @@ return function(S)
     if not valid_voice(voice_idx) or not is_letter[letter] then return end
     voices[voice_idx].order_on = false
     if not S.pattern_playing or live.waiting[voice_idx] == letter then
-      M.switch_now(voice_idx, letter)
+      load_letter(voice_idx, letter)  -- repainted below, once
     elseif voices[voice_idx].current == letter then
       live.waiting[voice_idx] = nil
     else
@@ -153,17 +164,13 @@ return function(S)
     request_redraw()
   end
 
-  -- Set the voice's order, up to max_order letters, each one of LETTERS
-  -- (anything else is refused), and turn it on, from its first entry; an
-  -- empty one turns it off
+  -- Set the voice's order (a copy) as the block's check holds it
+  -- (valid_order: up to max_order letters, each one of LETTERS, keyed 1..n
+  -- with no hole; anything else is refused), and turn it on, from its first
+  -- entry; an empty one turns it off
   function M.set_order(voice_idx, letters)
-    if not valid_voice(voice_idx) or type(letters) ~= "table" or #letters > VARIATIONS.max_order then return end
-    local order = {}
-    for index, letter in pairs(letters) do
-      if not whole_between(index, 1, #letters) or not is_letter[letter] then return end
-      order[index] = letter
-    end
-    voices[voice_idx].order, voices[voice_idx].order_on = order, false
+    if not valid_voice(voice_idx) or not valid_order(letters) then return end
+    voices[voice_idx].order, voices[voice_idx].order_on = copy_of(letters), false
     M.set_order_on(voice_idx, true)
   end
 
@@ -178,9 +185,11 @@ return function(S)
   -- voice takes the letter waiting, or, with its order on, the order's next
   -- entry, wrapping (its first at the patterns' start, first, and after
   -- the order was turned on); an entry equal to the playing letter
-  -- switches nothing. The grid is repainted by the bar's step (one repaint
+  -- switches nothing. After a late wake that skipped bars the order moves
+  -- on by the bars that passed (bars), wrapping, and switches once, to the
+  -- entry it lands on, never loading those between (review round 1). The grid is repainted by the bar's step (one repaint
   -- a beat), so no switch here repaints it
-  local function at_bar(first)
+  local function at_bar(first, bars)
     for voice_idx = 1, NUM_VOICES do
       local state, letter = voices[voice_idx], live.waiting[voice_idx]
       if first then live.place[voice_idx] = nil end
@@ -188,7 +197,7 @@ return function(S)
         load_letter(voice_idx, letter)
       elseif state.order_on and #state.order > 0 then
         local place = live.place[voice_idx]
-        place = place and place % #state.order + 1 or 1
+        place = ((place or 0) + (bars or 1) - 1) % #state.order + 1
         live.place[voice_idx] = place
         load_letter(voice_idx, state.order[place])
       end
@@ -250,17 +259,6 @@ return function(S)
       and S.lib.lanes.valid_block(one_voice_block(voice_idx, pattern.lanes))
   end
 
-  -- Up to max_order letters, keyed 1..n with no hole
-  local function valid_order(order)
-    if type(order) ~= "table" then return false end
-    local count, last = 0, 0
-    for index, letter in pairs(order) do
-      if not whole_between(index, 1, VARIATIONS.max_order) or not is_letter[letter] then return false end
-      count, last = count + 1, math.max(last, index)
-    end
-    return count == last
-  end
-
   local VOICE_KEYS = {current = true, order = true, order_on = true, slots = true}
 
   local function valid_voice_letters(voice_idx, entry)
@@ -311,6 +309,8 @@ return function(S)
       live.waiting[voice_idx], live.place[voice_idx] = nil, nil
       local entry = type(block) == "table" and block[voice_idx]
       voices[voice_idx] = type(entry) == "table" and copy_of(entry) or fresh_voice()
+      -- an order with no letter is never on (a file's is read as off)
+      if #voices[voice_idx].order == 0 then voices[voice_idx].order_on = false end
     end
   end
 
