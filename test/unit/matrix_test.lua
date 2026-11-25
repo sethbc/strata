@@ -1699,6 +1699,7 @@ test("the largest scenes file stays a quarter of the table cap and under the siz
   local text = h.file_text(context.data_dir .. "strata/scenes.data")
   local tables = select(2, text:gsub("%-%- Table: ", ""))
   local DATA_FILES = S.lib.data_files.DATA_FILES
+  h.real_print(string.format("     (the largest scenes file: %d tables, %d bytes)", tables, #text))
   assert_true(tables * 4 <= DATA_FILES.max_tables,
     tables .. " tables are at most a quarter of the reader's bound of " .. DATA_FILES.max_tables)
   assert_true(#text <= DATA_FILES.max_bytes, #text .. " bytes fit the reader's size cap of " .. DATA_FILES.max_bytes)

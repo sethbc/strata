@@ -25,13 +25,15 @@ return function(S)
 
   local DATA_FILES = {
     -- a larger file is not read: 3.9's 4a tripled it from 4 MB, keeping it
-    -- 3.8 times the largest scenes file (3.4 times before every letter)
+    -- 3.8 times the largest scenes file (3.4 times 2c's 1.25 MB, before
+    -- every letter)
     max_bytes = 12 * 1024 * 1024,
     -- the most tables a file may hold: four times the cap before 3.4's
-    -- review (8192), 4.66 times the largest scenes file of 3.8, then tripled
-    -- by 3.9's 4a to stay over four times it (5.05), so a player's full
-    -- file always loads and later releases' blocks have room (a file the
-    -- reader refuses is set aside and its scenes do not load). It bounds
+    -- review (8192), 4.66 times the largest scenes file of 3.9's 2c (7026;
+    -- 3.8's was 6898), then tripled by 3.9's 4a to stay over four times
+    -- it (5.05), so a player's full file always loads and later releases'
+    -- blocks have room (a file the reader refuses is set aside and its
+    -- scenes do not load). It bounds
     -- what a hostile file can make the reader build: each table costs
     -- about 70-100 bytes, so about 9 MB for the tables themselves
     max_tables = 98304,
