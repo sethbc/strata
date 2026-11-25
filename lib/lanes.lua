@@ -7,8 +7,12 @@
 -- choices of a mode and a target (the grid's keys and SEQ's row; the
 -- params' own actions do neither extra), and the light of a hit on the
 -- grid. A step's values are its step keys va and vb (lib/sequencer.lua's
--- ATTR_CHECKS); the sequencer sets and holds them (held_value). Nothing
--- here is stored and nothing is sent but through params. See
+-- ATTR_CHECKS); the sequencer sets and holds them (held_value). Package
+-- 2c (Following and free, Lane lengths): the five lanes a hit reads (A, B,
+-- chance, repeats, gate), each following (read at the step played) or free
+-- at a length of its own (read at its own position, which moves on at
+-- every tick the voice takes), and the scene block lanes that keeps the
+-- lengths. Nothing here is sent but through params. See
 -- docs/notes/lua/lanes.md.
 
 return function(S)
@@ -143,6 +147,161 @@ return function(S)
     end
     return seq.step_attr(voice_idx, step, MOVE.step_key.a) or MOVE.no_value_light
   end
+
+  -- Lane lengths (package 2c, design section 2, Following and free, Lane
+  -- lengths) -------------------------------------------------------------
+
+  -- The five lanes a hit reads beside its hits, in order, and the step key
+  -- each one's cells are (the sixteen steps' own keys: no second store)
+  M.LANES = {"a", "b", "chance", "repeats", "gate"}
+  M.STEP_KEYS = {a = MOVE.step_key.a, b = MOVE.step_key.b, chance = "prob", repeats = "ratchet", gate = "gate"}
+
+  -- Per voice: each free lane's length (1 to PATTERN_LENGTH; absent: it
+  -- follows), its position (the cell its next read reads, 1 to its length;
+  -- absent while it follows) and the cell it read last (sounding)
+  local lane_state = {lengths = {}, positions = {}, sounding = {}}
+  for voice_idx = 1, NUM_VOICES do
+    lane_state.lengths[voice_idx], lane_state.positions[voice_idx], lane_state.sounding[voice_idx] = {}, {}, {}
+  end
+
+  local function is_lane(lane) return M.STEP_KEYS[lane] ~= nil end
+
+  local function valid_length(n)
+    return type(n) == "number" and n == math.floor(n) and n >= 1 and n <= PATTERN_LENGTH
+  end
+
+  -- A lane's length, or nil while it follows (or for no voice or lane)
+  function M.length(voice_idx, lane)
+    if not valid_voice(voice_idx) or not is_lane(lane) then return nil end
+    return lane_state.lengths[voice_idx][lane]
+  end
+
+  -- A free lane's position, the cell its next read reads; nil while it follows
+  function M.position(voice_idx, lane)
+    if not valid_voice(voice_idx) or not is_lane(lane) then return nil end
+    return lane_state.positions[voice_idx][lane]
+  end
+
+  -- Set a lane's length: n (whole, 1 to PATTERN_LENGTH) frees it, nil makes
+  -- it follow. A lane freed starts at 1; a free one keeps its position, but
+  -- wraps to 1 when the new length is below it. Anything else does
+  -- nothing. A change ends the voice's pattern undo, as a step's edit does,
+  -- and redraws the grid
+  function M.set_length(voice_idx, lane, n)
+    if not valid_voice(voice_idx) or not is_lane(lane) or (n ~= nil and not valid_length(n)) then return end
+    local lengths, positions = lane_state.lengths[voice_idx], lane_state.positions[voice_idx]
+    if lengths[lane] == n then return end
+    lengths[lane] = n
+    if n == nil then
+      positions[lane] = nil
+    elseif positions[lane] == nil or positions[lane] > n then
+      positions[lane] = 1
+    end
+    S.lib.mutation.note_pattern_edit(voice_idx)
+    grid_redraw()
+  end
+
+  -- A copy of the voice's lengths, lane -> length for each free lane (the
+  -- whole-pattern door, package 4a), or nil for no voice
+  function M.lengths(voice_idx)
+    if not valid_voice(voice_idx) then return nil end
+    local copy = {}
+    for lane, n in pairs(lane_state.lengths[voice_idx]) do copy[lane] = n end
+    return copy
+  end
+
+  -- Set all five of the voice's lengths from such a table (a lane it does
+  -- not name follows)
+  function M.set_lengths(voice_idx, lengths)
+    if not valid_voice(voice_idx) or type(lengths) ~= "table" then return end
+    for _, lane in ipairs(M.LANES) do M.set_length(voice_idx, lane, lengths[lane]) end
+  end
+
+  -- The lane's value at the hit: its step key at hit_step while it follows,
+  -- at its own position while it is free. The cell read is recorded
+  -- (sounding). Read once a tick, at the tick's begin
+  -- (lib/sequencer.lua's begin_voice_step); nil for no value, voice or lane
+  function M.read(voice_idx, lane, hit_step)
+    if not valid_voice(voice_idx) or not is_lane(lane) then return nil end
+    local cell = lane_state.positions[voice_idx][lane] or hit_step
+    if type(cell) ~= "number" or cell < 1 or cell > PATTERN_LENGTH then return nil end
+    lane_state.sounding[voice_idx][lane] = cell
+    return M.last_read(voice_idx, lane)
+  end
+
+  -- The cell the lane read last (the lights), or nil before its first read
+  -- since the voice's start
+  function M.sounding(voice_idx, lane)
+    if not valid_voice(voice_idx) or not is_lane(lane) then return nil end
+    return lane_state.sounding[voice_idx][lane]
+  end
+
+  -- The value the lane's last read cell holds now: what the rest of the
+  -- tick reads (the step's first hit's outputs, a ratchet's later hits),
+  -- after advance has moved the position on. nil with none
+  function M.last_read(voice_idx, lane)
+    local cell = M.sounding(voice_idx, lane)
+    local attrs = cell and S.pattern_steps[voice_idx][cell]
+    return attrs and attrs[M.STEP_KEYS[lane]]
+  end
+
+  -- The voice starts (start_position: a pattern start, a restart, a
+  -- division reset's bar, a stop): every free lane back to 1, nothing read
+  function M.start(voice_idx)
+    if not valid_voice(voice_idx) then return end
+    for lane in pairs(lane_state.lengths[voice_idx]) do lane_state.positions[voice_idx][lane] = 1 end
+    lane_state.sounding[voice_idx] = {}
+  end
+
+  -- A tick the voice took, played or skipped, after its reads: every free
+  -- lane forward by one, wrapping at its length
+  function M.advance(voice_idx)
+    if not valid_voice(voice_idx) then return end
+    local positions = lane_state.positions[voice_idx]
+    for lane, n in pairs(lane_state.lengths[voice_idx]) do positions[lane] = positions[lane] % n + 1 end
+  end
+
+  -- Whether a lanes block (design section 6) holds NUM_VOICES tables, each
+  -- of lane names to whole lengths 1 to PATTERN_LENGTH
+  local function valid_block(block)
+    if type(block) ~= "table" then return false end
+    for voice_idx, lengths in pairs(block) do
+      if not valid_voice(voice_idx) or type(lengths) ~= "table" then return false end
+      for lane, n in pairs(lengths) do
+        if not is_lane(lane) or not valid_length(n) then return false end
+      end
+    end
+    for voice_idx = 1, NUM_VOICES do
+      if type(block[voice_idx]) ~= "table" then return false end
+    end
+    return true
+  end
+
+  -- Every voice's lengths from a (valid) lanes block: a recall's, a chain
+  -- link's (lib/sequencer.lua's load_chain_scene), a chain start's undo
+  function M.apply_block(block)
+    for voice_idx = 1, NUM_VOICES do M.set_lengths(voice_idx, block[voice_idx] or {}) end
+  end
+
+  -- The lanes scene block: per voice its free lanes' lengths, by name;
+  -- switched at a transition's end, before the steps block. A scene
+  -- without it is filled with seven empty tables: every lane follows
+  S.register_scene_block({
+    key = "lanes",
+    default = function()
+      local block = {}
+      for voice_idx = 1, NUM_VOICES do block[voice_idx] = {} end
+      return block
+    end,
+    capture = function()
+      local block = {}
+      for voice_idx = 1, NUM_VOICES do block[voice_idx] = M.lengths(voice_idx) end
+      return block
+    end,
+    validate = valid_block,
+    apply = M.apply_block,
+    discrete = true,
+  })
 
   return M
 end
