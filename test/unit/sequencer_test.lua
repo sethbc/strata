@@ -926,6 +926,57 @@ test("a note transposes the voice by scale degrees", function()
   pattern_clock_stop()
 end)
 
+-- 3.9 grid sequencer, package 2b (design section 2, Locks stay): a step's
+-- note and chord count their degrees from the held pitch value
+test("a chord sits on a held pitch value", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  local events = record_output(S, "probe")
+  params:set("scale", 2); params:set("root", 1)  -- C major
+  params:set("v1_freq", 261.63)
+  S.patterns[1][1] = 15; seq.set_step_attr(1, 1, "va", 10)
+  S.patterns[1][2] = 15; seq.set_step_attr(1, 2, "notes", {0, 2})
+  S.patterns[1][3] = 15
+  pattern_clock_start()
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 329.63, 0.01, "value level 10: two degrees up, E")
+  context.clear_engine_calls()
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_equal(seq.held_value(1, "pitch"), 10, "the value held")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 329.63, 0.01, "note 0 on the value: degree 2, E")
+  local ons = context.calls_named("noteOn")
+  assert_equal(#ons, 1, "one extra note")
+  assert_near(ons[1].args[3], 67, 0.001, "note 2 on the value: degree 4, G")
+  local event = voice_events(events, 1)[2]
+  assert_list_near(event.notes, {0, 2}, 0, "the step's notes")
+  assert_list_near(event.semitones, {4, 7}, 0.001, "from the voice's own pitch, on the value")
+  assert_list_near(event.pitches, {64, 67}, 0.001, "its pitches")
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 329.63, 0.01, "after the chord the value plays on")
+  assert_near(params:get("v1_freq"), 261.63, 1e-9, "the stored freq stays")
+  pattern_clock_stop()
+end)
+
+test("a value of +7 under a note of +14 plays degree 14", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  local events = record_output(S, "probe")
+  params:set("scale", 2); params:set("root", 1)  -- C major: degree 14 is two octaves
+  params:set("v1_freq", 261.63)
+  assert_equal(seq.degree_semitones(1, 21), nil, "degree 21 is past a note's range")
+  S.patterns[1][1] = 15; seq.set_step_attr(1, 1, "va", 15)
+  S.patterns[1][2] = 15; seq.set_step_attr(1, 2, "notes", {14, 8})
+  S.patterns[1][3] = 15; seq.set_step_attr(1, 3, "va", 1); seq.set_step_attr(1, 3, "notes", {-14, -8})
+  pattern_clock_start()
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 261.63 * 4, 0.05, "+7 and +14: degree 14, two octaves up")
+  assert_list_near(voice_events(events, 1)[2].semitones, {24, 24}, 0.001, "24 semitones, and +7 and +8 clipped to 14 too")
+  context.clock.advance_until(S.pattern_clocks[1])
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), 261.63 / 4, 0.01,
+    "the step's own value of -7 and its notes of -14 and -8: degree -14")
+  assert_list_near(voice_events(events, 1)[3].semitones, {-24, -24}, 0.001, "-24 semitones, both")
+  pattern_clock_stop()
+end)
+
 test("a step with several notes plays its first as the voice's own and hands every output the list", function()
   local context, S = setup()
   local seq = S.lib.sequencer
