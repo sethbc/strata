@@ -98,6 +98,9 @@ local RUN_CALLS_ALLOWED = {
     why = "2b: each voice's start sends the arpeggiator, 0: off (design section 4.3)"},
   {kind = "drop", match = '^setGrainParam%(<v0>, "arpFold", 0%)$', count = 1,
     why = "2b: each voice's start sends the arpeggiator's fold, 0 (design section 4.3)"},
+  -- gs-1a: the step gate's floor, 0 (3.9 grid sequencer design §1)
+  {kind = "drop", match = '^setGrainParam%(%d+, "gateFloor", 0%)$', count = RUN_VOICES,
+    why = "gs-1a: each voice's start sends the gate's floor, 0: a closed gate is silent (grid sequencer design section 1)"},
 }
 
 -- A call as the fixture writes it (name(args)), and each run of consecutive

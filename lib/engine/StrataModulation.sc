@@ -83,6 +83,7 @@
                 seqGate: { arg voice, value; this.setStageParam(voice, \seqGate, value) },
                 gateSeconds: { arg voice, value; this.setStageParam(voice, \gateSeconds, value) },
                 gateRelease: { arg voice, value; this.setStageParam(voice, \gateRelease, value) },
+                gateFloor: { arg voice, value; this.setStageParam(voice, \gateFloor, value) },
                 voiceMute: { arg voice, value; this.setStageParam(voice, \voiceMute, value) }
             )
         )
@@ -218,27 +219,32 @@
     // stage's t_trig (retrigger's, the accent's) or its t_gate (an extra
     // note's start, which opens the gate with no accent: ruling 54) and
     // restarted from its level by a new one; velocity never reaches it.
-    // With every channel at 0, seqGate 0 and voiceMute 0 the stage plays
-    // 3.3's graph's values.
+    // gateFloor (3.9, the grid sequencer's 1a) is what a closed gate lets
+    // through: at 0, floor + ((1 - floor) * env) is env exactly, so the
+    // factor is 3.8's sample for sample; an open gate (env 1) is the whole
+    // voice at any floor. With every channel at 0, seqGate 0 and voiceMute 0
+    // the stage plays 3.3's graph's values.
     voiceMixMod { arg controls;
         var fastModIn = \fastModIn.kr(areaState[\modulation][\silentFastModBus].index), m = this.fastModRead(fastModIn);
         var seqGate = \seqGate.kr(0), gateSeconds = \gateSeconds.kr(0.1), gateRelease = \gateRelease.kr(0.1);
-        var voiceMute = \voiceMute.kr(0), t_gate = \t_gate.tr(0), gate, mute, env;
+        var voiceMute = \voiceMute.kr(0), t_gate = \t_gate.tr(0), gateFloor = \gateFloor.kr(0), gate, mute, env, floor;
         // (written on the controls' own names: the Lua stub reads the
         // enumerations from "seqGate.round.clip(0, 1)" and
         // "voiceMute.round.clip(0, 1)")
         gate = seqGate.round.clip(0, 1);
         mute = voiceMute.round.clip(0, 1);
+        floor = gateFloor.clip(0, 1).lag(0.02);
         env = EnvGen.kr(Env([0, 1, 1, 0], [this.gateAttackSeconds, gateSeconds.clip(0.005, 120), gateRelease.clip(0.005, 4)]),
             controls[\t_trig] + t_gate);
         controls[\fastModIn] = fastModIn;
         controls[\seqGate] = seqGate;
         controls[\gateSeconds] = gateSeconds;
         controls[\gateRelease] = gateRelease;
+        controls[\gateFloor] = gateFloor;
         controls[\voiceMute] = voiceMute;
         controls[\filterFreq] = (controls[\filterFreq] * (this.fastModCutoffFactor ** m[3])).clip(20, 20000);
         controls[\ampOffset] = m[4];
-        controls[\voiceGate] = (1 - (gate.lag(0.02) * (1 - env))) * (1 - mute.lag(0.02));
+        controls[\voiceGate] = (1 - (gate.lag(0.02) * (1 - (floor + ((1 - floor) * env))))) * (1 - mute.lag(0.02));
         ^controls
     }
 

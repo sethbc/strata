@@ -68,7 +68,7 @@ test("every voice scene key is in or out", function()
   local ins, outs = 0, 0
   for _, value in pairs(keys) do if value then ins = ins + 1 else outs = outs + 1 end end
   assert_equal(ins, 39, "thirty-nine keys in")
-  assert_equal(outs, 39, "thirty-nine keys out")
+  assert_equal(outs, 40, "forty keys out")
   for _, key in ipairs({ "mod_speed", "input_channel", "buf_pos", "mute", "seq_length" }) do
     assert_equal(keys[key], false, key .. " is out")
   end
@@ -160,6 +160,21 @@ test("a load takes the sound and keeps the place", function()
   assert_equal(presets.loaded_name(1), "fm one", "the row's name")
   assert_true(not presets.load(1, 2), "an empty slot loads nothing")
   assert_equal(#lines_naming(context, "apply_voice"), 0, "no refused apply")
+end)
+
+-- 3.9's grid sequencer, package 1a (ruling 1a-3): the gate's floor is out,
+-- as every seq key is, since the step mode it belongs to is out
+test("a voice preset leaves the floor alone", function()
+  local _, S, presets = loaded()
+  assert_equal(presets.VOICE_PRESETS.keys.seq_gate_floor, false, "seq_gate_floor is out")
+  params:set("v1_seq_gate_floor", 0.25)
+  assert_true(presets.save(1, 1, "floored"), "a preset of voice 1 at floor 0.25")
+  assert_equal(presets.capture(1).values.seq_gate_floor, nil, "a voice's sound holds no floor")
+  for voice = 1, S.constants.NUM_VOICES do
+    params:set("v" .. voice .. "_seq_gate_floor", 0.5)
+    assert_true(presets.load(voice, 1), "loaded into voice " .. voice)
+    assert_near(params:get("v" .. voice .. "_seq_gate_floor"), 0.5, 1e-9, "voice " .. voice .. " keeps its floor")
+  end
 end)
 
 test("a synth key the preset lacks keeps the voice's remembered value", function()

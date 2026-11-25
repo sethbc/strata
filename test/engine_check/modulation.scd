@@ -30,7 +30,7 @@ var checkDefaults, checkVoicesLeft, checkOffsetNode, checkOffsetWrites, checkLfo
 var checkSync, checkScatter, checkReleases, checkPitch, checkGrainTaps, checkGrainChannels, checkStageTaps;
 var checkStageCutoff, checkStageAmp, checkEqual33, checkGates, checkGateEngine, checkMute, checkDefsSafe;
 var checkVelocity, checkStartStop, checkGateKept, checkRegateEnded, stageArgs, ringArgs, bufArgs;
-var checkScatterGlides, checkRestartPhase, checkGateLag, checkRegateSplit;
+var checkScatterGlides, checkRestartPhase, checkGateLag, checkRegateSplit, checkGateFloor;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -1392,6 +1392,42 @@ checkGateLag = {
     ([synthIn, silentIn, trackBus] ++ outs).do(_.free);
 };
 
+// The floor (3.9 grid sequencer design section 1, package 1a) on two check
+// stages of the real def fed by one DC source: G gated (seqGate 1) at a
+// floor, U not. With no trigger G's tap over U's is the floor, within 1 %;
+// 50 ms after a trigger it is the whole voice, at every floor (at floor 0
+// the stage is the gate's own: checkGates and checkEqual33)
+checkGateFloor = {
+    var group = Group.after(engine.processGroup), synthIn = Bus.audio(server, 2), silentIn = Bus.audio(server, 2);
+    var outs = 2.collect({ Bus.audio(server, 10) }), trackBus = Bus.control(server, 7), source, stages = [], track, results;
+    var floors = [0.25, 0.75, 1];
+    source = Synth(\strataCheckDC, [\out, synthIn, \level, 0.5], group, \addToHead);
+    // [now, lowest, at 0.05, 0.13, 0.25 and 0.3 s]
+    track = Synth(\strataCheckRatioTrack, [\a, outs[0].index + 8, \b, outs[1].index + 8, \out, trackBus, \times, [0.05, 0.13, 0.25, 0.3]], group, \addToTail);
+    results = floors.collect({ arg floor;
+        var closed, open;
+        stages.do(_.free);
+        server.makeBundle(nil, { stages = [
+            Synth(\strataVoiceMix, stageArgs.(outs[0], synthIn.index, silentIn.index, [\seqGate, 1, \gateFloor, floor, \gateSeconds, 0.1, \gateRelease, 0.05]), track, \addBefore),
+            Synth(\strataVoiceMix, stageArgs.(outs[1], synthIn.index, silentIn.index), track, \addBefore)
+        ] });
+        server.sync; 0.3.wait;
+        closed = h.readBus(trackBus)[0];
+        server.makeBundle(0.1, { stages.do({ arg stage; stage.set(\velocity, 1, \t_trig, 1) }); track.set(\t_reset, 1) });
+        0.2.wait; server.sync;
+        open = h.readBus(trackBus)[2];
+        [floor, closed, open]
+    });
+    check.(results.every({ arg each; (each[1] - each[0]).abs <= (0.01 * each[0]) }),
+        "modulation: a closed gate at floor 0.25 passes a quarter of the voice, and each floor its share, within a hundredth of the floor (floor, a gated voice's tap over the ungated tap with no hit: %)".format(
+            results.collect({ arg each; "% %".format(each[0], each[1].round(0.0001)) }).join(", ")));
+    check.(results.every({ arg each; (each[2] - 1).abs < 0.01 }),
+        "modulation: an open gate is the whole voice at any floor (floor, the tap over the ungated tap 50 ms after a hit: %)".format(
+            results.collect({ arg each; "% %".format(each[0], each[2].round(0.0001)) }).join(", ")));
+    group.free;
+    ([synthIn, silentIn, trackBus] ++ outs).do(_.free);
+};
+
 // Mute (design §8.14) on two check stages of the real def, both paths fed:
 // voiceMute 1 silences the tap within 0.1 s whether ungated, gated open or
 // gated closed (a trigger then opens nothing), voiceMute 0 brings it back,
@@ -1495,13 +1531,13 @@ checkGateKept = {
     var voice = 4, saved = engine.grainControls[voice].copy, tap = engine.areaState[\record][\voiceTaps][voice];
     var peakBus = Bus.control(server, 1), tone, probe, oldId, replaced, muted, opened, closed, reads = List.new;
     var stageOf = { engine.synths[engine.voiceMixKey(voice)] };
-    var readStage = { arg label; reads.add([label] ++ [\gateSeconds, \gateRelease, \voiceMute].collect({ arg name; getControl.(stageOf.value, name) })) };
-    var expected = [0.3, 0.05, 1];
+    var readStage = { arg label; reads.add([label] ++ [\gateSeconds, \gateRelease, \voiceMute, \gateFloor].collect({ arg name; getControl.(stageOf.value, name) })) };
+    var expected = [0.3, 0.05, 1, 0.25];
     tone = Synth(\strataCheckTone, [\out, engine.inputBus], engine.inputSynth, \addBefore);
     command.(\setGrainParam, voice, \history, 0);
     command.(\setGrainSource, voice, engine.inputSource);
     command.(\voiceOn, voice, 110.0, 0.5, 0.0, 0.1, 20.0, 1.0);
-    [\gateSeconds, 0.3, \gateRelease, 0.05, \voiceMute, 1].pairsDo({ arg name, value; command.(\setGrainParam, voice, name, value) });
+    [\gateSeconds, 0.3, \gateRelease, 0.05, \voiceMute, 1, \gateFloor, 0.25].pairsDo({ arg name, value; command.(\setGrainParam, voice, name, value) });
     server.sync; 0.3.wait;
     readStage.("set");
     probe = Synth(\strataCheckPeak, [\in, tap, \out, peakBus], engine.processGroup, \addAfter);
@@ -1521,7 +1557,9 @@ checkGateKept = {
     command.(\setGrainSource, voice, engine.inputSource);
     server.sync; 0.3.wait;
     readStage.("switched and back");
-    // the mute lifted, the gate on: gateSeconds and gateRelease are the kept ones
+    // the mute lifted, the floor back at 0 (a closed gate silent), the gate
+    // on: gateSeconds and gateRelease are the kept ones
+    command.(\setGrainParam, voice, \gateFloor, 0);
     command.(\setGrainParam, voice, \voiceMute, 0);
     command.(\setGrainParam, voice, \seqGate, 1);
     server.sync; 0.3.wait;
@@ -1534,10 +1572,13 @@ checkGateKept = {
     closed = h.readBus(peakBus)[0];
     check.(replaced and: { reads.every({ arg each; (each.drop(1) - expected).abs.every({ arg error; error < 1e-6 }) }) }
         and: { muted < 1e-4 } and: { opened > 0.01 } and: { closed < 1e-4 },
-        "modulation: a stage replaced in place and its voice restarted or switched keep gateSeconds, gateRelease and the mute as last set, with no resend, and the next seqGate uses them (replaced %; [gateSeconds, gateRelease, voiceMute] %; muted tap %; gated tap 0.22-0.28 s after a retrigger %, later %)".format(
+        "modulation: a stage replaced in place and its voice restarted or switched keep gateSeconds, gateRelease and the mute as last set, with no resend, and the next seqGate uses them (replaced %; [gateSeconds, gateRelease, voiceMute, gateFloor] %; muted tap %; gated tap 0.22-0.28 s after a retrigger %, later %)".format(
             replaced, reads.collect({ arg each; "%: %".format(each[0], each.drop(1).round(0.0001)) }).join(", "),
             muted.round(1e-6), opened.round(1e-4), closed.round(1e-6)));
-    [\seqGate, 0, \gateSeconds, 0.1, \gateRelease, 0.1, \voiceMute, 0].pairsDo({ arg name, value; command.(\setGrainParam, voice, name, value) });
+    check.(replaced and: { reads.every({ arg each; (each[4] - expected[3]).abs < 1e-6 }) },
+        "modulation: a replaced stage keeps its floor, as its voice's restart and switch do, with no resend (replaced %; gateFloor %)".format(
+            replaced, reads.collect({ arg each; "%: %".format(each[0], each[4].round(0.0001)) }).join(", ")));
+    [\seqGate, 0, \gateSeconds, 0.1, \gateRelease, 0.1, \voiceMute, 0, \gateFloor, 0].pairsDo({ arg name, value; command.(\setGrainParam, voice, name, value) });
     command.(\voiceOff, voice);
     probe.free; tone.free; peakBus.free;
     h.stopAllVoices;
@@ -1548,7 +1589,7 @@ checkGateKept = {
 // The stage's gate and mute controls (design §8.12, §8.14): declared with
 // their defaults, set through setGrainParam, kept, never a grain synth's
 checkGateControls = {
-    var names = [\seqGate, \gateSeconds, \gateRelease, \voiceMute], defaults = [0, 0.1, 0.1, 0];
+    var names = [\seqGate, \gateSeconds, \gateRelease, \gateFloor, \voiceMute], defaults = [0, 0.1, 0.1, 0, 0];
     var voices = [1, 4], saved = voices.collect({ arg voice; engine.grainControls[voice].copy });
     var stageDesc = SynthDescLib.global.at(\strataVoiceMix), reached, kept;
     var declared = names.collect({ arg name, index;
@@ -1558,22 +1599,22 @@ checkGateControls = {
     var inGrainDefs = h.grainDefs.collect({ arg defName;
         SynthDescLib.global.at(defName).controlNames.collect(_.asSymbol).select({ arg name; names.includes(name) }) }).flatten;
     voices.do({ arg voice; command.(\voiceOn, voice, 110.0, 0.5, 0.0, 0.1, 20.0, 1.0) });
-    voices.do({ arg voice; [\seqGate, 1, \gateSeconds, 0.0625, \gateRelease, 0.5, \voiceMute, 1].pairsDo({ arg name, value;
+    voices.do({ arg voice; [\seqGate, 1, \gateSeconds, 0.0625, \gateRelease, 0.5, \gateFloor, 0.25, \voiceMute, 1].pairsDo({ arg name, value;
         command.(\setGrainParam, voice, name, value) }) });
     server.sync;
     reached = voices.every({ arg voice;
         var stage = engine.synths[engine.voiceMixKey(voice)];
-        [[\seqGate, 1], [\gateSeconds, 0.0625], [\gateRelease, 0.5], [\voiceMute, 1]].every({ arg pair;
+        [[\seqGate, 1], [\gateSeconds, 0.0625], [\gateRelease, 0.5], [\gateFloor, 0.25], [\voiceMute, 1]].every({ arg pair;
             getControl.(stage, pair[0]).equalWithPrecision(pair[1], 1e-6) and: { engine.grainControls[voice][pair[0]] == pair[1] } })
     });
     kept = voices.every({ arg voice;
         names.every({ arg name; engine.grainControlPairs(voice).includes(name).not }) and: { engine.synths[engine.grainKey(voice)].notNil }
     });
     check.(declared.every(_ == true) and: { inGrainDefs.isEmpty },
-        "modulation: the stage has seqGate, gateSeconds, gateRelease and voiceMute (defaults %), no grain def does (%)".format(
+        "modulation: the stage has seqGate, gateSeconds, gateRelease, gateFloor and voiceMute (defaults %), no grain def does (%)".format(
             names.collect({ arg name; stageDesc.controls.detect({ arg each; each.name == name }) !? _.defaultValue }), inGrainDefs));
     check.(reached and: { kept },
-        "modulation: setGrainParam sets the four on the stage and keeps them with the voice, never for a grain synth");
+        "modulation: setGrainParam sets the five on the stage and keeps them with the voice, never for a grain synth");
     voices.do({ arg voice;
         names.do({ arg name, index; command.(\setGrainParam, voice, name, defaults[index]) });
         command.(\voiceOff, voice);
@@ -1754,6 +1795,7 @@ if (area.isNil or: { state.isNil }) {
     checkEqual33.value;
     checkGates.value;
     checkGateLag.value;
+    checkGateFloor.value;
     checkMute.value;
     checkGateEngine.value;
     checkGateKept.value;

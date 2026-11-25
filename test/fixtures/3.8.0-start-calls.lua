@@ -6,10 +6,13 @@
 -- a start of each other source kind: v3_source set to buffer slot 1, v4_source
 -- to the input and v5_source to voice 1's output ring (each voice stopped),
 -- then voices 3, 4 and 5 started with toggle_voice in that order and stopped
--- in that order (lines 545 to 777). test/unit/system_38_test.lua runs the same
+-- in that order (lines 552 to 787). test/unit/system_38_test.lua runs the same
 -- steps in this build and compares ("a default start sends what 3.8.0 sent"):
--- the regression net of 3.9's first part (its plan's Review Focus 5),
--- re-based only by its package 4c.
+-- the regression net of 3.9's first part (its plan's Review Focus 5) and
+-- its second. Re-based once, by the grid sequencer plan's package 1a, for
+-- its ten lines alone: setGrainParam(<v0>, "gateFloor", 0) in each of the
+-- ten starts, between its seqGate and its gateRelease (where the sorted
+-- grain keys put seq_gate_floor). Nothing else may re-base it.
 --
 -- How it was recorded (2026-11-23), as test/fixtures/3.6.0-start-calls.lua
 -- and test/fixtures/3.7.0-start-calls.lua were, but from a worktree of
@@ -21,7 +24,8 @@
 -- h.finish_startup(context) and the steps above, and writes each of
 -- context.engine_calls as `name(args)`, numbers with "%.9g" and strings with
 -- "%q"; run with `lua test/run.lua --dir <its folder>` (Lua 5.3.6), the same
--- file under LuaJIT 2.1 and a second Lua run gave the same 777 lines, and
+-- file under LuaJIT 2.1 and a second Lua run gave the same 777 lines (787
+-- with 1a's ten), and
 -- running the clocks 4 s with every voice on added none. 3.8.0 sends its
 -- synth params in sorted order, but the test still sorts each run of
 -- consecutive setVoiceParam lines of one voice on both sides
@@ -85,6 +89,7 @@ return {
   'setGrainParam(0, "regionStart", 0)',
   'setGrainParam(0, "regionLength", 0)',
   'setGrainParam(0, "seqGate", 0)',
+  'setGrainParam(0, "gateFloor", 0)',
   'setGrainParam(0, "gateRelease", 0.1)',
   'voiceOn(0, 100, 0.3, 0, 0.1, 20, 1)',
   'setVoiceParam(0, "attackTime", 4)',
@@ -163,6 +168,7 @@ return {
   'setGrainParam(1, "regionStart", 0)',
   'setGrainParam(1, "regionLength", 0)',
   'setGrainParam(1, "seqGate", 0)',
+  'setGrainParam(1, "gateFloor", 0)',
   'setGrainParam(1, "gateRelease", 0.1)',
   'voiceOn(1, 80, 0.25, 0, 0.15, 15, 1)',
   'setVoiceParam(1, "attackTime", 5)',
@@ -240,6 +246,7 @@ return {
   'setGrainParam(2, "regionStart", 0)',
   'setGrainParam(2, "regionLength", 0)',
   'setGrainParam(2, "seqGate", 0)',
+  'setGrainParam(2, "gateFloor", 0)',
   'setGrainParam(2, "gateRelease", 0.1)',
   'voiceOn(2, 60, 0.3, 0, 0.08, 25, 1)',
   'setVoiceParam(2, "attackTime", 3)',
@@ -316,6 +323,7 @@ return {
   'setGrainParam(3, "regionStart", 0)',
   'setGrainParam(3, "regionLength", 0)',
   'setGrainParam(3, "seqGate", 0)',
+  'setGrainParam(3, "gateFloor", 0)',
   'setGrainParam(3, "gateRelease", 0.1)',
   'voiceOn(3, 40, 0.4, 0, 0.2, 10, 1)',
   'setVoiceParam(3, "attackTime", 8)',
@@ -390,6 +398,7 @@ return {
   'setGrainParam(4, "regionStart", 0)',
   'setGrainParam(4, "regionLength", 0)',
   'setGrainParam(4, "seqGate", 0)',
+  'setGrainParam(4, "gateFloor", 0)',
   'setGrainParam(4, "gateRelease", 0.1)',
   'voiceOn(4, 120, 0.3, 0, 0.12, 18, 1)',
   'setVoiceParam(4, "attackTime", 2)',
@@ -467,6 +476,7 @@ return {
   'setGrainParam(5, "regionStart", 0)',
   'setGrainParam(5, "regionLength", 0)',
   'setGrainParam(5, "seqGate", 0)',
+  'setGrainParam(5, "gateFloor", 0)',
   'setGrainParam(5, "gateRelease", 0.1)',
   'voiceOn(5, 200, 0.35, 0, 0.08, 22, 1)',
   'setVoiceParam(5, "attackTime", 0.01)',
@@ -544,6 +554,7 @@ return {
   'setGrainParam(6, "regionStart", 0)',
   'setGrainParam(6, "regionLength", 0)',
   'setGrainParam(6, "seqGate", 0)',
+  'setGrainParam(6, "gateFloor", 0)',
   'setGrainParam(6, "gateRelease", 0.1)',
   'voiceOn(6, 300, 0.25, 0, 0.1, 20, 1)',
   'setVoiceParam(6, "attackTime", 3)',
@@ -631,6 +642,7 @@ return {
   'setGrainParam(2, "regionStart", 0)',
   'setGrainParam(2, "regionLength", 0)',
   'setGrainParam(2, "seqGate", 0)',
+  'setGrainParam(2, "gateFloor", 0)',
   'setGrainParam(2, "gateRelease", 0.1)',
   'voiceOn(2, 60, 0.3, 0, 0.08, 25, 1)',
   'setVoiceParam(2, "attackTime", 3)',
@@ -707,6 +719,7 @@ return {
   'setGrainParam(3, "regionStart", 0)',
   'setGrainParam(3, "regionLength", 0)',
   'setGrainParam(3, "seqGate", 0)',
+  'setGrainParam(3, "gateFloor", 0)',
   'setGrainParam(3, "gateRelease", 0.1)',
   'voiceOn(3, 40, 0.4, 0, 0.2, 10, 1)',
   'setVoiceParam(3, "attackTime", 8)',
@@ -781,6 +794,7 @@ return {
   'setGrainParam(4, "regionStart", 0)',
   'setGrainParam(4, "regionLength", 0)',
   'setGrainParam(4, "seqGate", 0)',
+  'setGrainParam(4, "gateFloor", 0)',
   'setGrainParam(4, "gateRelease", 0.1)',
   'voiceOn(4, 120, 0.3, 0, 0.12, 18, 1)',
   'setVoiceParam(4, "attackTime", 2)',

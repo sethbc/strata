@@ -219,6 +219,7 @@ The rest of each voice's parameters, in menu order. A default "by voice" gives v
 | seq gate | off, on | off | On: the voice is heard only while a step's gate is open |
 | seq gate length | 0.05-16 st | 0.5 | In steps |
 | seq gate release | 0.005-4 s | 0.1 | |
+| seq gate floor | 0-100% | 0 | How much of the voice a closed gate lets through ([Gates](sequencer.md#gates)) |
 | seq swing | 50-75 | 50 | Percent: 50 is straight |
 | seq direction | forward, reverse, ping-pong, random | forward | The order the voice takes its steps |
 | seq misstep | 0-100% | 0 | The chance of a step up or down instead of the direction's |

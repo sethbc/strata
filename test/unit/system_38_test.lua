@@ -5,8 +5,9 @@
 -- and another voice's output ring) sends what 3.8.0 sent, call for call
 -- (test/fixtures/3.8.0-start-calls.lua, recorded before any package of the
 -- plan landed; its header says how). The default sound does not move, so
--- every package keeps this green; the one package that may re-base the
--- fixture is 4c (#925), for the lines its report names. Compared as
+-- every package keeps this green; the one package that re-based the
+-- fixture is the grid sequencer plan's 1a, for its ten gateFloor lines (one
+-- a start: "a start sends gateFloor 0 once a start"). Compared as
 -- test/unit/system_37_test.lua compares a run with 3.6.0's.
 -- Run alone: lua test/run.lua system_38
 
@@ -25,7 +26,7 @@ local RUN = {
 -- The differences allowed between the run and the fixture, as entries for
 -- h.allowed_call_lines (docs/notes/test-harness/run-and-helpers.md). Empty:
 -- a package that moves a start's message changes the sound, which the plan
--- forbids; 4c re-bases the fixture's own lines instead of adding entries here
+-- forbids; 1a re-based the fixture's own lines instead of adding entries here
 local RUN_CALLS_ALLOWED = {}
 
 -- The source param's value of a kind of RUN.other_sources
@@ -36,7 +37,9 @@ local function source_value(C, kind)
   error("no source kind " .. kind, 2)
 end
 
-test("a default start sends what 3.8.0 sent", function()
+-- The run: a fresh Strata's start-up, every voice started and stopped,
+-- then each of RUN.other_sources started and stopped; its call lines
+function RUN.lines()
   math.randomseed(RUN.seed)
   local context = load_strata(); h.finish_startup(context)
   local S = local_value("S")
@@ -62,6 +65,11 @@ test("a default start sends what 3.8.0 sent", function()
   end
   local lines = {}
   for _, call in ipairs(context.engine_calls) do lines[#lines + 1] = h.call_line(call) end
+  return lines
+end
+
+test("a default start sends what 3.8.0 sent", function()
+  local lines = RUN.lines()
   local recorded, sent = h.allowed_call_lines(dofile(h.repo_root .. RUN.fixture), lines, RUN_CALLS_ALLOWED,
     "a default start")
   local expected, actual = h.canonical_call_lines(recorded), h.canonical_call_lines(sent)
@@ -72,6 +80,36 @@ test("a default start sends what 3.8.0 sent", function()
     end
   end
   assert_equal(#actual, #expected, "as many calls as 3.8.0")
+end)
+
+-- The grid sequencer's package 1a (design section 1, The start fixture):
+-- each start sends the stage's floor once, 0, where the sorted grain keys
+-- put seq_gate_floor (between seq_gate's seqGate and seq_gate_release's
+-- gateRelease), so a closed gate is as silent as 3.8.0's
+test("a start sends gateFloor 0 once a start", function()
+  local lines = RUN.lines()
+  local starts, floors = 0, 0
+  for index, line in ipairs(lines) do
+    local voice = line:match("^voiceOn%((%d+),")
+    if voice then
+      starts = starts + 1
+      local found = 0
+      for back = index - 1, 1, -1 do
+        if lines[back]:match("^voiceOn%(") then break end
+        if lines[back]:match('^setGrainParam%(' .. voice .. ', "gateFloor", ') then
+          found = found + 1
+          assert_equal(lines[back], 'setGrainParam(' .. voice .. ', "gateFloor", 0)', "start " .. starts .. ": at 0")
+          assert_equal(lines[back - 1], 'setGrainParam(' .. voice .. ', "seqGate", 0)', "start " .. starts .. ": after seqGate")
+          assert_equal(lines[back + 1], 'setGrainParam(' .. voice .. ', "gateRelease", 0.1)',
+            "start " .. starts .. ": before gateRelease")
+        end
+      end
+      assert_equal(found, 1, "start " .. starts .. " (voice " .. voice .. ") sends gateFloor once")
+    end
+    if line:match('"gateFloor"') then floors = floors + 1 end
+  end
+  assert_equal(starts, local_value("NUM_VOICES") + #RUN.other_sources, "the run's ten starts")
+  assert_equal(floors, starts, "no gateFloor outside a start")
 end)
 
 -- The grid sequencer's Review Focus 1 (its plan's package 1a): a scene saved
