@@ -63,6 +63,7 @@ end)
 
 test("64 NV: a tap plays or stops on release, the chooser shows the right half", function()
   local context = load_strata(); finish_startup(context)
+  h.level_side_one()  -- 3.9 (5a): the core's level gesture on side 1, which now loops
   local device = context.grid.plug(1, 8, 8)
   local patterns = local_value("patterns")
   local patterns_page = local_value("S").constants.GRID_PAGES.patterns
@@ -201,6 +202,7 @@ end)
 
 test("end_port_step_gestures ignores a port that is not a grid port (nil and NaN raise nothing)", function()
   local context = load_strata(); finish_startup(context)
+  h.level_side_one()  -- 3.9 (5a): the core's level gesture on side 1, which now loops
   local patterns = local_value("patterns")
   local S = local_value("S")
   context.grid.plug(1, 8, 8)

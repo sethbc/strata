@@ -24,6 +24,8 @@ local STRIP = {row = 8, patterns_key = 3, probe_key = 9}
 -- as "voice step port", or nil (test/helpers.lua)
 local shown_step_editor = h.shown_step_editor
 
+local level_side_one = h.level_side_one
+
 -- 3.4 (design §8.7, Question 11): a step key toggles on its release, so a
 -- held step can be edited without first toggling it
 test("a step key toggles on release", function()
@@ -49,6 +51,7 @@ end)
 
 test("a second key on the row still sets the held step's level, and neither release toggles", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   patterns[2][3] = 15
   context.grid.plug(1, 16, 16); context.grid.press(1, 3, 2, 1)
@@ -69,6 +72,7 @@ end)
 
 test("a step key held 0.3 s opens the step editor and its release closes it without a toggle", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local S = local_value("S")
   local pages_seq = S.lib.pages_seq
   local patterns = local_value("patterns")
@@ -105,6 +109,7 @@ end)
 -- patterns play closes its gate
 test("the level gesture writes through set_level, which asks the gate rule", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local S = local_value("S")
   local seq = S.lib.sequencer
   local writes = {}
@@ -192,6 +197,7 @@ end)
 -- euclid row's fill (E2 up from the level row, then E3)
 test("a pattern replaced by the step editor itself keeps it open", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local S = local_value("S")
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 8)
@@ -347,6 +353,7 @@ end)
 -- the held step
 test("the step held now gets the level, not one released before", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 16)
   context.grid.press(1, 3, 2, 1); context.grid.press(1, 3, 2, 0)
@@ -360,6 +367,7 @@ end)
 
 test("a key that set a level is not a held step", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 16)
   context.grid.press(1, 2, 1, 1)
@@ -372,6 +380,7 @@ end)
 
 test("on an 8-wide grid levels follow eight positions", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   context.grid.plug(1, 8, 8); context.grid.press(1, 2, 1, 1)
   context.grid.press(1, 4, 1, 1); assert_equal(patterns[1][2], 8, "round(4 * 15 / 8) = 8")
@@ -384,6 +393,7 @@ end)
 
 test("on 128h levels follow sixteen columns", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 8); context.grid.press(1, 3, 4, 1)
   context.grid.press(1, 16, 4, 1)
@@ -393,6 +403,7 @@ end)
 
 test("on 128v levels follow sixteen positions down the voice's column", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   context.grid.plug(1, 8, 16); context.grid.press(1, 2, 3, 1)
   assert_equal(patterns[2][3], 0, "voice 2's step 3 held (it toggles at its release)")
@@ -403,6 +414,7 @@ end)
 
 test("a held step on another grid does not set levels", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 16)
   context.grid.press(1, 3, 2, 1)
@@ -643,6 +655,7 @@ end)
 
 test("a third key sets only its own voice's held step", function()
   local context = load_strata(); finish_startup(context)
+  level_side_one()
   local patterns = local_value("patterns")
   context.grid.plug(1, 16, 16)
   context.grid.press(1, 3, 1, 1)  -- voice 1 step 3
@@ -1691,6 +1704,7 @@ local function key_enter(...)
   local steps = {...}
   return function(context)
     context.grid.plug(KEY.port, 16, 16)
+    level_side_one()
     for _, step in ipairs(steps) do step(context) end
   end
 end

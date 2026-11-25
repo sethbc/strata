@@ -65,6 +65,7 @@ end)
 
 test("128v patterns page: steps down each voice's column", function()
   local context = load_strata(); finish_startup(context)
+  h.level_side_one()  -- 3.9 (5a): the core's level gesture on side 1, which now loops
   local S = local_value("S")
   h.probe_grid_page(S.constants.GRID_PAGES.fx)
   local device = context.grid.plug(1, 8, 16)

@@ -199,6 +199,7 @@ S.lib.grid_layout_128h = include("lib/grid/layout_128h")(S)
 S.lib.grid_layout_128v = include("lib/grid/layout_128v")(S)
 S.lib.grid_layout_64 = include("lib/grid/layout_64")(S)
 S.lib.lanes = include("lib/lanes")(S)
+S.lib.loop_roll = include("lib/loop_roll")(S)
 S.lib.sequencer = include("lib/sequencer")(S)
 S.lib.pattern_letters = include("lib/pattern_letters")(S)
 
