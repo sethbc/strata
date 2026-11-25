@@ -372,13 +372,8 @@ test("a held step's entry keeps no view: the second key reads it from the keys' 
   local top = grid_pane(context, "256 top")
   top.show(pages.patterns)
   top.press(2, 3, 1)
-  local name, step_keys, index = nil, nil, 1
-  repeat
-    name, step_keys = debug.getupvalue(S.lib.grid_core.step_key, index)
-    index = index + 1
-  until name == "step_keys" or name == nil
   local found = 0
-  for _, columns in pairs(step_keys) do
+  for _, columns in pairs(h.registered_invariant("grid keys").upvalue("step_keys")) do
     for _, rows in pairs(columns) do
       for _, entry in pairs(rows) do
         found = found + 1
