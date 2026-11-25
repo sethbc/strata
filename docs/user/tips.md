@@ -1,6 +1,6 @@
 # Usage Tips
 
-Workflows for evolving textures, cross-modulation, performance and mutations. Back to the [README](../../README.md).
+Workflows for evolving textures, cross-modulation, performance, the grid's sequencer and mutations. Back to the [README](../../README.md).
 
 ## Creating Evolving Textures
 
@@ -40,6 +40,15 @@ Everything here works from the norns alone.
 2. Set the selected voice's `v1`...`v7` field to the buffer (`buf 1` ... `buf 8`): its grains now read the recording. K2 loads a sound file instead.
 3. Turn `fb` above 0% to overdub: the buffer keeps playing while each pass layers on the old audio. `loop` records over and over the same stretch until you stop it.
 4. Save a sound you like into a SCENES slot (ALT+K3 on SCENES); K3 recalls it, K2 fades to it over the transition time.
+
+## Playing the Sequencer from the Grid
+
+- Tap three steps on a voice's line of the patterns page and press PL: in `pulse`, the default, the voice is heard on its steps and quiet between them. Raise its gate floor (SEQ's `floor` row) to let some of it through between steps
+- For a voice that keeps sounding and changes at each step, open the patterns page's side 2 (press its page key again), pick the voice (V1-V7) and press MV: every set step without a value A gets a random one, which moves the voice's position on a buffer voice and its pitch on any other. T1-T4 choose what value A moves; hold B and tap one to give value B a target too
+- Give a lane a length of its own for patterns that shift against themselves: tap LN, then key 5 of the value A line, and value A repeats every five steps over the hits' sixteen
+- On the voices page's perform side, tap B while the patterns play: the voice plays a copy of its pattern from the next bar, which you can change while A stays as it was. Hold OR, tap A A B A and let go: the voice walks those letters by itself, one a bar
+- Hold a step on the patterns page's side 1 and press another key of its line to loop between them; let go and the voice is back in time with the others. LP on the perform side keeps the next loop after you let go, and R1 to R4 roll the voice for as long as you hold them
+- A scene saved in 3.8 comes back with its voices in `accent`, where steps only swell the sound: press PU (or MV) to hear them pulse
 
 ## Playing Chords and MPE
 
