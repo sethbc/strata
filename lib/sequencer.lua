@@ -1980,9 +1980,29 @@ return function(S)
     M.replace_pattern(voice_idx, {})
   end
 
+  -- The voice's levels now, to tell after a whole-pattern change which
+  -- steps it turned on
+  local function levels_of(voice_idx)
+    local levels = {}
+    for step = 1, PATTERN_LENGTH do levels[step] = S.patterns[voice_idx][step] end
+    return levels
+  end
+
+  -- The final review's M2: in move, each step a randomize or a Euclidean
+  -- fill turned on (off in `before`, on now) is given a random value A
+  -- where it has none, as a tap and the hand's choice of move do
+  local function give_move_values(voice_idx, before)
+    if M.step_mode(voice_idx) ~= "move" then return end
+    for step = 1, PATTERN_LENGTH do
+      if before[step] == 0 and S.patterns[voice_idx][step] > 0 and M.step_attr(voice_idx, step, "va") == nil then
+        M.set_step_attr(voice_idx, step, "va", math.random(1, MAX_STEP_LEVEL))
+      end
+    end
+  end
+
   function randomize_pattern(voice_idx)
     if voice_idx < 1 or voice_idx > NUM_VOICES then return end
-    local steps = {}
+    local before, steps = levels_of(voice_idx), {}
     for step = 1, PATTERN_LENGTH do
       if math.random() > 0.5 then
         steps[step] = math.random(RANDOM_STEP_FLOOR, MAX_STEP_LEVEL)
@@ -1991,11 +2011,13 @@ return function(S)
       end
     end
     M.replace_pattern(voice_idx, steps)
+    give_move_values(voice_idx, before)
   end
 
   -- Euclidean fill (design 8.5): the voice's first length steps from
   -- er.gen(hits, length, rotation), hits at MAX_STEP_LEVEL and the rest 0;
-  -- the steps past the length and every attribute are kept. Any whole hits
+  -- the steps past the length and every attribute are kept (in move a step
+  -- it turns on is given a value A, give_move_values). Any whole hits
   -- and rotation: the hits clamped to 0..length, the rotation wrapped into
   -- 0..length - 1 (design 8.6), and that pair is S.seq_euclid's
   function M.euclid(voice_idx, hits, rotation)
@@ -2004,11 +2026,12 @@ return function(S)
     if not whole_between(hits, -2 ^ 53, 2 ^ 53) or not whole_between(rotation, -2 ^ 53, 2 ^ 53) then return end
     local length = voice_length(voice_idx)
     hits, rotation = util.clamp(hits, 0, length), rotation % length
-    local fill, steps = er.gen(hits, length, rotation), {}
+    local fill, steps, before = er.gen(hits, length, rotation), {}, levels_of(voice_idx)
     for step = 1, PATTERN_LENGTH do
       steps[step] = step <= length and (fill[step] and MAX_STEP_LEVEL or 0) or S.patterns[voice_idx][step]
     end
     M.replace_pattern(voice_idx, steps)
+    give_move_values(voice_idx, before)
     S.seq_euclid[voice_idx] = {hits, rotation}
     grid_redraw()
   end

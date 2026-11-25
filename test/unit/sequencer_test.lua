@@ -1147,6 +1147,65 @@ test("euclid writes the first length steps and keeps the attributes", function()
   for step = 1, 8 do assert_equal(S.patterns[1][step], expected[step], "rotated: step " .. step) end
 end)
 
+-- The final review's M2: in move every step randomize or the Euclidean
+-- fill turns on gets a random value A where it has none, as a tap does
+local function move_voice(S)
+  for index, mode in ipairs(S.lib.sequencer.SEQ.modes) do
+    if mode == "move" then params:set("v1_seq_gate", index) end
+  end
+  assert_equal(S.lib.sequencer.step_mode(1), "move", "voice 1 in move")
+end
+
+local function hits_without_a(S, before)
+  local seq, missing, hits = S.lib.sequencer, {}, 0
+  for step = 1, S.constants.PATTERN_LENGTH do
+    if S.patterns[1][step] > 0 and before[step] == 0 then
+      hits = hits + 1
+      local value = seq.step_attr(1, step, "va")
+      if value == nil or value < 1 or value > S.constants.MAX_STEP_LEVEL then missing[#missing + 1] = step end
+    end
+  end
+  return hits, table.concat(missing, " ")
+end
+
+test("in move, randomize gives each step it turns on a value A, and keeps one already set", function()
+  local _, S = setup()
+  local seq = S.lib.sequencer
+  move_voice(S)
+  seq.set_step_attr(1, 3, "va", 4)
+  for _, seed in ipairs({1, 2, 3}) do
+    math.randomseed(seed)
+    local before = {}
+    for step = 1, S.constants.PATTERN_LENGTH do before[step] = S.patterns[1][step] end
+    randomize_pattern(1)
+    local hits, missing = hits_without_a(S, before)
+    assert_true(hits > 0, "seed " .. seed .. ": the randomize turned steps on")
+    assert_equal(missing, "", "seed " .. seed .. ": each new hit has a value A")
+  end
+  assert_equal(seq.step_attr(1, 3, "va"), 4, "a value A already set is kept")
+  -- another mode gives none
+  local _, other = setup()
+  math.randomseed(1)
+  randomize_pattern(1)
+  for step = 1, other.constants.PATTERN_LENGTH do
+    assert_equal(other.lib.sequencer.step_attr(1, step, "va"), nil, "accent: step " .. step .. " has no value A")
+  end
+end)
+
+test("in move, the Euclidean fill gives each step it turns on a value A", function()
+  local _, S = setup()
+  local seq = S.lib.sequencer
+  move_voice(S)
+  seq.set_level(1, 1, 15); seq.set_step_attr(1, 1, "va", 6)
+  local before = {}
+  for step = 1, S.constants.PATTERN_LENGTH do before[step] = S.patterns[1][step] end
+  seq.euclid(1, 5, 0)
+  local hits, missing = hits_without_a(S, before)
+  assert_true(hits >= 4, "the fill turned steps on")
+  assert_equal(missing, "", "each new hit has a value A")
+  assert_equal(seq.step_attr(1, 1, "va"), 6, "step 1 keeps its own")
+end)
+
 test("the chain loads the next scene's patterns every N bars and nothing else", function()
   local context, S = setup()
   local seq = S.lib.sequencer
