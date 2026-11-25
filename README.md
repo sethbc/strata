@@ -22,7 +22,7 @@ This is version 3.8.0. [CHANGELOG.md](CHANGELOG.md) says what each release chang
 - Sixteen named scenes in two banks, with smooth recall and a scene sequencer; actions that can wait for the beat or bar
 - Mute and solo for every voice
 - A ten-page screen UI that reaches every parameter, the patterns, the scenes and the modulation without a grid or arc
-- A pattern sequencer (on the SEQ page and the grid) with a length, division and swing per voice, probability, ratchets, step locks, gates, Euclidean fill and scene chaining, MIDI input and monome arc support
+- A pattern sequencer (on the SEQ page and the grid) with a length, division and swing per voice, a step mode per voice (pulse, accent or move), lanes with their own lengths, four patterns per voice, a loop and a roll, probability, ratchets, step locks, gates, Euclidean fill and scene chaining, MIDI input and monome arc support
 
 ## Requirements
 
@@ -71,7 +71,7 @@ After installing, restart norns from its own menu: SYSTEM > RESTART. Strata's en
 - [Modulators](docs/user/modulators.md) - the random sequences (four stepped modulation sources on a division of the tempo or a voice's hits) and an envelope per voice, fired by its hits
 - [Global Controls and Effects](docs/user/effects.md) - master density, drift, filter, delay, reverb, tempo
 - [Scenes and Automation](docs/user/scenes.md) - scenes, the scene sequencer and composing with scenes
-- [Sequencer](docs/user/sequencer.md) - each voice's pattern length, division, swing and direction, step conditions, probability, ratchets, step locks, notes, slices and gates, fill, Euclidean fill, chaining and following the clock's transport
+- [Sequencer](docs/user/sequencer.md) - each voice's pattern length, division, swing and direction, step modes and values, lanes with their own lengths, four patterns per voice and their order, the loop and the roll, step conditions, probability, ratchets, step locks, notes, slices and gates, fill, Euclidean fill, chaining and following the clock's transport
 - [Screen Controls](docs/user/controls.md) - the ten screen pages (one file each under docs/user/pages/), E1, the header, ALT, fine adjustment and center detents
 - [MIDI Input](docs/user/midi.md) - playing voices from MIDI and mapping CCs
 - [Monome Grid](docs/user/grid.md) - panes, pages and strips (a file for each size under docs/user/grid/, each page under docs/user/grid/pages/), holds and step levels (since 3.4 a step key toggles its step when you let go, not when you press, and a step held 0.3 s opens the step editor), and the pattern sequencer
