@@ -107,7 +107,7 @@ return function(S)
     {row = "division", label = "division", voice_param = "seq_division"},
     {row = "swing", label = "swing", voice_param = "seq_swing", format = "%d%%"},
     {row = "mode", label = "mode", voice_param = "seq_gate", mode = true},  -- 3.9: the step mode
-    {row = "floor", label = "floor", voice_param = "seq_gate_floor", format = "%.2f"},
+    {row = "floor", label = "floor", voice_param = "seq_gate_floor"},  -- in its formatter's percent
     {row = "move_a", label = "move A", voice_param = "seq_move_a", move = "a"},
     {row = "move_b", label = "move B", voice_param = "seq_move_b", move = "b"},
     {row = "len_a", label = "len A", lane = "a", hint = LANE_HINT},
@@ -1164,10 +1164,14 @@ return function(S)
     seq.set_step_attr(voice_idx, step, "pos", 0.88)  -- "0.88": no narrow 1 in it
     seq.set_step_attr(voice_idx, step, "pitch", 4)
     seq.set_step_attr(voice_idx, step, "size", 0.5)
-    -- 3.9 (6a): the floor's 0.25 (no narrow 1), both targets position,
-    -- every lane at 16, an order of eight of the widest letters, both values 15
-    set("seq_gate_floor", 0.25)
-    set("seq_move_a", 2); set("seq_move_b", 2)
+    -- 3.9 (6a): the floor's "100 %", both targets position (by name), every
+    -- lane at 16, an order of eight of the widest letters, both values 15
+    set("seq_gate_floor", SEQ.gate_floor[2])
+    for _, lane in ipairs({"a", "b"}) do
+      for index, name in ipairs(S.lib.lanes.options(lane)) do
+        if name == "position" then set(S.lib.lanes.MOVE.param[lane], index) end
+      end
+    end
     for _, lane in ipairs(S.lib.lanes.LANES) do S.lib.lanes.set_length(voice_idx, lane, PATTERN_LENGTH) end
     S.lib.pattern_letters.set_order(voice_idx, {"A", "B", "D", "A", "B", "D", "A", "B"})
     seq.set_step_attr(voice_idx, step, "va", MAX_STEP_LEVEL)
