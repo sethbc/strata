@@ -383,6 +383,32 @@ test("copy and paste a pattern; the copied voice's key drops the copy", function
   end, {{KEY.pattern_copy, 1}})
 end)
 
+-- 3.9's 4a (design section 3, Copy): the copy takes the whole pattern
+-- (S.lib.sequencer.whole), and a paste replaces the playing one whole
+-- (replace_whole): its levels, steps' settings and lane lengths
+test("PC copies settings and lane lengths with the levels", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local seq = S.lib.sequencer
+    seq.set_level(1, 3, 12); seq.set_step_attr(1, 3, "ratchet", 3); seq.set_step_attr(1, 3, "notes", {0, 4})
+    S.lib.lanes.set_length(1, "chance", 5)
+    seq.set_step_attr(4, 8, "prob", 40); S.lib.lanes.set_length(4, "gate", 2)  -- voice 4's own, replaced
+    local copied = seq.whole(1)
+    pane.tap(KEY.pattern_copy, 1)
+    seq.set_step_attr(1, 3, "ratchet", 2); S.lib.lanes.set_length(1, "chance", 7)  -- a snapshot
+    pane.tap(KEY.pattern_copy, 4)
+    assert_equal(S.patterns[4][3], 12, arrangement .. ": the levels")
+    assert_equal(seq.step_attr(4, 3, "ratchet"), 3, arrangement .. ": the copied settings")
+    assert_equal(table.concat(seq.step_attr(4, 3, "notes"), " "), "0 4", arrangement .. ": and chord")
+    assert_equal(seq.step_attr(4, 8, "prob"), nil, arrangement .. ": the voice's own settings replaced")
+    assert_equal(S.lib.lanes.length(4, "chance"), 5, arrangement .. ": the copied lane length")
+    assert_equal(S.lib.lanes.length(4, "gate"), nil, arrangement .. ": the voice's own lane follows again")
+    assert_true(S.pattern_steps[4][3] ~= S.pattern_steps[1][3], arrangement .. ": copied, not shared")
+    seq.set_step_attr(4, 3, "ratchet", 4)
+    pane.tap(KEY.pattern_copy, 5)
+    assert_equal(seq.step_attr(5, 3, "ratchet"), copied.steps[3].ratchet, arrangement .. ": a second paste keeps the copy")
+  end, {{KEY.pattern_copy, 1}})
+end)
+
 -- Moved: the 256's "a paste ends the step-level gesture of the voice it
 -- lands on"
 test("a paste ends the pasted voice's step gestures", function()

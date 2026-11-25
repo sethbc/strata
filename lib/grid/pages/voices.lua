@@ -2,7 +2,7 @@
 -- Grid page 6, voices (3.8, design §10.8): line v is voice v. x 1-8 MU
 -- (mute), SO (solo), LK (lock), FZ (freeze, quantized), CL and RN (clear
 -- and randomize the voice's pattern, held half a second), PC (copy and
--- paste a pattern) and VC (copy one voice's sound to another, through
+-- paste a whole pattern) and VC (copy one voice's sound to another, through
 -- S.lib.voice_presets.copy); x 9-16 the voice's level (v<v>_amp), a fader
 -- line of eight keys the pane engine sets and draws. Written in pane
 -- coordinates (lib/grid/pane.lua), so it is the same on every layout; on
@@ -15,7 +15,6 @@
 return function(S)
   local M = {}
   local NUM_VOICES = S.constants.NUM_VOICES
-  local PATTERN_LENGTH = S.constants.PATTERN_LENGTH
   local GRID_HOLD = S.constants.GRID_HOLD
 
   -- The keys of a line (pane x), the level line (its first key and its
@@ -57,21 +56,20 @@ return function(S)
     end)
   end
 
-  -- PC: no copy copies the voice's steps (a snapshot); a copy of another
-  -- voice is pasted (S.lib.sequencer.replace_pattern, which ends the
-  -- voice's step gestures on every grid), and stays; the copied voice's
-  -- key drops the copy
+  -- PC: no copy copies the voice's whole pattern (a snapshot,
+  -- S.lib.sequencer.whole: its levels, steps' settings and lane lengths,
+  -- 3.9's 4a); a copy of another voice is pasted over the playing one
+  -- whole (replace_whole, which ends the voice's step gestures on every
+  -- grid), and stays; the copied voice's key drops the copy
   local function pattern_copy_key(pane, voice_idx)
     local state = pane.state()
     local copy = state.patterns
     if copy == nil then
-      local steps = {}
-      for step = 1, PATTERN_LENGTH do steps[step] = S.patterns[voice_idx][step] end
-      state.patterns = {voice = voice_idx, steps = steps}
+      state.patterns = {voice = voice_idx, pattern = S.lib.sequencer.whole(voice_idx)}
     elseif copy.voice == voice_idx then
       state.patterns = nil
     else
-      S.lib.sequencer.replace_pattern(voice_idx, copy.steps)
+      S.lib.sequencer.replace_whole(voice_idx, copy.pattern)
     end
   end
 

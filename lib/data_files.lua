@@ -24,24 +24,28 @@ return function(S)
   local M = {}
 
   local DATA_FILES = {
-    max_bytes = 4 * 1024 * 1024,  -- a larger file is not read (16 full scenes are about 1.25 MB)
+    -- a larger file is not read: 3.9's 4a tripled it from 4 MB, keeping it
+    -- 3.8 times the largest scenes file (3.4 times before every letter)
+    max_bytes = 12 * 1024 * 1024,
     -- the most tables a file may hold: four times the cap before 3.4's
-    -- review (8192) and 4.4 times the largest scenes file 3.4 writes, so a
-    -- player's full file always loads and later releases' blocks have room
-    -- (a file the reader refuses is set aside and its scenes do not load).
-    -- It bounds what a hostile file can make the reader build: each table
-    -- costs about 70-100 bytes, so about 3 MB for the tables themselves
-    max_tables = 32768,
+    -- review (8192), 4.66 times the largest scenes file of 3.8, then tripled
+    -- by 3.9's 4a to stay over four times it (5.05), so a player's full
+    -- file always loads and later releases' blocks have room (a file the
+    -- reader refuses is set aside and its scenes do not load). It bounds
+    -- what a hostile file can make the reader build: each table costs
+    -- about 70-100 bytes, so about 9 MB for the tables themselves
+    max_tables = 98304,
     -- the tables of the largest scenes file this version writes: 16 full
     -- scenes (every step of every voice with every attribute, every macro
-    -- target, every matrix routing and every LFO home routing set, and,
-    -- 3.9's 2c, every lane of every voice at its own length; 1,248,524
-    -- bytes on Lua, 1,242,316 on LuaJIT, as matrix_test.lua writes it).
+    -- target, every matrix routing and every LFO home routing set, 3.9's
+    -- 2c, every lane of every voice at its own length, and 4a, every
+    -- letter of every voice full; 3,278,194 bytes on Lua, 3,271,986 on
+    -- LuaJIT, as matrix_test.lua writes it).
     -- test/unit/matrix_test.lua writes it and
     -- checks it holds no more; test/unit/data_files_test.lua checks
     -- max_tables keeps at least four times it. Raise it with a release that
     -- adds scene tables, and max_tables with it
-    largest_scenes_tables = 7026,
+    largest_scenes_tables = 19474,
     backups = 9,  -- the backup names: <file><suffix>, then <file><suffix>.2 ... .9
   }
   M.DATA_FILES = DATA_FILES

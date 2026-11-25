@@ -279,6 +279,7 @@ return function(S)
     end
     return true
   end
+  M.valid_block = valid_block  -- 4a: a stored letter's lanes are held to it (lib/pattern_letters.lua)
 
   -- Every voice's lengths from a (valid) lanes block: a recall's, a chain
   -- link's (lib/sequencer.lua's load_chain_scene), a chain start's undo
