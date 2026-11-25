@@ -176,8 +176,10 @@ return function(S)
   -- The roll (5b) ----------------------------------------------------------
 
   -- Per voice: its roll {rate, still, handle (its clock's, S.lib.clocks)}
-  -- or nil; max_rate, the fastest (four hits a step)
-  local ROLL = {rolls = {}, max_rate = 4}
+  -- or nil; clocks: every roll clock's handle -> its voice, from its start
+  -- until its body ends or a stop leaves it not running (the invariant's
+  -- other direction); max_rate, the fastest (four hits a step)
+  local ROLL = {rolls = {}, clocks = {}, max_rate = 4}
 
   local function valid_rate(rate)
     return type(rate) == "number" and rate == math.floor(rate) and rate >= 1 and rate <= ROLL.max_rate
@@ -218,28 +220,36 @@ return function(S)
   -- ends, playing nothing, at a hit where the roll is no longer the voice's
   -- (a new roll, end_roll, a stop) or its key's still is false (the roll
   -- then ends). An error in the hit stops the patterns and is raised again,
-  -- as a voice clock's step's is
+  -- as a voice clock's step's is. roll_body runs it, keeping the clock in
+  -- ROLL.clocks while it runs
+  local function roll_loop(voice_idx, record, handle)
+    local at = util.time()
+    while true do
+      if ROLL.rolls[voice_idx] ~= record then return end
+      if not record.still() then
+        ROLL.rolls[voice_idx] = nil
+        return
+      end
+      local ran, problem = xpcall(function() S.lib.sequencer.replay_hit(voice_idx) end, debug.traceback)
+      if not ran then
+        if ROLL.rolls[voice_idx] == record then ROLL.rolls[voice_idx] = nil end
+        pattern_clock_stop()
+        error(problem, 0)
+      end
+      if ROLL.rolls[voice_idx] ~= record then return end
+      local interval, now = interval_at(voice_idx, record.rate), util.time()
+      at = at + interval
+      if at < now then at = at + interval * math.ceil((now - at) / interval) end
+      if not handle.sleep(at - now) then return end
+    end
+  end
+
   local function roll_body(voice_idx, record)
     return function(handle)
-      local at = util.time()
-      while true do
-        if ROLL.rolls[voice_idx] ~= record then return end
-        if not record.still() then
-          ROLL.rolls[voice_idx] = nil
-          return
-        end
-        local ran, problem = xpcall(function() S.lib.sequencer.replay_hit(voice_idx) end, debug.traceback)
-        if not ran then
-          if ROLL.rolls[voice_idx] == record then ROLL.rolls[voice_idx] = nil end
-          pattern_clock_stop()
-          error(problem, 0)
-        end
-        if ROLL.rolls[voice_idx] ~= record then return end
-        local interval, now = interval_at(voice_idx, record.rate), util.time()
-        at = at + interval
-        if at < now then at = at + interval * math.ceil((now - at) / interval) end
-        if not handle.sleep(at - now) then return end
-      end
+      ROLL.clocks[handle] = voice_idx
+      local ran, problem = pcall(roll_loop, voice_idx, record, handle)
+      ROLL.clocks[handle] = nil
+      if not ran then error(problem, 0) end
     end
   end
 
@@ -264,15 +274,24 @@ return function(S)
     if not valid_voice(voice_idx) then return end
     local record = ROLL.rolls[voice_idx]
     ROLL.rolls[voice_idx] = nil
-    if record then S.lib.clocks.stop(record.handle) end
+    if record == nil then return end
+    S.lib.clocks.stop(record.handle)
+    -- a clock canceled at once never wakes to forget itself
+    if record.handle and not S.lib.clocks.alive(record.handle) then ROLL.clocks[record.handle] = nil end
   end
 
-  -- roll (design section 7): a roll exists only while the patterns play,
-  -- has a rate of 1 to 4 and a still function, and its clock runs (a
-  -- replaced or ended roll's clock was stopped with it, so every running
-  -- roll clock is a voice's roll's); its still was true at its last hit,
-  -- since the clock ends the roll before a hit at which it is false
+  -- roll (design section 7): every roll clock that runs is a rolling
+  -- voice's roll's (a replaced or ended roll's clock is stopped with it);
+  -- a roll exists only while the patterns play, has a rate of 1 to 4 and a
+  -- still function, and its clock runs; its still was true at its last
+  -- hit, since the clock ends the roll before a hit at which it is false
   S.register_invariant("roll", function()
+    for handle, voice_idx in pairs(ROLL.clocks) do
+      local record = ROLL.rolls[voice_idx]
+      if S.lib.clocks.alive(handle) and not (record and record.handle == handle) then
+        return "a roll clock of voice " .. voice_idx .. " runs, but it is not the voice's roll's"
+      end
+    end
     for voice_idx = 1, NUM_VOICES do
       local record = ROLL.rolls[voice_idx]
       if record then

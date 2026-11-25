@@ -2072,6 +2072,9 @@ return function(S)
   -- voice with a step), before the first hit
   local function start_patterns(all_posted)
     S.lib.quantize.cancel("patterns")
+    -- 5b (the controller's ruling on round 1): a start ends every roll, as
+    -- a stop does, so the voices play their own steps from it
+    for voice_idx = 1, NUM_VOICES do S.lib.loop_roll.end_roll(voice_idx) end
     end_clocks(all_posted)
     -- the sequencer's count is the clock's again (ruling 47)
     play.failed, play.started, play.reset_beat, play.offset = {}, false, nil, 0
@@ -2117,7 +2120,7 @@ return function(S)
     S.pattern_playing = false
     S.pattern_sounding_step = nil
     end_clocks(false)
-    -- 5b (ruling 5b-1): a stop ends every roll, cleanup's too
+    -- 5b (ruling 5b-1): a stop ends every roll, cleanup's too (a start does as well)
     for voice_idx = 1, NUM_VOICES do S.lib.loop_roll.end_roll(voice_idx) end
     play.reset_beat, chain.next_beat, play.next_bar = nil, nil, nil
     S.lib.pattern_letters.end_waits()  -- 4b: a stop clears every waiting letter
