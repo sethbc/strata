@@ -1249,6 +1249,93 @@ test("on_bar runs at each bar, the first beat included, after the bar's chain li
   assert_true(not pcall(seq.on_bar, 1), "a hook is a function")
 end)
 
+-- Review round 1 (4b): the steps of a start before the clocks run, the
+-- chain's first link and the bar hooks, fail as a clock's step does
+-- (guarded): the patterns stop, then the error is raised again. Never a
+-- half start, marked playing with no clock
+local function assert_stopped_by(S, what)
+  assert_true(not S.pattern_playing, what .. ": the patterns are stopped")
+  assert_equal(S.pattern_clock, nil, what .. ": no transport clock")
+  for voice_idx = 1, h.voice_count() do
+    assert_equal(S.pattern_clocks[voice_idx], nil, what .. ": no clock for voice " .. voice_idx)
+  end
+  assert_equal(S.lib.sequencer.play_state(), "stopped", what .. ": shown stopped")
+end
+
+test("a bar hook that errors at a start leaves the patterns stopped", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  for step = 1, 16 do seq.set_level(1, step, 15) end
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  local failing = true
+  seq.on_bar(function() if failing then error("a hook's fault") end end)
+  local ran, problem = pcall(pattern_clock_start)
+  assert_true(not ran, "the start raised")
+  assert_true(tostring(problem):find("a hook's fault", 1, true) ~= nil, "the hook's error: " .. tostring(problem))
+  assert_stopped_by(S, "a restart")
+  ran = pcall(pattern_clock_start)
+  assert_true(not ran, "from stopped too")
+  assert_stopped_by(S, "a start")
+  failing = false
+  pattern_clock_start()
+  assert_true(S.pattern_playing and S.pattern_clock ~= nil, "a start after it plays")
+  pattern_clock_stop()
+end)
+
+test("a chain link that errors at a start leaves the patterns stopped", function()
+  local _, S = setup()
+  local seq = S.lib.sequencer
+  for step = 1, 16 do seq.set_level(1, step, 15) end
+  capture_scene(1)
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
+  local letters = S.lib.pattern_letters
+  local apply_block = letters.apply_block
+  letters.apply_block = function() error("a link's fault") end
+  local ran, problem = pcall(pattern_clock_start)
+  letters.apply_block = apply_block
+  assert_true(not ran, "the start raised")
+  assert_true(tostring(problem):find("a link's fault", 1, true) ~= nil, "the link's error: " .. tostring(problem))
+  assert_stopped_by(S, "a chain start")
+  pattern_clock_start()
+  assert_true(S.pattern_playing, "a start after it plays")
+  pattern_clock_stop()
+end)
+
+-- Review round 1 (4b), a probe: a late wake past more than one chain
+-- period (chain bars 1, three bars late) links how many scenes? Each
+-- participant waking on the late beat finds chain.next_beat still behind it
+-- (at_beat moves it one period a call), so it links again: three links in
+-- a burst, scenes 2, 3 and 4 loaded one after the other on one beat. A
+-- known fault, left as it is (4b's review: a probe, not a fix; the
+-- controller files its issue); this test asserts today's burst, so a fix
+-- changes its expected count
+test("a late wake past three chain periods links three times in a burst (probe, a known fault)", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  for slot = 1, 4 do
+    clear_pattern(1)
+    seq.set_level(1, slot, 15)
+    capture_scene(slot)
+  end
+  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 4)
+  params:set("seq_chain_bars", 1)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  local links, apply_block = 0, S.lib.pattern_letters.apply_block
+  S.lib.pattern_letters.apply_block = function(...)
+    links = links + 1
+    return apply_block(...)
+  end
+  context.clock.advance_until(S.pattern_clocks[1], function() context.set_time(util.time() + 6.0) end)
+  context.clock.run_for(0.01)
+  S.lib.pattern_letters.apply_block = apply_block
+  local slot = seq.chain_place()
+  pattern_clock_stop()
+  assert_equal(links, 3, "today: a link a period passed, in a burst on one beat")
+  assert_equal(slot, 4, "today: on scene 4, scenes 2 and 3 loaded on the way")
+end)
+
 test("seq_division_reset puts every voice back at step 1 at the next bar", function()
   local context, S = setup()
   local seq = S.lib.sequencer

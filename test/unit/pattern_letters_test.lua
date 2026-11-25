@@ -549,6 +549,108 @@ test("a recall clears a wait, before or after the bar's hook", function()
   context.clock.run_for(BAR_SECONDS)
   assert_equal(letters.current(1), "A", "A plays on past the bar")
   pattern_clock_stop()
+  -- after the hook: a recall from a later bar hook, on the bar the wait
+  -- switched on, wins too (review round 1)
+  local recall_at_bar = false
+  S.lib.sequencer.on_bar(function(first)
+    if recall_at_bar and not first then
+      recall_at_bar = false
+      recall_scene(1)
+    end
+  end)
+  local heard = step_one_levels(S)
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  recall_at_bar = true
+  context.clock.run_for(BAR_SECONDS - 0.5 + 0.01)
+  assert_equal(recall_at_bar, false, "the later hook recalled at the bar")
+  assert_equal(letters.waiting(1), nil, "nothing waits")
+  assert_equal(letters.current(1), "A", "the scene's letter, not B")
+  assert_equal(table.concat(heard, " "), "15 15", "the scene's A played the bar's first step")
+  pattern_clock_stop()
+end)
+
+test("an order the block gives with no letter is off", function()
+  local context, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  capture_scene(1)
+  S.scenes[1].data.variations[1].order_on = true  -- a file's: no order, on
+  assert_true(validate_scene(S.scenes[1]), "it validates")
+  recall_scene(1)
+  local order, on = letters.order(1)
+  assert_equal(#order, 0, "no order")
+  assert_equal(on, false, "read as off")
+  pattern_clock_start()
+  context.clock.run_for(0.5)
+  letters.switch(1, "B")
+  assert_equal(letters.waiting(1), "B", "so a letter can wait")
+  pattern_clock_stop()
+end)
+
+test("set_order refuses an order with a hole", function()
+  local _, S = setup()
+  local letters = S.lib.pattern_letters
+  letters.set_order(1, {"A", "B"})
+  local holed = {"A", "B", "C"}
+  holed[2] = nil
+  letters.set_order(1, holed)
+  local order = letters.order(1)
+  assert_equal(table.concat(order, " "), "A B", "refused: the order is as it was")
+  letters.set_order(1, {"A", x = "B"})
+  assert_equal(table.concat(letters.order(1), " "), "A B", "a key that is no index is refused")
+end)
+
+test("a tap with the patterns stopped repaints the grid once", function()
+  local _, S = setup()
+  local letters = S.lib.pattern_letters
+  three_letters(S)
+  local count, real_grid_redraw = 0, grid_redraw
+  grid_redraw = function(...) count = count + 1; return real_grid_redraw(...) end
+  letters.switch(1, "B")
+  grid_redraw = real_grid_redraw
+  assert_equal(letters.current(1), "B")
+  assert_equal(count, 1, "one repaint")
+end)
+
+-- Review round 1 (the controller's ruling): a late wake that skips bars
+-- moves the order on by the bars that passed, wrapping, and switches once,
+-- to the letter it lands on. Voice 1's resume mid bar 1 (at 0.625 s) is
+-- delivered 6 s late: three bars (at beats 4, 8 and 12) pass at once
+local function late_order(order)
+  local context, S = setup()
+  local letters, seq = S.lib.pattern_letters, S.lib.sequencer
+  three_letters(S)
+  letters.switch_now(1, "D")  -- D used: a copy of A
+  letters.switch_now(1, "A")
+  letters.set_order(1, order)
+  pattern_clock_start()
+  assert_equal(letters.current(1), order[1], "bar 1: the first entry")
+  context.clock.run_for(0.5)
+  local wholes, replace_whole = {}, seq.replace_whole
+  seq.replace_whole = function(voice_idx, pattern)
+    if voice_idx == 1 then wholes[#wholes + 1] = pattern.levels[1] end
+    return replace_whole(voice_idx, pattern)
+  end
+  context.clock.advance_until(S.pattern_clocks[1], function() context.set_time(util.time() + 3 * BAR_SECONDS) end)
+  context.clock.run_for(0.01)
+  seq.replace_whole = replace_whole
+  local landed = letters.current(1)
+  pattern_clock_stop()
+  return landed, wholes
+end
+
+test("a late wake past three bars moves an order on three entries and switches once", function()
+  local landed, wholes = late_order({"A", "B"})
+  assert_equal(landed, "B", "A B: one past where it was")
+  assert_equal(#wholes, 1, "one switch")
+  landed, wholes = late_order({"A", "B", "C"})
+  assert_equal(landed, "A", "A B C: three on, back on A")
+  assert_equal(#wholes, 0, "no switch, none of the letters between loaded")
+  landed, wholes = late_order({"A", "B", "C", "D"})
+  assert_equal(landed, "D", "A B C D: on D")
+  assert_equal(table.concat(wholes, " "), "15", "one switch, to D (a copy of A), none to B or C")
 end)
 
 test("a stop clears a wait", function()
@@ -657,8 +759,17 @@ local NO_WAIT = "no letter waits: a tap while the patterns are stopped switches 
   .. " (switch, end_waits)"
 local ORDER_WAIT = "no letter waits while an order is on: turning one on clears a wait, and a tap turns it off"
   .. " (switch, set_order, set_order_on)"
-local NO_CHAIN = "the chain links only while the patterns play: chain.next_beat is nil while they are stopped"
-  .. " (pattern_clock_stop, chain_switched; a start's own link is the start)"
+-- The chain switched on while the patterns are stopped links nothing
+-- (chain.next_beat stays nil: chain_switched); the live pattern, its step
+-- 16 set, plays on
+local function no_link(letter)
+  return function()
+    plays(letter)()
+    local S = local_value("S")
+    assert_equal(S.patterns[1][16], 15, "the live pattern, not the scene's")
+    assert_equal(S.lib.sequencer.chain_place(), nil, "the chain has linked nothing")
+  end
+end
 
 h.transition_table({
   name = "pattern letters",
@@ -698,6 +809,7 @@ h.transition_table({
     {"stopped", "order on", "stopped/order", check = both(plays("A"), order_is("B C", true))},
     {"stopped", "order off", "stopped", check = plays("A")},
     {"stopped", "recall", "stopped", check = scene_plays},
+    {"stopped", "chain link", "stopped", check = no_link("A")},
     {"stopped/order", "tap playing", "stopped", check = both(plays("A"), order_is("B C", false))},
     {"stopped/order", "tap another", "stopped", check = both(plays("B"), order_is("B C", false))},
     {"stopped/order", "a bar", "stopped/order", check = plays("A")},
@@ -707,6 +819,7 @@ h.transition_table({
     {"stopped/order", "order on", "stopped/order", check = plays("A")},
     {"stopped/order", "order off", "stopped", check = both(plays("A"), order_is("B C", false))},
     {"stopped/order", "recall", "stopped", check = scene_plays},
+    {"stopped/order", "chain link", "stopped/order", check = both(no_link("A"), order_is("B C", true))},
     {"playing", "tap playing", "playing", check = plays("A")},
     {"playing", "tap another", "playing/waiting", check = plays("A", "B")},
     {"playing", "a bar", "playing", check = plays("A")},
@@ -745,8 +858,6 @@ h.transition_table({
     {"playing", "tap waiting", "no letter waits in this state: only a tap of another letter while the patterns play"
       .. " makes one wait (switch)"},
     {"playing/order", "tap waiting", ORDER_WAIT},
-    {"stopped", "chain link", NO_CHAIN},
-    {"stopped/order", "chain link", NO_CHAIN},
   },
 })
 

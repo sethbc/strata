@@ -1432,31 +1432,39 @@ return function(S)
   end
 
   -- 4b: every bar hook, in the order registered (first: the patterns'
-  -- start, its own bar)
-  function play.run_bar_hooks(first)
-    for _, fn in ipairs(play.bar_hooks) do fn(first) end
+  -- start, its own bar; bars: the bars of the count that passed, 1 but
+  -- after a late wake)
+  function play.run_bar_hooks(first, bars)
+    for _, fn in ipairs(play.bar_hooks) do fn(first, bars) end
   end
 
   -- Whatever falls on a beat before its steps: a chain link due then (the
   -- first participant to reach it links, for all), then, at a bar of the
-  -- count (4b), the bar hooks, once a bar however late the beat
+  -- count (4b), the bar hooks: once however late the beat (the participant's
+  -- beat, the one its clock.sync returned, moved on to the latest step that
+  -- has come), told how many bars passed (review round 1)
   local function at_beat(beat)
     if chain.next_beat and beat >= chain.next_beat - SEQ.beat_tolerance then
       chain.next_beat = chain.next_beat + params:get("seq_chain_bars") * SEQ.bar_beats
       chain_link()
     end
     if play.next_bar and beat >= play.next_bar - SEQ.beat_tolerance then
-      while beat >= play.next_bar - SEQ.beat_tolerance do play.next_bar = play.next_bar + SEQ.bar_beats end
-      play.run_bar_hooks(false)
+      local bars = 0
+      while beat >= play.next_bar - SEQ.beat_tolerance do
+        play.next_bar, bars = play.next_bar + SEQ.bar_beats, bars + 1
+      end
+      play.run_bar_hooks(false, bars)
     end
   end
 
-  -- 3.9 grid sequencer (4b): fn(first) is called at each bar of the
+  -- 3.9 grid sequencer (4b): fn(first, bars) is called at each bar of the
   -- sequencer's own count (the chain's: every SEQ.bar_beats from the
   -- patterns' start), the patterns' first beat included (first true
   -- there), after a chain link due on that bar has loaded and before the
   -- bar's first step plays; the functions run in the order registered.
-  -- Never while the patterns are stopped
+  -- bars is how many bars of the count passed since the last call: 1, but
+  -- after a late wake that skipped bars (the call is made once for them
+  -- all, at the latest). Never while the patterns are stopped
   function M.on_bar(fn)
     if type(fn) ~= "function" then error("on_bar: a hook is a function", 2) end
     table.insert(play.bar_hooks, fn)
@@ -1970,14 +1978,19 @@ return function(S)
     for voice_idx = 1, NUM_VOICES do play.voices[voice_idx].due = beat end
     play.transport.due = beat
     chain.current, chain.next_beat = nil, nil
-    if params:get("seq_chain") == 1 then
-      S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, chain_link)
-      chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
-    end
-    -- 4b (ruling 4b-2): the start's own bar, after its chain link and
-    -- before the voices' clocks play their first steps
-    play.next_bar = beat + SEQ.bar_beats
-    play.run_bar_hooks(true)
+    -- the steps before the clocks run fail as a clock's step does (4b's
+    -- review round 1): an error stops the patterns (guarded) and is raised
+    -- again, never leaving them marked playing with no clock
+    guarded(function() end, function()
+      if params:get("seq_chain") == 1 then
+        S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, chain_link)
+        chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
+      end
+      -- 4b (ruling 4b-2): the start's own bar, after its chain link and
+      -- before the voices' clocks play their first steps
+      play.next_bar = beat + SEQ.bar_beats
+      play.run_bar_hooks(true, 1)
+    end)
     for voice_idx = 1, NUM_VOICES do M.restart_voice(voice_idx, beat) end
     S.pattern_clock = clock.run(transport_clock, beat)
   end
