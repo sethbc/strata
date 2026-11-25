@@ -149,6 +149,39 @@ test("a hit on a gated voice holds for its gate length, and on an ungated one fo
   assert_near(envelopes.value(3), 0, 1e-9, "over")
 end)
 
+-- 3.9's grid sequencer, package 1b: the engine's hold is seqGate x
+-- gateSeconds, and a pulse voice's seqGate is the gate rule, so the model
+-- holds while S.lib.sequencer.gate_wanted(voice) is 1
+test("a pulse voice's envelope model holds as the engine's does", function()
+  local context, S, envelopes = loaded()
+  local seq = S.lib.sequencer
+  set_envelope(2, 0.01, 0.01, 0.5, 0.1, 0, false)
+  params:set("v2_seq_gate_length", 8)
+  local gate = seq.gate_seconds(2)
+  assert_equal(seq.step_mode(2), "pulse", "the default mode")
+  -- no step: the rule is 0, so no hold
+  context.set_time(200)
+  S.lib.engine_sync.retrigger(2, 1, "note")
+  context.set_time(200 + 0.02 + 0.05)
+  assert_near(envelopes.value(2), 0.25, 1e-9, "no step: the release at once")
+  -- a step past step 1, the patterns playing: the rule holds, and so does the model
+  seq.set_level(2, 9, 15)
+  pattern_clock_start()
+  assert_equal(seq.gate_wanted(2), 1, "the rule holds")
+  context.set_time(210)
+  S.lib.engine_sync.retrigger(2, 1, "note")
+  context.set_time(210 + 0.02 + gate / 2)
+  assert_near(envelopes.value(2), 0.5, 1e-9, "held at the sustain for the gate length")
+  context.set_time(210 + 0.02 + gate + 0.05)
+  assert_near(envelopes.value(2), 0.25, 1e-9, "half the release after the gate")
+  pattern_clock_stop()
+  -- stopped: open again, no hold
+  context.set_time(220)
+  S.lib.engine_sync.retrigger(2, 1, "note")
+  context.set_time(220 + 0.02 + 0.05)
+  assert_near(envelopes.value(2), 0.25, 1e-9, "the patterns stopped: the release at once")
+end)
+
 test("each voice's envelope follows its own hits", function()
   local context, S, envelopes = loaded()
   for v = 1, S.constants.NUM_VOICES do set_envelope(v, 0.1, 0.1, 0.5, 0.1, 0, false) end

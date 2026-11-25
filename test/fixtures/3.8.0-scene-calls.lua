@@ -36,6 +36,15 @@
 -- difference from it is one of theirs. The test compares through
 -- h.canonical_call_lines on both sides, as the start fixtures' tests do,
 -- and allows one difference: 1a's gateFloor 0 in each of the two syncs.
+--
+-- Re-based once, by the grid sequencer's 1b (the step mode; the
+-- maintainer's ruling of 2026-11-24 lifts the compatibility constraint, so
+-- the recordings are change detectors): its three lines marked gs-1b. A
+-- fresh session's voices are in pulse, the new default, so the recall's
+-- switch of a running voice to the accent it was saved in sends that mode's
+-- seqGate, 0 (scene 1: voices 1 and 2; gated: voice 1, whose voice 2 was
+-- switched to gate in the recording too). Nothing else moved: the voices
+-- were open before and after, and every step plays as recorded.
 return {
   ["scene 1"] = {
     'setGrainSource(0, 1)',
@@ -60,6 +69,7 @@ return {
     'setModSource(0, 3, 1)',
     'setModSpeed(0, 16.4)',
     'setGrainParam(0, "windowShape", 0.8)',
+    'setGrainParam(0, "seqGate", 0)',  -- gs-1b
     'setGrainSource(1, 3)',
     'setVoiceParam(1, "attackTime", 5)',
     'setVoiceParam(1, "releaseTime", 10)',
@@ -83,6 +93,7 @@ return {
     'setModSource(1, 3, 5)',
     'setModSpeed(1, 10.1)',
     'setGrainParam(1, "windowShape", 0.2)',
+    'setGrainParam(1, "seqGate", 0)',  -- gs-1b
     'setGrainSource(2, 4)',
     'setGrainSource(3, 5)',
     'setGrainSource(4, 9)',
@@ -508,6 +519,7 @@ return {
     'setModSource(0, 3, 1)',
     'setModSpeed(0, 16.4)',
     'setGrainParam(0, "windowShape", 0.8)',
+    'setGrainParam(0, "seqGate", 0)',  -- gs-1b
     'setGrainSource(1, 3)',
     'setVoiceParam(1, "attackTime", 5)',
     'setVoiceParam(1, "releaseTime", 10)',

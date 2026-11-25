@@ -663,7 +663,7 @@ test("a lock or note from off starts at the stored value or 0", function()
   -- the step's own gate from off starts at the voice's gate length (2 steps;
   -- one detent of its exp range, 0.05-16, is 0.01 of 0.05 x 320^x)
   params:set("v1_seq_gate_length", 2)
-  go_to(context, "gate", 2); enc(3, 1)
+  go_to(context, "gate"); enc(3, 1)  -- gs-1b: the voice's row is mode, so the step's gate is the first
   assert_near(seq.step_attr(1, 1, "gate"), 2.11876, 1e-4, "the step's gate starts at the voice's")
   -- a lock at its range's start goes off below it
   seq.set_step_attr(1, 1, "pos", 0.01)
@@ -933,7 +933,7 @@ test("the bookmark row shows only when the voice has a set bookmark", function()
   assert_true(not synth:find("bookmark", 1, true), "a synth voice has no bookmark row: " .. synth)
   S.buffers[1].seconds = 8
   params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
-  assert_equal(row_labels(context), "length division swing gate gate len gate rel direction misstep fill euclid "
+  assert_equal(row_labels(context), "length division swing mode gate len gate rel direction misstep fill euclid "
     .. "clear level prob ratchet gate cond slice note pos pitch size bookmark chain from scenes bars next prev random "
     .. "quantize", "every row, in order (3.7: slice after cond, on a buffer voice)")
   S.buffers[1].seconds = 0
@@ -1025,7 +1025,7 @@ test("the edit view has direction, misstep, fill, cond and the chain's three cha
   params:set("seq_fill", 1)
   local mark = fill_mark()
   assert_true(mark ~= nil, "the mark while the latch is on")
-  assert_equal(mark.x, 108, "at x 108")
+  assert_equal(mark.x, 107, "at x 107 (gs-1b: a space before the M)")
   assert_equal(mark.y, row_y(S.selected_voice) + 5, "on the selected voice's row line")
   params:set("seq_fill", 0)
   S.lib.conditions.hold_fill("grid:2", true)
@@ -1054,7 +1054,8 @@ test("the fill mark keeps a space from the G (or + and -) and a column from step
   S.lib.conditions.hold_fill("grid:1", true)
   for _, voice_idx in ipairs({1, NUM_VOICES}) do
     S.selected_voice = voice_idx
-    for _, gate in ipairs({1, 2}) do
+    -- gs-1b: every mode (accent 1 has no mark; gate G, move M, pulse P)
+    for _, gate in ipairs({1, 2, 3, 4}) do
       params:set("v" .. voice_idx .. "_seq_gate", gate)
       context.screen.clear(); redraw()
       -- the row's marks right of its cells, left to right
@@ -1063,14 +1064,14 @@ test("the fill mark keeps a space from the G (or + and -) and a column from step
         if entry.y == row_y(voice_idx) + 5 and entry.x > cursor_end then table.insert(marks, entry) end
       end
       table.sort(marks, function(a, b) return span(a) < span(b) end)
-      assert_equal(#marks, gate == 2 and 3 or 2, "voice " .. voice_idx .. ": the fill mark, the G when gated, + or -")
+      assert_equal(#marks, gate == 1 and 2 or 3, "voice " .. voice_idx .. ": the fill mark, the mode's mark, + or -")
       local mark_left, mark_right = span(marks[1])
       local next_left = span(marks[2])
-      local what = "voice " .. voice_idx .. (gate == 2 and " gated" or " ungated") .. ": '" .. marks[1].text .. "' (x "
+      local what = "voice " .. voice_idx .. " in mode " .. gate .. ": '" .. marks[1].text .. "' (x "
         .. mark_left .. "-" .. mark_right .. ") and '" .. marks[2].text .. "' (from x " .. next_left .. ")"
       assert_true(mark_left >= cursor_end + 1, what .. " leaves a blank column after the cursor (to x " .. cursor_end - 1 .. ")")
       assert_true(next_left - mark_right >= space, what .. " are a space (" .. space .. " px) apart")
-      assert_screen_layout(context, "SEQ with fill on voice " .. voice_idx .. (gate == 2 and " gated" or ""))
+      assert_screen_layout(context, "SEQ with fill on voice " .. voice_idx .. " in mode " .. gate)
     end
   end
   S.lib.conditions.hold_fill("grid:1", false)
@@ -1079,18 +1080,19 @@ end)
 test("the gate rows edit the voice's gate, its length and release, and a step's own length", function()
   local context, S = started_on_seq()
   local seq = S.lib.sequencer
+  params:set("v1_seq_gate", 1); params:set("v2_seq_gate", 1)  -- gs-1b: accent, which has no mark
   redraw()
   assert_equal(row_marks(context, 1), 0, "no mark on an ungated voice's row")
   open_edit_view(context)
-  assert_equal(go_to(context, "gate"), "off")
-  enc(3, 1); assert_equal(params:get("v1_seq_gate"), 2, "E3 turns the gate on"); assert_equal(shown(context), "on")
+  assert_equal(go_to(context, "mode"), "accent")
+  enc(3, 1); assert_equal(params:get("v1_seq_gate"), 2, "E3 turns the gate on"); assert_equal(shown(context), "gate")
   assert_equal(go_to(context, "gate len"), "0.50 st")
   enc(3, 1); assert_true(params:get("v1_seq_gate_length") > 0.5, "E3 lengthens it")
   assert_equal(go_to(context, "gate rel"), "0.10 s")
   enc(3, -1); assert_true(params:get("v1_seq_gate_release") < 0.1, "E3 shortens the release")
   assert_equal(go_to(context, "swing"), "50%")
   enc(3, 8); assert_equal(params:get("v1_seq_swing"), 58); assert_equal(shown(context), "58%")
-  assert_equal(go_to(context, "gate", 2), "off", "the step's gate: the voice's length")
+  assert_equal(go_to(context, "gate"), "off", "the step's gate: the voice's length")
   seq.set_step_attr(1, 1, "gate", 2)
   assert_equal(shown(context), "2.00 st")
   alt_k2_hold(context)
@@ -1103,6 +1105,60 @@ test("the gate rows edit the voice's gate, its length and release, and a step's 
   context.screen.clear(); redraw()
   assert_equal(row_marks(context, 2), 1, "two gated voices, one under the other")
   assert_screen_layout(context, "SEQ with two gated voices")
+end)
+
+-- 3.9's grid sequencer, package 1b (design section 5): the voice's gate row
+-- is its mode, and the pattern view marks a pulse voice P, a gate voice G
+-- and a move voice M where 3.4's G stood; accent has no mark
+test("SEQ's mode row turns through the four modes and the pattern view marks each", function()
+  local context, S = started_on_seq()
+  local function mode_mark(voice_idx)
+    for _, entry in ipairs(context.screen.texts) do
+      if entry.y == row_y(voice_idx) + 5 and entry.x == 121 and entry.align == "right" then return entry.text end
+    end
+  end
+  open_edit_view(context)
+  assert_equal(go_to(context, "mode"), "pulse", "the default mode")
+  enc(3, -3); assert_equal(shown(context), "accent")
+  for index, name in ipairs({"gate", "move", "pulse"}) do
+    enc(3, 1)
+    assert_equal(params:get("v1_seq_gate"), index + 1)
+    assert_equal(shown(context), name, "E3 turns to " .. name)
+  end
+  tap(2)  -- back to the pattern view
+  for mode, mark in pairs({[1] = false, [2] = "G", [3] = "M", [4] = "P"}) do
+    for voice_idx = 1, S.constants.NUM_VOICES do params:set("v" .. voice_idx .. "_seq_gate", mode) end
+    context.screen.clear(); redraw()
+    for voice_idx = 1, S.constants.NUM_VOICES do
+      assert_equal(mode_mark(voice_idx), mark or nil, "voice " .. voice_idx .. " in mode " .. mode)
+    end
+    assert_screen_layout(context, "SEQ with every voice in mode " .. mode)
+  end
+end)
+
+-- The level's one writer (S.lib.sequencer.set_level): SEQ's encoder, its
+-- edit view's level row and its reset row write through it, and so ask
+-- the gate rule
+test("SEQ's three level writes go through the sequencer's one writer", function()
+  local context, S = started_on_seq()
+  local seq = S.lib.sequencer
+  local writes = {}
+  local real_set_level = seq.set_level
+  seq.set_level = function(voice_idx, step, level)
+    writes[#writes + 1] = voice_idx .. ":" .. step .. ":" .. level
+    return real_set_level(voice_idx, step, level)
+  end
+  S.cursors.seq_step = 5
+  enc(3, 4)
+  assert_equal(table.concat(writes, " "), "1:5:4", "E3 in the pattern view")
+  S.lib.pages_seq.turn_step(1, 5, "level", 3)
+  assert_equal(writes[2], "1:5:7", "the edit view's level row")
+  open_edit_view(context)
+  go_to(context, "level")
+  alt_k2_hold(context)
+  seq.set_level = real_set_level
+  assert_equal(writes[#writes], "1:5:0", "the reset row")
+  assert_equal(S.patterns[1][5], 0)
 end)
 
 test("open_step_editor shows the editor over any page and close_step_editor returns to it", function()

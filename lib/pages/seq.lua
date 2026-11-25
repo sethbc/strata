@@ -2,7 +2,7 @@
 -- The SEQ page: all seven patterns, the transport and the tempo, in two
 -- views. The pattern view: one row per voice (its number, sixteen cells at
 -- the steps' levels, the steps past the voice's length as dots, a mark on
--- a gated voice, + or - for running), each row's playing column its own
+-- its step mode, + or - for running), each row's playing column its own
 -- voice's sounding step, a step cursor on the selected voice's row, and
 -- a status line under the rows (the chain's place, an armed division
 -- reset, the step outputs that failed: S.lib.sequencer's readers). E2
@@ -45,18 +45,20 @@ return function(S)
   -- reads as empty. The playing column draws outlines at
   -- playing_outline_level and cells playing_boost brighter. The cursor is a
   -- 6x6 outline at 15. A step past the voice's length is a 1x1 dot at
-  -- dot_level, dot_offset into its cell; a gated voice's row shows
-  -- gate_mark right-aligned at gate_right (3.4)
+  -- dot_level, dot_offset into its cell; a voice's row shows its step
+  -- mode's mark right-aligned at gate_right, where 3.4's G stood (3.9:
+  -- mode_marks, P pulse, G gate, M move; accent none)
   local SEQ_PAGE = {rows_y = 13, row_spacing = 5, label_x = 0, text_offset = 5, cells_x = 10,
     cell_spacing = 6, cell_size = 4, state_right = 127, empty_level = 1, playing_outline_level = 4,
     playing_boost = 4, cursor_level = 15, label_level = 4, selected_label_level = 15,
-    dot_offset = 1, dot_level = 1, gate_mark = "G", gate_right = 121,
+    dot_offset = 1, dot_level = 1, mode_marks = {pulse = "P", gate = "G", move = "M"}, gate_right = 121,
     -- 3.7 (ruling 9): f on the selected voice's row, between its cells and
-    -- the G, while fill is on (S.lib.conditions.fill): lowercase as the fill
-    -- row (a capital reads as MAIN's [F], frozen), 4 px from x 108, three
-    -- blank columns after step 16's cursor (to 104) and a space (4 px)
-    -- before the G (from 116; #735: "fill" would touch it)
-    fill_mark = "f", fill_x = 108, fill_level = 15,
+    -- the mode's mark, while fill is on (S.lib.conditions.fill): lowercase
+    -- as the fill row (a capital reads as MAIN's [F], frozen), 4 px from x
+    -- 107 (3.9: 108 before the M, 6 px wide, came), two blank columns after
+    -- step 16's cursor (to 104) and a space (4 px) before the M (from 115;
+    -- the G and P from 116; #735: "fill" would touch them)
+    fill_mark = "f", fill_x = 107, fill_level = 15,
     -- 3.9 (#921): the status line at status_x, baseline status_y (54: its
     -- capitals on y 49-53, a descender to 55), between the last row (its
     -- text on y 43-47) and the hint row (57-61), a blank row on each side
@@ -97,7 +99,7 @@ return function(S)
     {row = "length", label = "length", voice_param = "seq_length", format = "%d"},
     {row = "division", label = "division", voice_param = "seq_division"},
     {row = "swing", label = "swing", voice_param = "seq_swing", format = "%d%%"},
-    {row = "gate", label = "gate", voice_param = "seq_gate"},
+    {row = "mode", label = "mode", voice_param = "seq_gate"},  -- 3.9: the step mode
     {row = "gate_length", label = "gate len", voice_param = "seq_gate_length", format = "%.2f st"},
     {row = "gate_release", label = "gate rel", voice_param = "seq_gate_release", format = "%.2f s"},
     {row = "direction", label = "direction", voice_param = "seq_direction"},
@@ -164,10 +166,6 @@ return function(S)
   local function voice_param_id(voice_idx, name) return "v" .. voice_idx .. "_" .. name end
 
   local function voice_length(voice_idx) return params:get(voice_param_id(voice_idx, "seq_length")) end
-
-  local function gated(voice_idx)
-    return params:get(voice_param_id(voice_idx, "seq_gate")) == S.lib.sequencer.SEQ.gate_on
-  end
 
   -- A pattern edit: the grid shows the patterns, so it follows at once. (The
   -- screen needs nothing here: enc and key in strata.lua request its redraw
@@ -277,9 +275,10 @@ return function(S)
         end
       end
       screen.level(SEQ_PAGE.label_level)
-      if gated(voice_idx) then
+      local mark = SEQ_PAGE.mode_marks[S.lib.sequencer.step_mode(voice_idx)]
+      if mark then
         screen.move(SEQ_PAGE.gate_right, y + SEQ_PAGE.text_offset)
-        screen.text_right(SEQ_PAGE.gate_mark)
+        screen.text_right(mark)
       end
       screen.move(SEQ_PAGE.state_right, y + SEQ_PAGE.text_offset)
       screen.text_right(S.voices[voice_idx].active and "+" or "-")
@@ -443,10 +442,7 @@ return function(S)
     local before = step_value(voice_idx, step, key)
     local notes_before = key == "notes" and notes_signature(voice_idx, step)
     if key == "level" then
-      local pattern = S.patterns[voice_idx]
-      pattern[step] = util.clamp(pattern[step] + d, 0, MAX_STEP_LEVEL)
-      S.lib.mutation.note_pattern_edit(voice_idx)
-      grid_redraw()
+      seq.set_level(voice_idx, step, util.clamp(S.patterns[voice_idx][step] + d, 0, MAX_STEP_LEVEL))
     elseif key == "prob" then
       local prob = util.clamp((before or SEQ.max_prob) + d, 0, SEQ.max_prob)
       seq.set_step_attr(voice_idx, step, key, prob < SEQ.max_prob and prob or nil)
@@ -736,8 +732,7 @@ return function(S)
     elseif row.param_id then
       params:set(row.param_id, param_default(row.param_id))
     elseif spec.attr == "level" then
-      S.patterns[voice_idx][step] = 0
-      S.lib.mutation.note_pattern_edit(voice_idx)
+      S.lib.sequencer.set_level(voice_idx, step, 0)
     elseif spec.attr == "notes" then
       -- a note row removes that note (the add row has nothing to reset)
       if spec.index then
@@ -815,11 +810,9 @@ return function(S)
     if n == 2 then
       S.lib.ui_cursors.move("seq_step", d)
     elseif n == 3 then
-      local pattern, step = S.patterns[S.selected_voice], cursor_step()
-      if not pattern then return end
-      pattern[step] = util.clamp(pattern[step] + d, 0, MAX_STEP_LEVEL)
-      S.lib.mutation.note_pattern_edit(S.selected_voice)
-      pattern_changed()
+      local voice_idx, step = S.selected_voice, cursor_step()
+      if not S.patterns[voice_idx] then return end
+      S.lib.sequencer.set_level(voice_idx, step, util.clamp(S.patterns[voice_idx][step] + d, 0, MAX_STEP_LEVEL))
     end
   end
 
@@ -1152,7 +1145,7 @@ return function(S)
   end
   -- the chain on S16 at 16 bars (its widest), just started
   local function chain_on_s16()
-    S.patterns[1][1] = MAX_STEP_LEVEL
+    S.lib.sequencer.set_level(1, 1, MAX_STEP_LEVEL)
     capture_scene(S.constants.NUM_SCENES)
     params:set("seq_chain_from", S.constants.NUM_SCENES)
     params:set("seq_chain_scenes", 1)
@@ -1192,7 +1185,9 @@ return function(S)
         params:set(voice_param_id(voice_idx, "seq_length"), voice_idx * 2)
         params:set(voice_param_id(voice_idx, "seq_division"), 2 + voice_idx % 3)
         if voice_idx <= 3 then params:set(voice_param_id(voice_idx, "seq_gate"), S.lib.sequencer.SEQ.gate_on) end
-        for step = 1, PATTERN_LENGTH do S.patterns[voice_idx][step] = (voice_idx + step) % 4 == 0 and 12 or 0 end
+        for step = 1, PATTERN_LENGTH do
+          S.lib.sequencer.set_level(voice_idx, step, (voice_idx + step) % 4 == 0 and 12 or 0)
+        end
       end
       show_cursor(NUM_VOICES, PATTERN_LENGTH)()
       pattern_toggle()
@@ -1202,7 +1197,9 @@ return function(S)
     {name = "fill on, gated, playing", setup = function(context)
       for voice_idx = 1, NUM_VOICES do
         params:set(voice_param_id(voice_idx, "seq_gate"), S.lib.sequencer.SEQ.gate_on)
-        for step = 1, PATTERN_LENGTH do S.patterns[voice_idx][step] = (voice_idx + step) % 3 == 0 and 9 or 0 end
+        for step = 1, PATTERN_LENGTH do
+          S.lib.sequencer.set_level(voice_idx, step, (voice_idx + step) % 3 == 0 and 9 or 0)
+        end
       end
       show_cursor(NUM_VOICES, PATTERN_LENGTH)()
       params:set("seq_fill", 1)
@@ -1213,6 +1210,16 @@ return function(S)
     -- step 16, the mark between the cursor and the +
     {name = "fill held, ungated", setup = function()
       show_cursor(1, PATTERN_LENGTH)()
+      params:set(voice_param_id(1, "seq_gate"), 1)  -- 3.9: accent, no mark
+      S.lib.conditions.hold_fill("layout", true)
+    end},
+    -- 3.9 (grid sequencer 1b): each step mode's mark, accent none, P, G and
+    -- M, voice 3 (move) selected with fill held, so the f stands before the M
+    {name = "the four step modes, fill before the M", setup = function()
+      for voice_idx = 1, NUM_VOICES do
+        params:set(voice_param_id(voice_idx, "seq_gate"), (voice_idx - 1) % #S.lib.sequencer.SEQ.modes + 1)
+      end
+      show_cursor(3, PATTERN_LENGTH)()
       S.lib.conditions.hold_fill("layout", true)
     end},
     -- #921: the status line, each mark at its widest, then all three
@@ -1232,7 +1239,7 @@ return function(S)
       params:set("seq_division_reset", 1)
     end},
     {name = "a step output with a long name failed", setup = function()
-      S.patterns[1][1] = MAX_STEP_LEVEL
+      S.lib.sequencer.set_level(1, 1, MAX_STEP_LEVEL)
       failing_output("an output with a very long name")
       quietly(pattern_toggle)
     end},
@@ -1246,7 +1253,7 @@ return function(S)
     -- the widest real combinations of the chain's other marks (#921 review):
     -- no scene to link, and the chain switched on before its first link
     {name = "chain with no scene, reset and a failed output", setup = function()
-      S.patterns[1][1] = MAX_STEP_LEVEL
+      S.lib.sequencer.set_level(1, 1, MAX_STEP_LEVEL)
       failing_output("targets")
       show_cursor(NUM_VOICES, PATTERN_LENGTH)()
       params:set("seq_chain", 1)

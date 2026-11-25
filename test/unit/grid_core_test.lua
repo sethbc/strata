@@ -99,6 +99,35 @@ test("a step key held 0.3 s opens the step editor and its release closes it with
   assert_equal(patterns[3][12], 0)
 end)
 
+-- 3.9's grid sequencer, package 1b: the level gesture writes through the
+-- sequencer's one writer of a level, which asks the gate rule: voice 2 (a
+-- pulse voice, running) given its only step by the gesture while the
+-- patterns play closes its gate
+test("the level gesture writes through set_level, which asks the gate rule", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local seq = S.lib.sequencer
+  local writes = {}
+  local real_set_level = seq.set_level
+  seq.set_level = function(voice_idx, step, level)
+    writes[#writes + 1] = voice_idx .. ":" .. step .. ":" .. level
+    return real_set_level(voice_idx, step, level)
+  end
+  context.grid.plug(1, 16, 16)
+  pattern_clock_start()
+  context.clear_engine_calls()
+  context.grid.press(1, 9, 2, 1); context.grid.press(1, 8, 2, 1)
+  seq.set_level = real_set_level
+  assert_equal(table.concat(writes, " "), "2:9:8", "the held step 9 takes column 8's level, through set_level")
+  local gate
+  for _, call in ipairs(context.engine_calls) do
+    if call.name == "setGrainParam" and call.args[1] == 1 and call.args[2] == "seqGate" then gate = call.args[3] end
+  end
+  assert_equal(gate, 1, "the voice's first step closes its gate")
+  context.grid.press(1, 8, 2, 0); context.grid.press(1, 9, 2, 0)
+  pattern_clock_stop()
+end)
+
 -- A held step whose release never comes (the grid unplugged, its page
 -- changed, the pattern replaced, a second press): the editor closes,
 -- nothing toggles and no later key takes the stale one as held.

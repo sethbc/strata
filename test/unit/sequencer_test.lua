@@ -10,6 +10,7 @@ local load_strata, local_value, finish_startup, wake = h.load_strata, h.local_va
 test("pattern steps retrigger running voices and never stack synths (C3)", function()
   local context = load_strata()
   finish_startup(context)  -- voices 1 and 2 running
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local voices = local_value("voices")
   assert_true(voices[1].active and not voices[3].active, "voice 1 on, voice 3 off")
   for step = 1, 16 do toggle_pattern_step(1, step) end
@@ -351,6 +352,7 @@ end
 -- starts them all, not once per voice and again for the step (#527)
 test("a step that starts three voices repaints the grid once and shows them running (#527)", function()
   local context = load_strata(); finish_startup(context)
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local S = local_value("S")
   local UI_PAGES = local_value("UI_PAGES")
   for voice_idx = 3, 5 do
@@ -983,6 +985,7 @@ end)
 
 test("the sequencer plays through the registered outputs, voices first", function()
   local context, S = setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local seq = S.lib.sequencer
   assert_equal(S.registry.step_outputs[1].name, "voices", "the voices output is registered first")
   S.patterns[1][1] = 9; S.patterns[2][1] = 15
@@ -1392,6 +1395,7 @@ end)
 
 test("a step on a stopped gated voice starts it and then retriggers it", function()
   local context, S = setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   assert_true(not S.voices[3].active and not S.voices[4].active, "voices 3 and 4 are stopped")
   params:set("v3_seq_gate", 2)
   S.patterns[3][1] = 15; S.patterns[4][1] = 15
@@ -1453,6 +1457,7 @@ end)
 
 test("an ungated voice sends nothing per hit beyond its retrigger", function()
   local context, S = setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local seq = S.lib.sequencer
   for step = 1, 16 do S.patterns[1][step] = 15 end
   seq.set_step_attr(1, 2, "ratchet", 3)
@@ -1470,6 +1475,7 @@ end)
 
 test("a gated voice's event carries the gate's length in beats", function()
   local _, S = setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local seq = S.lib.sequencer
   local events = record_output(S, "probe")
   params:set("v1_seq_gate", 2)
@@ -1483,18 +1489,20 @@ test("a gated voice's event carries the gate's length in beats", function()
   assert_near(voice_events(events, 1)[1].gate_beats, 1, 1e-9, "a step gate of 4 steps: a beat")
 end)
 
-test("scenes switch the gate at a transition's end and crossfade its length and release; old scenes load with it off", function()
+-- gs-1b (ruling 1b-9): the default mode is pulse (4), so scene 1, captured
+-- at the defaults, and a scene without the key hold 4 where they held off
+test("scenes switch the gate at a transition's end and crossfade its length and release; old scenes load in the default mode", function()
   local context, S = setup()
   capture_scene(1)
   params:set("v1_seq_gate", 2); params:set("v1_seq_gate_length", 2); params:set("v1_seq_gate_release", 1)
   capture_scene(2)
   recall_scene(1)
-  assert_equal(params:get("v1_seq_gate"), 1, "scene 1: off")
+  assert_equal(params:get("v1_seq_gate"), 4, "scene 1: pulse, the default")
   assert_near(params:get("v1_seq_gate_length"), 0.5, 1e-6, "0.5 steps")
   assert_near(params:get("v1_seq_gate_release"), 0.1, 1e-6, "0.1 s")
   recall_scene(2, 1)
   context.clock.run_for(0.5)
-  assert_equal(params:get("v1_seq_gate"), 1, "half way: still off")
+  assert_equal(params:get("v1_seq_gate"), 4, "half way: still pulse")
   local length, release = params:get("v1_seq_gate_length"), params:get("v1_seq_gate_release")
   assert_true(length > 0.6 and length < 1.9, "the length crossfades: " .. length)
   assert_true(release > 0.2 and release < 0.9, "the release too: " .. release)
@@ -1514,7 +1522,7 @@ test("scenes switch the gate at a transition's end and crossfade its length and 
   fill_scene(old)  -- a scene without them
   assert_true(validate_scene(old), "it loads")
   local extras = old.data.voices[1].values
-  assert_equal(extras.seq_gate, 1, "gate off"); assert_near(extras.seq_gate_length, 0.5, 1e-9, "0.5")
+  assert_equal(extras.seq_gate, 4, "pulse, the default"); assert_near(extras.seq_gate_length, 0.5, 1e-9, "0.5")
   assert_near(extras.seq_gate_release, 0.1, 1e-9, "0.1"); assert_equal(extras.seq_swing, 50, "straight")
   assert_equal(extras.seq_length, 16, "16 steps"); assert_equal(extras.seq_division, 3, "of 1/16")
   assert_equal(next(old.data.steps[1]), nil, "every step plain")
@@ -2601,6 +2609,7 @@ end)
 -- then of the stop; prepare(S) runs before the start
 local function step_calls(notes, prepare)
   local context, S = setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   params:set("v1_freq", 220)
   S.patterns[1][1] = 15; S.patterns[1][2] = 15
   if notes then S.lib.sequencer.set_step_attr(1, 1, "notes", notes) end
@@ -3284,6 +3293,7 @@ end)
 -- standing grain pitch, 12 x log2(lock / stored) semitones
 local function locked_pitches(setup_voice, standing, lock_semitones, notes)
   local context, S = buffer_voice_setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   setup_voice(S)
   params:set("v1_grain_pitch", 2 ^ (standing / 12))
   S.patterns[1][1] = 15
@@ -3955,6 +3965,7 @@ local CALLS_36 = {
 
 test("a 3.6 pattern plays the same steps as before", function()
   local context, S = setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local seq = S.lib.sequencer
   local levels = {15, 0, 9, 0, 12, 0, 0, 6, 0, 0, 15, 0, 0, 0, 0, 0}
   for step = 1, 16 do S.patterns[1][step] = levels[step] end
@@ -4088,6 +4099,7 @@ end
 
 local function sliced_setup(option, count)
   local context, S = setup()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   slice_voice_1(context, S, option, count)
   return context, S
 end
@@ -5506,5 +5518,521 @@ test("reset_armed, chain_place and failed_outputs read the sequencer's state", f
   assert_equal(table.concat(seq.failed_outputs(), " "), "", "a start plays them again")
   pattern_clock_stop()
 end)
+
+-- 3.9's grid sequencer, package 1b (design section 1): v<i>_seq_gate is the
+-- step mode (accent, gate, move, pulse; pulse the default). The gate rule:
+-- seqGate is 1 for a gate voice, and for a pulse voice exactly while the
+-- patterns play and it has a set step inside its length; else 0. Every
+-- write of one level goes through S.lib.sequencer.set_level
+do
+  local MODE = {accent = 1, gate = 2, move = 3, pulse = 4}
+
+  -- The seqGate values sent to an engine voice, in order, from call index
+  -- `from` on (1 when nil)
+  local function gate_sends(context, engine_voice, from)
+    local values = {}
+    for index, call in ipairs(context.engine_calls) do
+      if index >= (from or 1) and call.name == "setGrainParam" and call.args[1] == engine_voice
+          and call.args[2] == "seqGate" then
+        values[#values + 1] = call.args[3]
+      end
+    end
+    return values
+  end
+
+  -- The engine voice's voiceOn, retrigger, seqGate (with its value) and
+  -- gateSeconds, in order
+  local function voice_sequence(context, engine_voice)
+    local names = {}
+    for _, call in ipairs(context.engine_calls) do
+      if call.args[1] == engine_voice then
+        if call.name == "voiceOn" or call.name == "retrigger" then names[#names + 1] = call.name end
+        if call.name == "setGrainParam" and (call.args[2] == "seqGate" or call.args[2] == "gateSeconds") then
+          names[#names + 1] = call.args[2] .. (call.args[2] == "seqGate" and " " .. call.args[3] or "")
+        end
+      end
+    end
+    return table.concat(names, ", ")
+  end
+
+  test("the step mode is v<i>_seq_gate, accent, gate, move and pulse, pulse the default", function()
+    local _, S = setup()
+    local seq = S.lib.sequencer
+    assert_equal(table.concat(seq.SEQ.modes, " "), "accent gate move pulse", "the four modes, in their stored order")
+    assert_equal(seq.SEQ.gate_on, MODE.gate, "option 2 keeps its meaning and its name")
+    for voice = 1, S.constants.NUM_VOICES do
+      assert_equal(params:get("v" .. voice .. "_seq_gate"), MODE.pulse, "voice " .. voice .. " starts in pulse")
+      assert_equal(seq.step_mode(voice), "pulse", "voice " .. voice .. "'s mode by name")
+      assert_equal(seq.gate_wanted(voice), 0, "voice " .. voice .. ": no step, so open")
+    end
+    params:set("v2_seq_gate", MODE.move)
+    assert_equal(seq.step_mode(2), "move")
+    assert_equal(seq.step_mode(0), nil, "no voice 0")
+    assert_equal(seq.gate_wanted(S.constants.NUM_VOICES + 1), 0, "a voice out of range is open")
+  end)
+
+  test("a fresh voice given a step pulses once the patterns play", function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    context.clear_engine_calls()
+    seq.set_level(1, 1, 15)
+    assert_equal(#gate_sends(context, 0), 0, "with the patterns stopped the rule is still 0: nothing sent")
+    assert_equal(seq.gate_wanted(1), 0)
+    pattern_clock_start()
+    local sequence = voice_sequence(context, 0)
+    assert_equal(sequence:match("^[^,]+"), "seqGate 1", "the gate closes before anything else: " .. sequence)
+    assert_true(sequence:find("seqGate 1, gateSeconds, retrigger", 1, true) ~= nil,
+      "then its gate length and its first hit: " .. sequence)
+    assert_equal(seq.gate_wanted(1), 1, "the rule holds while the patterns play")
+    pattern_clock_stop()
+  end)
+
+  test("a pulse voice with no step sounds", function()
+    local context, S = setup()
+    context.clear_engine_calls()
+    pattern_clock_start()
+    context.clock.run_for(2)
+    assert_equal(S.lib.sequencer.gate_wanted(1), 0, "no hit: the rule is 0 while playing")
+    pattern_clock_stop()
+    assert_equal(#gate_sends(context, 0), 0, "nothing closes it: no seqGate sent")
+    assert_equal(#retriggers_of(context, 0), 0, "and no hit")
+  end)
+
+  test("stopping the patterns opens every pulse voice", function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    toggle_voice(3)
+    params:set("v3_seq_gate", MODE.accent)
+    for voice = 1, 3 do seq.set_level(voice, 1, 15) end
+    seq.set_level(4, 9, 15)  -- voice 4 is stopped and its step not yet played
+    pattern_clock_start()
+    assert_true(not S.voices[4].active, "voice 4 is still stopped")
+    local from = #context.engine_calls + 1
+    pattern_clock_stop()
+    assert_equal(table.concat(gate_sends(context, 0, from), " "), "0", "voice 1 opened, once")
+    assert_equal(table.concat(gate_sends(context, 1, from), " "), "0", "voice 2 opened, once")
+    assert_equal(#gate_sends(context, 2, from), 0, "an accent voice is sent nothing")
+    assert_equal(#gate_sends(context, 3, from), 0, "a stopped voice is sent nothing")
+    for voice = 1, S.constants.NUM_VOICES do assert_equal(seq.gate_wanted(voice), 0, "voice " .. voice .. " open") end
+  end)
+
+  test("a stopped voice given steps is started gated by its first hit and opened at the stop", function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    assert_true(not S.voices[3].active, "voice 3 is stopped")
+    context.clear_engine_calls()
+    seq.set_level(3, 1, 15)
+    assert_equal(#gate_sends(context, 2), 0, "a stopped voice is sent nothing")
+    pattern_clock_start()
+    assert_true(S.voices[3].active, "its first hit started it")
+    assert_equal(voice_sequence(context, 2), "seqGate 1, gateSeconds, voiceOn, retrigger",
+      "the start's grain keys carry the closed gate, then the hit")
+    local from = #context.engine_calls + 1
+    pattern_clock_stop()
+    assert_equal(table.concat(gate_sends(context, 2, from), " "), "0", "the stop opens it")
+  end)
+
+  test("a gate voice stays gated with the patterns stopped", function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    context.clear_engine_calls()
+    params:set("v1_seq_gate", MODE.gate)
+    assert_equal(table.concat(gate_sends(context, 0), " "), "1", "gated at once, as 3.8")
+    assert_equal(seq.gate_wanted(1), 1, "with no step and the patterns stopped")
+    seq.set_level(1, 1, 15)
+    pattern_clock_start()
+    pattern_clock_stop()
+    assert_equal(table.concat(gate_sends(context, 0), " "), "1", "neither a step, a start nor a stop sends it again")
+    assert_equal(seq.gate_wanted(1), 1, "still gated")
+    seq.set_level(1, 1, 0)
+    assert_equal(seq.gate_wanted(1), 1, "with no step too")
+    params:set("v1_seq_gate", MODE.accent)
+    assert_equal(gate_sends(context, 0)[2], 0, "accent opens it")
+  end)
+
+  test("a step past the length is no hit", function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    params:set("v1_seq_length", 8)
+    seq.set_level(1, 12, 15)
+    context.clear_engine_calls()
+    pattern_clock_start()
+    context.clock.run_for(1)
+    assert_equal(seq.gate_wanted(1), 0, "step 12 lies past the length of 8")
+    assert_equal(#gate_sends(context, 0), 0, "the voice stays open")
+    params:set("v1_seq_length", 16)
+    assert_equal(gate_sends(context, 0)[1], 1, "the length grown over it closes the gate")
+    params:set("v1_seq_length", 11)
+    assert_equal(gate_sends(context, 0)[2], 0, "and cut below it opens it")
+    pattern_clock_stop()
+  end)
+
+  -- ALT+K2 held past the hold time, then let go (SEQ: it opens the edit
+  -- view; in the edit view it resets the row)
+  local function alt_k2_hold(context)
+    key(1, 1); key(2, 1)
+    context.clock.run_for(local_value("S").constants.ALT_HOLD_SECONDS + 0.05)
+    key(2, 0); key(1, 0)
+  end
+
+  -- SEQ's edit view open on the cursor's step, its cursor on the level row
+  local function edit_view_on_level(context)
+    alt_k2_hold(context)
+    enc(2, -100)
+    for _ = 1, 40 do
+      context.screen.clear(); redraw()
+      for _, entry in ipairs(context.screen.texts) do
+        if entry.text == "level" and entry.level == 15 then return end
+      end
+      enc(2, 1)
+    end
+    h.fail("the edit view has no level row")
+  end
+
+  test("each of the five writers of a level asks the rule", function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    local STEP = 12
+    context.grid.plug(1, 16, 16)
+    context.arc.plug(1)
+    h.show_page("SEQ")
+    S.cursors.seq_step = STEP
+    pattern_clock_start()
+    -- each writer's change of voice 1's only step sends the rule's answer, once
+    local function sends(what, change, expected)
+      local from = #context.engine_calls + 1
+      change()
+      assert_equal(table.concat(gate_sends(context, 0, from), " "), tostring(expected), what)
+      assert_equal(seq.gate_wanted(1), expected, what .. ": the rule")
+    end
+    sends("the step set", function() seq.set_level(1, STEP, 15) end, 1)
+    sends("SEQ's encoder turns it off", function() enc(3, -15) end, 0)
+    -- the grid's gesture sets a held step's level, never 0
+    sends("the grid's level gesture", function()
+      context.grid.press(1, STEP, 1, 1); context.grid.press(1, 14, 1, 1)
+      context.grid.press(1, 14, 1, 0); context.grid.press(1, STEP, 1, 0)
+    end, 1)
+    assert_equal(S.patterns[1][STEP], 13, "round(14 * 15 / 16)")
+    sends("the arc's level ring turns it off", function() context.arc.turn(1, 2, -1000) end, 0)
+    sends("set again", function() seq.set_level(1, STEP, 15) end, 1)
+    sends("the edit view's level row turns it off", function() S.lib.pages_seq.turn_step(1, STEP, "level", -15) end, 0)
+    sends("set again", function() seq.set_level(1, STEP, 15) end, 1)
+    sends("the edit view's reset row", function()
+      edit_view_on_level(context)
+      alt_k2_hold(context)
+    end, 0)
+    sends("set again", function() seq.set_level(1, STEP, 15) end, 1)
+    sends("a toggle turns it off", function() toggle_pattern_step(1, STEP) end, 0)
+    pattern_clock_stop()
+  end)
+
+  -- The one writer of a level (ruling 1b-3): no code under lib/ (nor
+  -- strata.lua) writes S.patterns but set_level, replace_pattern and the
+  -- include-time fill, directly or through a local that holds a pattern
+  test("no code but set_level and replace_pattern writes S.patterns", function()
+    local allowed = {
+      ["S.patterns[i] = {}"] = true,
+      ["S.patterns[i][step] = 0  -- 0=off, 1-15=velocity/brightness"] = true,
+      ["S.patterns[voice_idx][step] = level"] = true,
+      ["S.patterns[voice_idx][step] = whole_step_level(steps[step])"] = true,
+      ["S.patterns = {}"] = true,
+    }
+    local files = {"strata.lua"}
+    local listing = io.popen("git -C '" .. h.repo_root .. "' ls-files 'lib/*.lua'")
+    for path in listing:lines() do files[#files + 1] = path end
+    listing:close()
+    assert_true(#files > 20, "the lib files are listed")
+    local found, seen = {}, {}
+    for _, path in ipairs(files) do
+      local aliases = {}
+      for line in io.lines(h.repo_root .. "/" .. path) do
+        local text = line:match("^%s*(.-)%s*$")
+        local code = text:gsub("%-%-.*$", "")
+        -- a local holding a voice's pattern
+        local names = code:match("^local ([%w_, ]-)%s*=%s*S%.patterns%[")
+        if names then aliases[names:match("^([%w_]+)")] = true end
+        -- an index is [<no bracket>]: S.patterns[v] = ..., S.patterns[v][s] = ...
+        local index = "%s*%[[^%[%]]*%]"
+        local writes = code:match("S%.patterns" .. index .. "%s*=[^=]") or code:match("S%.patterns" .. index .. index
+          .. "%s*=[^=]") or code:match("S%.patterns%s*=[^=]")
+        for alias in pairs(aliases) do
+          if code:match("^" .. alias .. index .. "%s*=[^=]") or code:match("[^%w_%.]" .. alias .. index .. "%s*=[^=]") then
+            writes = true
+          end
+        end
+        if writes then
+          if path == "lib/sequencer.lua" and allowed[text] then
+            seen[text] = (seen[text] or 0) + 1
+          else
+            found[#found + 1] = path .. ": " .. text
+          end
+        end
+      end
+    end
+    assert_equal(table.concat(found, "\n"), "", "no other write of a level")
+    for text in pairs(allowed) do assert_equal(seen[text], 1, "lib/sequencer.lua writes " .. text .. " once") end
+  end)
+
+  test("a move hit retriggers at velocity 0 and tells the targets velocity 1", function()
+    local context, S = setup()
+    local events = record_output(S, "probe")
+    params:set("v1_seq_gate", MODE.move)
+    params:set("v2_seq_gate", MODE.accent)
+    S.lib.sequencer.set_level(1, 1, 9)
+    S.lib.sequencer.set_level(2, 1, 9)
+    context.clear_engine_calls()
+    pattern_clock_start(); pattern_clock_stop()
+    local move_hit, accent_hit = retriggers_of(context, 0)[1], retriggers_of(context, 1)[1]
+    assert_equal(move_hit.args[2], 0, "a move hit adds no swell")
+    assert_near(accent_hit.args[2], 9 / 15, 1e-9, "an accent hit swells at its level")
+    assert_equal(#gate_sends(context, 0), 0, "a move voice is never gated")
+    assert_equal(voice_events(events, 1)[1].velocity, 1, "outside, a move hit is at full velocity")
+    assert_equal(voice_events(events, 1)[1].level, 9, "its level is kept")
+    assert_near(voice_events(events, 2)[1].velocity, 9 / 15, 1e-9, "an accent hit keeps its velocity")
+  end)
+
+  test("a 3.8 scene's accent and gate are recalled as saved", function()
+    local context, S = setup()
+    params:set("v1_seq_gate", MODE.accent)
+    params:set("v2_seq_gate", MODE.gate)
+    capture_scene(1)
+    assert_equal(S.scenes[1].data.voices[1].values.seq_gate, MODE.accent, "accent is stored as 3.8's off")
+    assert_equal(S.scenes[1].data.voices[2].values.seq_gate, MODE.gate, "gate as 3.8's on")
+    for voice = 1, S.constants.NUM_VOICES do params:set("v" .. voice .. "_seq_gate", MODE.pulse) end
+    context.clear_engine_calls()
+    recall_scene(1)
+    assert_equal(S.lib.sequencer.step_mode(1), "accent", "the saved accent")
+    assert_equal(S.lib.sequencer.step_mode(2), "gate", "the saved gate")
+    assert_equal(S.lib.sequencer.step_mode(3), "pulse", "a voice saved in pulse")
+    local voice_1, voice_2 = gate_sends(context, 0), gate_sends(context, 1)
+    assert_equal(voice_2[#voice_2], 1, "the gate voice is gated")
+    assert_equal(voice_1[#voice_1], 0, "the accent voice is open")
+  end)
+
+  test("a chain link leaves each voice's mode", function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    params:set("v1_seq_gate", MODE.accent)
+    seq.set_level(1, 1, 15)
+    capture_scene(1)
+    seq.set_level(1, 5, 15)
+    capture_scene(2)
+    params:set("v1_seq_gate", MODE.pulse)
+    params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 2); params:set("seq_chain_bars", 1)
+    params:set("seq_chain", 1)
+    pattern_clock_start()
+    assert_equal(S.patterns[1][5], 0, "scene 1's patterns linked at the start")
+    assert_equal(seq.step_mode(1), "pulse", "the link left the mode")
+    context.clock.run_for(2.05)
+    assert_equal(S.patterns[1][5], 15, "scene 2's patterns linked at the next bar")
+    assert_equal(seq.step_mode(1), "pulse", "still pulse")
+    assert_equal(seq.gate_wanted(1), 1, "and gated: it has steps and plays")
+    pattern_clock_stop()
+    params:set("seq_chain", 0)
+  end)
+
+  -- The invariant `step gate` holds what Lua can see (ruling 1b-2): a mode
+  -- the engine sync never sent to a running voice breaks it
+  test("the step gate invariant fails on a mode the engine was not sent", function()
+    local _, S = setup()
+    local seq = S.lib.sequencer
+    local invariant = h.registered_invariant("step gate")
+    seq.set_level(1, 1, 15)
+    pattern_clock_start()
+    assert_equal(invariant.check(), nil, "it holds: voice 1 was sent pulse, whose rule is 1")
+    S.engine_param_values.v1_seq_gate = MODE.accent  -- as though the change to pulse never reached it
+    h.allow_broken_invariants("the test breaks the step gate on purpose")
+    assert_true((invariant.check() or ""):find("voice 1 was sent mode 1", 1, true) ~= nil, "a mode never sent")
+    S.engine_param_values.v1_seq_gate = nil
+    assert_equal(invariant.check(), nil, "after a start, which records none, the stored mode is what it sent")
+    pattern_clock_stop()
+  end)
+
+  -- The machine `step gate` (docs/notes/lua/sequencer/modes.md): voice 3
+  -- (stopped after the start-up) in each mode, with its only step 12 set
+  -- (hit) or none, the patterns playing or stopped, the voice running (on)
+  -- or stopped (off), a state named "<mode>/<hit|none>/<playing|stopped>/
+  -- <on|off>". Each event changes one of those: a level through each of
+  -- the five writers and a toggle, the length cut below step 12, the
+  -- patterns started and stopped, each mode chosen, the pattern replaced
+  -- with step 12 or empty, a pass played (2 s, sixteen 1/16 steps: a
+  -- stopped voice with a hit is started by it), the voice started and
+  -- stopped by hand. Every cell is a row; each check asserts the rule's
+  -- answer against the model, the engine stub's last seqGate for the voice
+  -- against it (ruling 1b-2), and the seqGate sends the event made: the
+  -- answer when it changed on a running voice, the param's own send when
+  -- the mode changed on one or the length on a running pulse voice, the
+  -- start's when it started the voice, nothing to a stopped voice
+  local GATE = {voice = 3, step = 12, cut_length = 11, modes = {"accent", "gate", "move", "pulse"}}
+  for index, mode in ipairs(GATE.modes) do GATE[mode] = index end
+
+  function GATE.name(mode, hit, playing, running)
+    return mode .. "/" .. (hit and "hit" or "none") .. "/" .. (playing and "playing" or "stopped") .. "/"
+      .. (running and "on" or "off")
+  end
+
+  function GATE.parse(state)
+    local mode, hit, playing, running = state:match("^(%a+)/(%a+)/(%a+)/(%a+)$")
+    return mode, hit == "hit", playing == "playing", running == "on"
+  end
+
+  -- The rule's answer the model gives
+  function GATE.answer(mode, hit, playing)
+    return (mode == "gate" or (mode == "pulse" and hit and playing)) and 1 or 0
+  end
+
+  -- An event's next state and the seqGate it sends (nil for none), by the model
+  function GATE.model(state, event)
+    local mode, hit, playing, running = GATE.parse(state)
+    local before, was_running, was_mode = GATE.answer(mode, hit, playing), running, mode
+    if event == "toggle" or event == "SEQ E3" or event == "level row" or event == "arc ring" then
+      hit = not hit
+    elseif event == "grid level" or event == "replaced, a step" then
+      hit = true
+    elseif event == "reset row" or event == "length cut" or event == "replaced, none" then
+      hit = false
+    elseif event == "start" then
+      playing = true
+    elseif event == "stop" then
+      playing = false
+    elseif GATE[event] then
+      mode = event
+    elseif event == "a pass" then
+      running = running or (playing and hit)
+    elseif event == "voice started" then
+      running = true
+    elseif event == "voice stopped" then
+      running = false
+    end
+    local after, sent = GATE.answer(mode, hit, playing), nil
+    if running and not was_running then
+      sent = after  -- the start's grain keys
+    elseif running and (mode ~= was_mode or (event == "length cut" and mode == "pulse") or after ~= before) then
+      sent = after
+    end
+    return GATE.name(mode, hit, playing, running), sent
+  end
+
+  -- SEQ shown, voice 3 selected and the cursor on step 12
+  function GATE.on_seq()
+    h.show_page("SEQ")
+    local S = local_value("S")
+    S.lib.ui_keys.select_voice_by(GATE.voice - S.selected_voice)
+    S.cursors.seq_step = GATE.step
+  end
+
+  -- An event that turns step 12 off when it is set and full when it is not,
+  -- by write(context, d)
+  function GATE.flip(write)
+    return function(context)
+      local S = local_value("S")
+      local top = S.constants.MAX_STEP_LEVEL
+      write(context, S.patterns[GATE.voice][GATE.step] > 0 and -top or top)
+    end
+  end
+
+  local gate_states, gate_events, gate_rows = {}, {}, {}
+  for _, mode in ipairs(GATE.modes) do
+    for _, hit in ipairs({true, false}) do
+      for _, playing in ipairs({true, false}) do
+        for _, running in ipairs({true, false}) do
+          gate_states[GATE.name(mode, hit, playing, running)] = function(context)
+            local S = local_value("S")
+            params:set("v" .. GATE.voice .. "_seq_gate", GATE[mode])
+            if hit then S.lib.sequencer.set_level(GATE.voice, GATE.step, S.constants.MAX_STEP_LEVEL) end
+            if running then toggle_voice(GATE.voice) end
+            if playing then pattern_clock_start() end
+            context.gate_from = #context.engine_calls + 1
+          end
+        end
+      end
+    end
+  end
+  gate_events["toggle"] = function() toggle_pattern_step(GATE.voice, GATE.step) end
+  gate_events["grid level"] = function(context)
+    context.grid.plug(1, 16, 16)
+    context.grid.press(1, GATE.step, GATE.voice, 1); context.grid.press(1, 14, GATE.voice, 1)
+    context.grid.press(1, 14, GATE.voice, 0); context.grid.press(1, GATE.step, GATE.voice, 0)
+  end
+  gate_events["SEQ E3"] = GATE.flip(function(_, d)
+    GATE.on_seq()
+    enc(3, d)
+  end)
+  gate_events["level row"] = GATE.flip(function(_, d)
+    local_value("S").lib.pages_seq.turn_step(GATE.voice, GATE.step, "level", d)
+  end)
+  gate_events["reset row"] = function(context)
+    GATE.on_seq()
+    edit_view_on_level(context)
+    alt_k2_hold(context)
+  end
+  gate_events["arc ring"] = GATE.flip(function(context, d)
+    context.arc.plug(1)
+    GATE.on_seq()
+    context.arc.turn(1, 2, d * 100)
+  end)
+  gate_events["length cut"] = function() params:set("v" .. GATE.voice .. "_seq_length", GATE.cut_length) end
+  gate_events["start"] = function() pattern_clock_start() end
+  gate_events["stop"] = function() pattern_clock_stop() end
+  for _, mode in ipairs(GATE.modes) do
+    gate_events[mode] = function() params:set("v" .. GATE.voice .. "_seq_gate", GATE[mode]) end
+  end
+  gate_events["replaced, a step"] = function()
+    local_value("S").lib.sequencer.replace_pattern(GATE.voice, {[GATE.step] = local_value("MAX_STEP_LEVEL")})
+  end
+  gate_events["replaced, none"] = function() local_value("S").lib.sequencer.replace_pattern(GATE.voice, {}) end
+  gate_events["a pass"] = function(context) context.clock.run_for(2) end
+  gate_events["voice started"] = function()
+    if not local_value("S").voices[GATE.voice].active then toggle_voice(GATE.voice) end
+  end
+  gate_events["voice stopped"] = function()
+    if local_value("S").voices[GATE.voice].active then toggle_voice(GATE.voice) end
+  end
+
+  local function gate_state_of()
+    local S = local_value("S")
+    local seq = S.lib.sequencer
+    return GATE.name(seq.step_mode(GATE.voice), seq.has_set_step(GATE.voice), S.pattern_playing,
+      S.voices[GATE.voice].active)
+  end
+
+  local function gate_check(expected_sent)
+    return function(context)
+      local S = local_value("S")
+      local mode, hit, playing, running = GATE.parse(gate_state_of())
+      local answer = GATE.answer(mode, hit, playing)
+      assert_equal(S.lib.sequencer.gate_wanted(GATE.voice), answer, "the rule's answer")
+      local last, sent = nil, {}
+      for index, call in ipairs(context.engine_calls) do
+        if call.name == "setGrainParam" and call.args[1] == GATE.voice - 1 and call.args[2] == "seqGate" then
+          last = call.args[3]
+          if index >= context.gate_from then sent[#sent + 1] = call.args[3] end
+        end
+      end
+      assert_equal(table.concat(sent, " "), expected_sent == nil and "" or tostring(expected_sent), "the seqGate sent")
+      if running then assert_equal(last, answer, "the engine's last seqGate is the rule's answer") end
+    end
+  end
+
+  local gate_state_names, gate_event_names = {}, {}
+  for state in pairs(gate_states) do gate_state_names[#gate_state_names + 1] = state end
+  for event in pairs(gate_events) do gate_event_names[#gate_event_names + 1] = event end
+  table.sort(gate_state_names); table.sort(gate_event_names)
+  for _, state in ipairs(gate_state_names) do
+    for _, event in ipairs(gate_event_names) do
+      local next_state, sent = GATE.model(state, event)
+      gate_rows[#gate_rows + 1] = {state, event, next_state, check = gate_check(sent)}
+    end
+  end
+
+  h.transition_table({
+    name = "step gate",
+    notes = {"docs/notes/lua/sequencer/modes.md", "step gate"},
+    states = gate_states,
+    events = gate_events,
+    state_of = gate_state_of,
+    rows = gate_rows,
+  })
+end
 
 end

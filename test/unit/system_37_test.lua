@@ -1000,11 +1000,13 @@ local function way_out(way, order)
   if way.cleanup then
     -- norns has freed the engine (docs/notes/lua/state-and-voices.md): step
     -- 160's voiceOffs, and the patterns' stop ending the own note's step
-    -- region (its clear reaches no handler), are the only calls
+    -- region (its clear reaches no handler) and opening a pulse voice with
+    -- steps (gs-1b: its seqGate 0, which reaches none either), are the only calls
     for index = before + 1, #context.engine_calls do
       local call = context.engine_calls[index]
-      assert_true(call.name == "voiceOff" or (call.name == "setGrainParam" and call.args[2]:find("^region") ~= nil
-        and call.args[3] == 0), "cleanup sends only its voiceOffs and the own region's clear (got " .. call.name .. ")")
+      assert_true(call.name == "voiceOff" or (call.name == "setGrainParam" and (call.args[2]:find("^region") ~= nil
+        or call.args[2] == "seqGate") and call.args[3] == 0),
+        "cleanup sends only its voiceOffs, the own region's clear and a pulse voice's opening (got " .. call.name .. ")")
     end
     assert_equal(extra_slots(S), 0, "cleanup: no slice note held")
     assert_notes_ended(context, "cleanup")

@@ -596,7 +596,7 @@ return function(S)
         enc(2, -20); enc(2, 11)  -- the transport row
       end},
       {name = "count offset after an unfollowed reset", setup = function(context)
-        S.patterns[1][1] = S.constants.MAX_STEP_LEVEL
+        S.lib.sequencer.set_level(1, 1, S.constants.MAX_STEP_LEVEL)
         pattern_clock_start()
         context.clock.run_for(1.3)
         context.clock.transport_start()

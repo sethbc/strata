@@ -1675,6 +1675,7 @@ end)
 
 test("a MIDI note that starts a voice, a gated step's start and a chord step are each one hit", function()
   local context, S, log = hit_log()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local function note_on(channel, note)
     context.midi.send(1, { type = "note_on", note = note, vel = 127, ch = channel })
   end
@@ -1727,6 +1728,7 @@ end)
 -- one hit per ratchet, never more
 test("a MIDI note played again on a key held in an extra slot is a hit; a ratchet's chord replay is not", function()
   local context, S, log = hit_log()
+  for voice = 1, h.voice_count() do params:set("v" .. voice .. "_seq_gate", 1) end  -- gs-1b: accent, as 3.8
   local function note_on(channel, note)
     context.midi.send(1, { type = "note_on", note = note, vel = 127, ch = channel })
   end
