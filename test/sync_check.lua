@@ -213,9 +213,7 @@ end
 -- a name the engine does not have, so the list never outlives its use. One
 -- name per line: a release whose engine lands a command before its caller
 -- adds it here, and the caller's change removes it.
-sync_check.PENDING_COMMANDS = {
-  "setReverbFreeze",
-}
+sync_check.PENDING_COMMANDS = {}
 
 -- lua_sources: { { path = "strata.lua" | "lib/...", text = source }, ... },
 -- the script's Lua files. Problems name the file and line (<path>:<line>);

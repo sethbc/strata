@@ -280,9 +280,9 @@ test("fx params: defaults, one exactly sized strata_fx group, scene defaults mat
   assert_equal(params.params[group_index].t, params.tGROUP)
   -- then the registered fx params (lib/voice_mix.lua's two bypass params
   -- and its delay to reverb, lib/delay_sync.lua's sync, division and
-  -- ping-pong, 3.8's lib/fx_hold.lua's delay freeze and clear and
-  -- lib/shimmer.lua's interval and two amounts)
-  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 1 + 3 + 2 + 3, "group size")
+  -- ping-pong, lib/fx_hold.lua's delay freeze and clear (3.8) and reverb
+  -- freeze (3.9) and lib/shimmer.lua's interval and two amounts)
+  assert_equal(params.params[group_index].n, #FX_PARAM_IDS + 2 + 1 + 3 + 3 + 3, "group size")
   for offset, param_id in ipairs(FX_PARAM_IDS) do
     assert_equal(params.params[group_index + offset].id, param_id, "group entry " .. offset)
   end
@@ -1763,6 +1763,12 @@ local PARAM_FIXTURE_ALLOWED = {
   {kind = "added", id = "delay_clear", after = "delay_freeze", why = "1b: the delay's clear (design section 7.2)",
     record = {t = T.trigger, name = "delay clear"}},
   {kind = "group_size", id = "strata_fx", add = 2, why = "1b: delay_freeze and delay_clear join the fx group"},
+  -- rf-2: the high tier's reverb freeze (3.9 reverb freeze design section 4), placed
+  -- here, before 2a's block, since shimmer's params also follow delay_clear
+  {kind = "added", id = "reverb_freeze", after = "delay_clear",
+    why = "rf-2: the reverb's freeze (reverb freeze design section 4, #819)",
+    record = {t = T.binary, name = "reverb freeze", default = 0}},
+  {kind = "group_size", id = "strata_fx", add = 1, why = "rf-2: reverb_freeze joins the fx group"},
   -- 2a: shimmer's interval and two amounts (design §7.4)
   {kind = "added", id = "shimmer_interval", after = "delay_clear", why = "2a: shimmer's interval (design section 7.4)",
     record = {t = T.option, name = "shimmer interval", default = 3, options = {"oct down", "fifth", "octave", "oct+5th", "2 oct"}}},
@@ -2317,6 +2323,7 @@ test("record_param_ids lists Strata's record params in menu order; load_default 
   assert_equal(setup.load_default(lookup("v1_quantize")), 0, "a binary that is no trigger")
   assert_equal(setup.load_default(lookup("tuning_name")), "12 equal", "a text param 1e gave a default")
   assert_equal(setup.load_default(lookup("delay_freeze")), nil, "a param saved nowhere: none")
+  assert_equal(setup.load_default(lookup("reverb_freeze")), nil, "the reverb's freeze, saved nowhere: none")
   assert_equal(setup.load_default(lookup("delay_clear")), nil, "a trigger: none")
   assert_equal(setup.load_default(lookup("buf1_file")), nil, "a file param: none")
 end)

@@ -9,7 +9,7 @@
 
 ## What it owns
 
-`lib/shimmer.lua` (`S.lib.shimmer`, included after `lib/fx_hold.lua`) registers one fx record, `{name = "shimmer", count = 3}`, so the fx group ends `delay_freeze`, `delay_clear`, `shimmer_interval`, `shimmer_delay`, `shimmer_reverb`.
+`lib/shimmer.lua` (`S.lib.shimmer`, included after `lib/fx_hold.lua`) registers one fx record, `{name = "shimmer", count = 3}`, so the fx group ends `delay_freeze`, `delay_clear`, `reverb_freeze` (3.9), `shimmer_interval`, `shimmer_delay`, `shimmer_reverb`.
 
 - `M.SHIMMER`: `ratios = {0.5, 1.5, 2, 3, 4}`, `names = {"oct down", "fifth", "octave", "oct+5th", "2 oct"}` (they fit FX's value column), `default_interval = 3`, `interval_id`, and `amounts` (`shimmer_delay` "shimmer delay", LFO label `shim dly`; `shimmer_reverb` "shimmer reverb", `shim rev`).
 - `shimmer_interval`: an option of the names, default 3.

@@ -555,8 +555,8 @@ end)
 
 test("the allow side covers 3.8's sound params and skips the holds", function()
   -- the sound ids on this base that 3.8 added (2a's shimmer and 1d's input
-  -- channel add theirs when they land; 3a's reverb freeze is cut), each a
-  -- value off its default
+  -- channel add theirs when they land; 3a's reverb freeze was cut from 3.8
+  -- and came with 3.9), each a value off its default
   local lines = { '"delay_freeze": 1', '"delay_to_reverb": 0.25', '"scale_mask": 2741', '"tuning_name": 19 equal',
     '"v2_type": 3', '"v1_dry": 0.4', '"v1_grain_shape": 0.2', '"v1_grain_skew": 0.5', '"v1_grain_prob": 40',
     '"v1_grain_cloud": 2', '"v1_pan_wander": 10' }

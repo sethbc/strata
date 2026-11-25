@@ -1,6 +1,6 @@
 # Grid Page 7: FX
 
-The effects on the grid: the delay, the reverb and the master in three sets of five faders, the bypasses, the delay's freeze and clear, sync, the filter's type and its mix, and shimmer's interval. Press the page's key (P7) to show it. Back to [Monome Grid](../../grid.md).
+The effects on the grid: the delay, the reverb and the master in three sets of five faders, the bypasses, the delay's freeze and clear, the reverb's freeze, sync, the filter's type and its mix, and shimmer's interval. Press the page's key (P7) to show it. Back to [Monome Grid](../../grid.md).
 
 ```
      1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
@@ -19,7 +19,7 @@ The effects on the grid: the delay, the reverb and the master in three sets of f
 - **ds** (line 7, key 2) syncs the delay's time to the tempo or frees it: 15 synced, 4 free. Line 1 then shows the division or the time
 - **DF** (line 7, key 3) freezes the delay's loop or releases it ([Delay freeze and clear](../../effects.md#delay-freeze-and-clear)): 15 frozen, 4 not. A bypassed delay cannot be frozen: the key stays 4
 - **DC** (line 7, key 4) empties the delay as you press it: 15 while held, 4 otherwise
-- **RF** (line 7, key 7) is the reverb's freeze. 3.8 has none, so the key is dark and does nothing
+- **RF** (line 7, key 7) freezes the reverb's tail or releases it ([Reverb freeze](../../effects.md#reverb-freeze)): 15 frozen, 4 not. A bypassed reverb cannot be frozen: the key stays 4. The reverb freezes on the high performance setting only: on the standard setting the key is dark and does nothing
 - **lp hp bp** (line 7, keys 9-11) set the master filter's type, lowpass, highpass or bandpass: the type 15, the others 4
 - **fm** (line 7, key 12) turns the master filter on or off, as K3 does on the FX page's filter rows: off sets its mix to 0 and remembers it, on brings that mix back. 15 while the mix is above 0, 4 at 0
 - Keys 4 and 10-16 of line 6 and keys 5, 8 and 13-16 of line 7 are dark and do nothing

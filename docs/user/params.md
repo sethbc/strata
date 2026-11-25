@@ -26,6 +26,8 @@ PSETs (PARAMETERS > PSET) save every one of them, and the sixteen scenes beside 
 - Delay sync (off by default): the delay plays delay division at the tempo instead of delay time; a division longer than 5.4 s plays at half its length (or a quarter, ...) until it fits (see [FX](pages/fx.md))
 - Delay division (1/32, 1/16T, 1/16, 1/16D, 1/8T, 1/8, 1/8D, 1/4T, 1/4, 1/4D, 1/2, 1 bar; default 1/8D)
 - Delay ping-pong (0-1, default 0): at 1 the repeats alternate left and right. Scenes store the three: sync and division switch at the end of a transition, ping-pong crossfades
+- Delay freeze (off by default) and delay clear (a trigger): hold the delay's loop, or empty it ([Delay freeze and clear](effects.md#delay-freeze-and-clear))
+- Reverb freeze (off by default): hold the reverb's tail, on the high performance setting only; on the standard setting it goes back to off ([Reverb freeze](effects.md#reverb-freeze)). Neither freeze is stored in a PSET or a scene, and a bypass ends its effect's freeze
 
 ## LFOs
 - **LFO 1** ... **LFO 6** (a group each) - on (off by default), shape (sine, tri, square, up, down, s&h, smooth, drunk; sine), mode (free or clocked; free), rate (0.003-50 Hz, default 0.25 Hz, a 4 s cycle), clocked rate (1/16 to 1024 bars of four beats; 4), depth (0-100 %, default 25 %, so an LFO is audible as soon as it is turned on; scenes recall the depth they stored), offset (-100 to 100 %, 0), phase (0-100 %, 0), rate mod and depth mod (none, or a lower-numbered LFO: LFO 3 offers L1 and L2) and their amounts (-100 to 100 %, 0). An LFO's destination is no menu parameter: it is set on the [LFO](pages/lfo.md) page and saved with the matrix's routings. See [Modulation](modulation.md#global-lfos)

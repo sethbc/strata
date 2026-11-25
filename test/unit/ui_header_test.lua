@@ -446,10 +446,9 @@ end)
 
 -- 3.8 (package 4a, plan ruling 28 as amended at its review): while the delay
 -- or the reverb is frozen, FX's own page dot stands as a 2x5 bar at level 15.
--- The reverb's freeze was cut from 3.8 (#819) and is reached only through
--- S.lib.fx_hold.offered("reverb"); a later package may add it behind that
--- seam, so the test builds it: FX_HOLD's reverb record and a binary param
--- of its id, the id written once
+-- The reverb's freeze (3.9, #819) is reached only through
+-- S.lib.fx_hold.offered("reverb"), true on the high tier alone, so the
+-- test's reverb part loads on a high tier
 local REVERB_FREEZE_ID = "reverb_freeze"
 
 -- The header rects at FX's dot's x (its dot or its bar), as drawn
@@ -470,6 +469,15 @@ end
 test("the header marks a frozen delay or reverb on every page", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
+  -- the reverb's part loads again on the high tier, so these take the
+  -- context and S of the load they check
+  local function reload_high()
+    h.write_performance_active({ tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
+      reason = "high: setting" })
+    context = load_strata(); finish_startup(context)
+    S = local_value("S")
+    assert_equal(S.performance.tier, "high", "the high tier")
+  end
   local HEADER = S.constants.HEADER
   local fx_x = HEADER.dots_x + (S.constants.UI_PAGES.index.FX - 1) * HEADER.dot_spacing
   assert_equal(fx_x, 44, "FX's dot at x 44")
@@ -505,7 +513,7 @@ test("the header marks a frozen delay or reverb on every page", function()
     assert_screen_layout(context, name .. " with the delay frozen")
   end
   each_page(assert_dot)
-  -- a reverb not offered: on this build its param is absent and nothing reads it
+  -- the standard tier: the reverb's freeze is not offered
   assert_true(not S.lib.fx_hold.offered("reverb"), "the reverb's freeze is not offered")
   -- SEQ with its status and the patterns playing: the play mark as it is unfrozen
   local function play_rects()
@@ -531,14 +539,18 @@ test("the header marks a frozen delay or reverb on every page", function()
   assert_bar("after the flash")
   params:set("delay_freeze", 0)
   each_page(assert_dot)
-  -- a reverb offered: a frozen reverb marks too
-  params:add{ type = "binary", id = REVERB_FREEZE_ID, name = "reverb freeze", behavior = "toggle", default = 0 }
-  S.lib.fx_hold.FX_HOLD.reverb = { freeze_id = REVERB_FREEZE_ID }
-  params:set(REVERB_FREEZE_ID, 1)
-  each_page(function(name) assert_bar(name .. ", the reverb frozen") end)
-  -- the param at 1 with the freeze not offered (a standard tier's): the dot
-  S.lib.fx_hold.FX_HOLD.reverb = nil
+  -- the param at 1 with the freeze not offered (set silently: its action
+  -- refuses it on the standard tier): the dot
+  params:set(REVERB_FREEZE_ID, 1, true)
   each_page(function(name) assert_dot(name .. ", a reverb not offered") end)
+  -- the high tier: a frozen reverb marks too, and its release unmarks
+  reload_high()
+  each_page(assert_dot)
+  params:set(REVERB_FREEZE_ID, 1)
+  assert_true(S.lib.fx_hold.frozen("reverb"), "the reverb frozen")
+  each_page(function(name) assert_bar(name .. ", the reverb frozen") end)
+  params:set(REVERB_FREEZE_ID, 0)
+  each_page(function(name) assert_dot(name .. ", the reverb released") end)
 end)
 
 -- 3.4: the dots move 4 px left (for 3.4's ninth page, MOD) and the
