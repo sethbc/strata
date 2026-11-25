@@ -113,24 +113,33 @@ test("a start sends gateFloor 0 once a start", function()
 end)
 
 -- The grid sequencer's Review Focus 1 (its plan's package 1a): a scene saved
--- before that work, recalled after it, plays what it played. The format 10
--- fixture's scene 1 (test/fixtures/format-10-files.lua: voice 2 on the ring
--- type, its step 3 at level 9 with prob 40, notes {0, 7} and ratchet 3; LFO
--- 1 on v2_main) is recalled, then the patterns play SCENE.steps steps, and
--- every engine call of the play is compared, in order, with
--- test/fixtures/3.8.0-scene-calls.lua (its header says how it was recorded).
--- The recall's own calls are outside the window: they are a full sync of
--- each voice whose source or type changes, which a new grain key changes,
--- while the steps are what this net pins. Every package keeps it green, with
--- no allowed difference
+-- before that work, recalled after it, plays what it played. Two format 10
+-- scenes, each recalled over a fresh Strata and then played SCENE.steps
+-- steps; every engine call from the recall on is compared, in order, with
+-- test/fixtures/3.8.0-scene-calls.lua (its header says how it was recorded):
+--   "scene 1": the format 10 fixture's scene 1 as saved
+--     (test/fixtures/format-10-files.lua: voice 1 on buffer 1, voice 2 on
+--     the ring type, its step 3 at level 9 with prob 40, notes {0, 7} and
+--     ratchet 3; every voice in accent; LFO 1 on v2_main);
+--   "gated": the same file with voice 2's gate on (seq_gate 2), a plain
+--     step 1 at level 15 and step 9 at level 12 with a pitch lock of 1.5,
+--     written as the file's own text (SCENE.gated_text).
+-- The one difference allowed is the gate's floor, which this plan's 1a adds
+-- to the full sync the recall sends each voice whose source or type it
+-- changes (voices 1 and 2). Every package keeps both green
 local SCENE = {
   seed = 38,  -- math.randomseed, before the load
   fixture = "/test/fixtures/3.8.0-scene-calls.lua",
   slot = 1,
   steps = 32,  -- two passes of the scene's sixteen steps
-  settle_seconds = 1,  -- run after the recall, before the window opens
-  draws_seed = 38,  -- the play's draws (scene.portable_random)
+  settle_seconds = 1,  -- run after the recall, before the patterns start
+  draws_seed = 38,  -- the play's draws (SCENE.portable_random)
   tempo = 120, step_beats = 1 / 4,  -- the scene's tempo and every voice's division, 1/16
+  allowed = {
+    -- gs-1a: the floor in the recall's full syncs (grid sequencer design §1)
+    {kind = "drop", match = '^setGrainParam%(%d+, "gateFloor", 0%)$', count = 2,
+      why = "gs-1a: the recall's full sync of voices 1 and 2 (source and type changed) sends the gate's floor, 0"},
+  },
 }
 
 -- MINSTD in place of math.random while the patterns play: the step's prob
@@ -148,16 +157,52 @@ function SCENE.portable_random(seed)
   end
 end
 
-test("a format 10 scene plays the steps it played in 3.8.0", function()
+-- The file's text with table `id`'s block `old` (its whole "{...}") replaced
+-- by `new`; raises unless the block is exactly `old`
+function SCENE.replace_block(text, id, old, new)
+  local head = "-- Table: {" .. id .. "}\n"
+  local at = text:find(head, 1, true)
+  assert(at, "the scenes file has no table " .. id)
+  local from = at + #head
+  local found = text:sub(from, from + #old - 1)
+  assert(found == old, "table " .. id .. " is not as recorded: " .. found)
+  return text:sub(1, from - 1) .. new .. text:sub(from + #old)
+end
+
+-- The fixture's scenes file with scene 1's voice 2 gated, a plain step and
+-- a locked one. Tables of format-10-files.lua's scenes.data: 54 is voice 2's
+-- pattern, 65 its steps, 110 its values; 126 is the file's last table
+function SCENE.gated_text(text)
+  local function pattern(levels)
+    local lines = {}
+    for step = 1, #levels do lines[step] = "   " .. levels[step] .. ",\n" end
+    return "{\n" .. table.concat(lines) .. "}"
+  end
+  local levels = {0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+  local old_pattern = pattern(levels)
+  levels[1], levels[9] = 15, 12
+  text = SCENE.replace_block(text, 54, old_pattern, pattern(levels))
+  text = SCENE.replace_block(text, 65, "{\n   [3]={108},\n}", "{\n   [3]={108},\n   [9]={127},\n}")
+  local values = text:match("%-%- Table: {110}\n(%b{})")
+  assert(values and select(2, values:gsub('%["seq_gate"%]=1,', "")) == 1, "voice 2's values hold seq_gate 1 once")
+  text = SCENE.replace_block(text, 110, values, (values:gsub('%["seq_gate"%]=1,', '["seq_gate"]=2,')))
+  assert(text:sub(-2) == "}\n" or text:sub(-1) == "}", "the file ends its list")
+  local last = text:find("}%s*$")
+  return text:sub(1, last - 1) .. '-- Table: {127}\n{\n   ["pitch"]=1.5,\n},\n' .. text:sub(last)
+end
+
+-- A fresh Strata over the scenes file `text`, scene SCENE.slot recalled and
+-- the patterns played SCENE.steps steps: the call lines from the recall on
+function SCENE.lines(text)
   math.randomseed(SCENE.seed)
-  local files = dofile(h.repo_root .. "/test/fixtures/format-10-files.lua")
   local subdir = "system38-scene-calls-" .. math.random(1, 1e9)
   local root = h.data_root .. subdir .. "/"
   os.execute("mkdir -p '" .. root .. "strata/'")
-  h.write_text(root .. "strata/scenes.data", (files["scenes.data"]:gsub("@DATA@", root)))
+  h.write_text(root .. "strata/scenes.data", (text:gsub("@DATA@", root)))
   local context = load_strata({data_subdir = subdir}); h.finish_startup(context)
   local S = local_value("S")
   assert_equal(S.scene_file.problem, nil, "the scenes file loads")
+  context.clear_engine_calls()
   recall_scene(SCENE.slot)
   local data = S.scenes[SCENE.slot].data
   for voice = 1, S.constants.NUM_VOICES do
@@ -168,7 +213,6 @@ test("a format 10 scene plays the steps it played in 3.8.0", function()
   end
   assert_equal(clock.get_tempo(), SCENE.tempo, "at the scene's tempo")
   context.clock.run_for(SCENE.settle_seconds)
-  context.clear_engine_calls()
   local real_random = math.random
   math.random = SCENE.portable_random(SCENE.draws_seed)
   local played, play_error = pcall(function()
@@ -178,16 +222,41 @@ test("a format 10 scene plays the steps it played in 3.8.0", function()
   end)
   math.random = real_random
   if not played then error(play_error, 0) end
-  local sent = {}
-  for _, call in ipairs(context.engine_calls) do sent[#sent + 1] = h.call_line(call) end
-  local expected, actual = h.canonical_call_lines(dofile(h.repo_root .. SCENE.fixture)), h.canonical_call_lines(sent)
+  local lines = {}
+  for _, call in ipairs(context.engine_calls) do lines[#lines + 1] = h.call_line(call) end
+  return lines, S
+end
+
+-- The scene's lines against its recording, but for SCENE.allowed
+function SCENE.compare(name, lines)
+  local recorded, sent = h.allowed_call_lines(dofile(h.repo_root .. SCENE.fixture)[name], lines, SCENE.allowed, name)
+  local expected, actual = h.canonical_call_lines(recorded), h.canonical_call_lines(sent)
   for index = 1, math.max(#expected, #actual) do
     if expected[index] ~= actual[index] then
-      h.fail("call " .. index .. ": the scene sent " .. tostring(expected[index]) .. ", this build "
+      h.fail(name .. ", call " .. index .. ": the scene sent " .. tostring(expected[index]) .. ", this build "
         .. tostring(actual[index]) .. " (the call before: " .. tostring(expected[index - 1]) .. ")")
     end
   end
-  assert_equal(#actual, #expected, "as many calls as the recording")
+  assert_equal(#actual, #expected, name .. ": as many calls as the recording")
+end
+
+test("a format 10 scene plays the steps it played in 3.8.0", function()
+  local files = dofile(h.repo_root .. "/test/fixtures/format-10-files.lua")
+  SCENE.compare("scene 1", SCENE.lines(files["scenes.data"]))
+end)
+
+test("a format 10 scene with a gated voice, a plain step and a lock plays as it did in 3.8.0", function()
+  local files = dofile(h.repo_root .. "/test/fixtures/format-10-files.lua")
+  local lines, S = SCENE.lines(SCENE.gated_text(files["scenes.data"]))
+  assert_equal(params:get("v2_seq_gate"), 2, "voice 2 gated, as the scene holds it")
+  assert_equal(S.patterns[2][1], 15, "its plain step 1 at 15")
+  assert_equal(S.lib.sequencer.step_attr(2, 9, "pitch"), 1.5, "its step 9's pitch lock")
+  local retriggers = 0
+  for _, line in ipairs(lines) do
+    if line:match("^retrigger%(1, ") then retriggers = retriggers + 1 end
+  end
+  assert_true(retriggers > 0, "voice 2 is played")
+  SCENE.compare("gated", lines)
 end)
 
 end
