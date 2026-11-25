@@ -618,6 +618,114 @@ test("the 64 shows each half of side 2", function()
   assert_true(not right.shows(KEY.ln, LINE.utility), "LN is on the left half")
 end)
 
+test("LN is disarmed after the 8x8's chooser goes to another page and back to side 2", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pane = grid_pane(context, "64 left")
+  lane_side(S, pane, 1)
+  pane.tap(KEY.ln, LINE.utility)
+  local function chooser(page, row)
+    pane.press(NV, STRIP_LINE, 1)
+    context.clock.run_for(0.55)
+    -- chooser key (page, row) is physical: the right half's pane x is 8 on
+    pane.tap(page + (S.lib.grid_core.half(1, 1) == 2 and 8 or 0), row)
+    pane.press(NV, STRIP_LINE, 0)
+  end
+  chooser(S.constants.GRID_PAGES.patterns, 4)  -- side 2's right half: a half change
+  assert_true(S.lib.grid_pages_patterns.ln_armed(1, 1), "a half change by the chooser keeps LN armed")
+  chooser(S.constants.GRID_PAGES.sources, 1)
+  chooser(S.constants.GRID_PAGES.patterns, 3)
+  assert_equal(S.lib.grid_core.view(1, 1), "1:" .. S.constants.GRID_PAGES.patterns .. ":2:1", "back on side 2")
+  assert_equal(pane.led(KEY.ln, LINE.utility), 4, "LN is disarmed")
+  pane.tap(5, LINE.a)
+  assert_equal(S.lib.lanes.length(1, "a"), nil, "and a lane key is a cell again")
+end)
+
+test("a value written on an off step turns the step on", function()
+  lane_side_arrangement(function(_, S, pane, arrangement)
+    local first = shown_columns(pane)
+    local seq = S.lib.sequencer
+    -- a value A cell's second key on step `first`, off
+    pane.press(first, LINE.a, 1)
+    pane.press(at_share(pane, 12), LINE.a, 1)
+    pane.press(at_share(pane, 12), LINE.a, 0)
+    pane.press(first, LINE.a, 0)
+    assert_equal(seq.step_attr(1, first, "va"), 11, arrangement .. ": the value set")
+    assert_equal(S.patterns[1][first], 15, arrangement .. ": and its step turned on at a tap's level")
+    -- a value B cell's tap on an off step
+    pane.tap(first + 1, LINE.b)
+    assert_equal(seq.step_attr(1, first + 1, "vb"), 15, arrangement .. ": a tap gives value B")
+    assert_equal(S.patterns[1][first + 1], 15, arrangement .. ": and turns its step on")
+    -- a set step keeps its level
+    seq.set_level(1, first + 2, 6)
+    pane.tap(first + 2, LINE.a)
+    assert_equal(S.patterns[1][first + 2], 6, arrangement .. ": a set step keeps its level")
+    -- a free lane's cell is no step's: its step is left off
+    S.lib.lanes.set_length(1, "b", 16)
+    pane.tap(first + 3, LINE.b)
+    assert_equal(seq.step_attr(1, first + 3, "vb"), 15, arrangement .. ": a free lane's cell takes its value")
+    assert_equal(S.patterns[1][first + 3], 0, arrangement .. ": and its step stays off")
+    -- in move, the hits line's second key on an off step
+    params:set("v1_seq_gate", mode_index(S, "move"))
+    local held = first + 4
+    pane.press(held, LINE.hits, 1)
+    pane.press(at_share(pane, 8), LINE.hits, 1)
+    pane.press(at_share(pane, 8), LINE.hits, 0)
+    pane.press(held, LINE.hits, 0)
+    assert_equal(seq.step_attr(1, held, "va"), 8, arrangement .. ": move: value A set")
+    assert_equal(S.patterns[1][held], 15, arrangement .. ": and the step turned on")
+  end)
+end)
+
+test("on side 1 the picked line's empty steps past the voice's length stay dark", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local first, last = shown_columns(pane)
+    params:set("v1_seq_length", 12)
+    S.lib.sequencer.set_level(1, 14, 9)
+    grid_redraw()
+    for x = first, last do
+      local expected = (x == 14 and 1) or (x <= 12 and 1) or 0
+      assert_equal(pane.led(x, 1), expected,
+        arrangement .. ": step " .. x .. (x > 12 and " past the length" or "") .. (x == 14 and ", set, at 1" or ""))
+    end
+  end)
+end)
+
+test("side 1 lights a move voice's steps at their value A", function()
+  each_arrangement(function(_, S, pane, arrangement)
+    local first = shown_columns(pane)
+    local seq = S.lib.sequencer
+    params:set("v2_seq_gate", mode_index(S, "move"))
+    seq.set_level(2, first, 15)
+    seq.set_step_attr(2, first, "va", 7)
+    seq.set_level(2, first + 1, 15)
+    seq.set_step_attr(2, first + 1, "va", nil)
+    grid_redraw()
+    assert_equal(pane.led(first, 2), 7, arrangement .. ": a step at its value A")
+    assert_equal(pane.led(first + 1, 2), 4, arrangement .. ": a step with none at 4")
+  end)
+end)
+
+test("the picked voice is what pane.state() holds", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local pane = grid_pane(context, "128h")
+  pane.show(S.constants.GRID_PAGES.patterns)
+  local record = S.lib.grid_pages_patterns.record
+  local press, seen = record.press, nil
+  record.press = function(page_pane, ...)
+    seen = page_pane
+    return press(page_pane, ...)
+  end
+  pane.tap(2, 6)
+  record.press = press
+  assert_true(seen ~= nil, "the page's press got its pane")
+  assert_equal(seen.state().voice, 6, "the press's pick is in pane.state()")
+  assert_equal(S.lib.grid_pages_patterns.voice(1), 6)
+  seen.state().voice = 3
+  assert_equal(S.lib.grid_pages_patterns.voice(1), 3, "voice(port) reads pane.state()")
+end)
+
 -- The patterns LN machine: a 64 on port 1, its pane on patterns' side 2,
 -- left half; armed by a tap of LN; the lane key is (5, 2), lane A
 local function ln_enter(armed)
@@ -639,6 +747,18 @@ end
 local function ln_off_on_return()
   ln_back()
   assert_true(not ln_armed(), "back on side 2, LN is not armed")
+end
+-- the 8x8's chooser (NV held 0.5 s, a chooser key, NV let go) to a page and
+-- side, left half
+local function ln_chooser(context, page, side)
+  local pane = grid_pane(context, "64 left")
+  pane.press(NV, STRIP_LINE, 1)
+  context.clock.run_for(0.55)
+  pane.tap(page, side == PATTERNS_SIDE2 and 3 or 1)
+  pane.press(NV, STRIP_LINE, 0)
+end
+local function ln_forgotten()
+  assert_equal(local_value("S").lib.grid_core.existing_port_state(1), nil, "the port's state is forgotten")
 end
 h.transition_table({
   name = "patterns LN",
@@ -662,18 +782,33 @@ h.transition_table({
     end,
     ["half change"] = function() local_value("S").lib.grid_core.set_half(1, 1, 2); grid_redraw() end,
     ["unplug"] = function(context) context.grid.unplug(1) end,
+    ["chooser away and back"] = function(context)
+      local S = local_value("S")
+      ln_chooser(context, S.constants.GRID_PAGES.sources, 1)
+      ln_chooser(context, S.constants.GRID_PAGES.patterns, PATTERNS_SIDE2)
+    end,
   },
   state_of = function() return ln_armed() and "armed" or "off" end,
   rows = {
-    {"off", "LN tap", "armed"},
-    {"off", "lane key", "off", check = function()
-      assert_equal(local_value("S").lib.sequencer.step_attr(1, 5, "va"), 15, "the tap gives the cell a value")
+    {"off", "LN tap", "armed", check = function(context)
+      local pane = grid_pane(context, "64 left")
+      assert_equal(pane.led(KEY.ln, LINE.utility), 15, "LN lights 15")
+      assert_equal(pane.led(1, LINE.hits), 8, "the hits line shows the voice's length at 8")
+      assert_equal(pane.led(1, LINE.b), 3, "a following lane at 3")
     end},
-    {"off", "voice key", "off"},
+    {"off", "lane key", "off", check = function()
+      local S = local_value("S")
+      assert_equal(S.lib.sequencer.step_attr(1, 5, "va"), 15, "the tap gives the cell a value")
+      assert_equal(S.patterns[1][5], 15, "and turns its step on")
+    end},
+    {"off", "voice key", "off", check = function()
+      assert_equal(local_value("S").lib.grid_pages_patterns.voice(1), 3, "voice 3 picked")
+    end},
     {"off", "side change", "off"},
     {"off", "page change", "off"},
     {"off", "half change", "off"},
-    {"off", "unplug", "off"},
+    {"off", "unplug", "off", check = ln_forgotten},
+    {"off", "chooser away and back", "off"},
     {"armed", "LN tap", "off"},
     {"armed", "lane key", "off", check = function()
       local S = local_value("S")
@@ -689,7 +824,11 @@ h.transition_table({
       grid_pane(context, "64 right").tap(12, LINE.gate)
       assert_equal(local_value("S").lib.lanes.length(1, "gate"), 12, "a lane key of the other half sets its length")
     end},
+    {"armed", "chooser away and back", "off", check = function()
+      assert_equal(local_value("S").lib.grid_core.view(1, 1), "1:1:2:1", "back on side 2's left half")
+    end},
     {"armed", "unplug", "off", check = function(context)
+      ln_forgotten()
       context.grid.plug(1, 8, 8)
       ln_back()
       assert_true(not ln_armed(), "plugged back, LN is not armed")

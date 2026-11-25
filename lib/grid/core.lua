@@ -109,9 +109,27 @@ return function(S)
     return pane .. ":" .. M.page(port, pane) .. ":" .. M.side(port, pane) .. ":" .. M.half(port, pane)
   end
 
+  -- 3.9 (3b): per port and pane, how many times the pane's page or side
+  -- changed (set_pane: a page key, a side, the 64's chooser), never its
+  -- half; forgotten with the port. Read through M.page_changes
+  local page_changes = {}
+
+  -- The count of the pane's page or side changes since the port's grid
+  -- came (0 before any): what a page compares to know it was left and
+  -- shown again (the patterns page's LN), which a half change of the 8×8
+  -- never moves
+  function M.page_changes(port, pane)
+    local counts = page_changes[port]
+    return counts and counts[pane or 1] or 0
+  end
+
   -- A change of what a pane shows ends what the pane's keys were pressed
-  -- to do (M.end_pane_keys, below)
+  -- to do (M.end_pane_keys, below); a change of its page or side is counted
   local function set_pane(port, pane, page, side, half)
+    if page ~= M.page(port, pane) or side ~= M.side(port, pane) then
+      page_changes[port] = page_changes[port] or {}
+      page_changes[port][pane] = M.page_changes(port, pane) + 1
+    end
     if page ~= M.page(port, pane) or side ~= M.side(port, pane) or half ~= M.half(port, pane) then
       M.end_pane_keys(port, pane)
     end
@@ -368,6 +386,7 @@ return function(S)
     press_tokens[port] = nil
     port_states[port] = nil
     S.grid_panes[port] = nil
+    page_changes[port] = nil
   end
 
   local function press_key(port, x, y)

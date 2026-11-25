@@ -67,6 +67,12 @@ return function(S)
 
   local function voice_param(voice_idx, key) return "v" .. voice_idx .. "_" .. key end
 
+  -- The voice's length from the voices table (the only source of values, as
+  -- the sequencer reads it), so a draw before the params exist still works
+  local function voice_length(voice_idx)
+    return (S.voices[voice_idx].values or {}).seq_length or PATTERN_LENGTH
+  end
+
   -- The port's state of this page, pane.state()'s table
   -- (port_state(port).pages.patterns): made with `create`, else nil while
   -- the port has none
@@ -123,8 +129,21 @@ return function(S)
     return nil
   end
 
+  -- A step's value written on side 2 (the controller's ruling for 3b's
+  -- review): a value set on a step that is off turns it on at a tap's level
+  -- (MAX_STEP_LEVEL, through the one writer of a level), since a value on
+  -- an off step is never played nor shown. A step's value is value A or B
+  -- in a lane that follows (a free lane's cell is no step's: its hits are
+  -- left alone), and value A from the hits line in move
+  local function value_turns_on(voice_idx, lane, cell)
+    if S.patterns[voice_idx][cell] ~= 0 then return end
+    local follows = (lane == "a" or lane == "b") and S.lib.lanes.length(voice_idx, lane) == nil
+    if follows or lane == "hits" then S.lib.sequencer.set_level(voice_idx, cell, MAX_STEP_LEVEL) end
+  end
+
   -- Set a step's cell from a key's position: the hits' level (in move its
-  -- value A, the level left as it is), or the lane's step key
+  -- value A, the level left as it is), or the lane's step key; a value on
+  -- an off step turns it on (value_turns_on)
   function M.set_from_position(voice_idx, lane, cell, position, positions)
     local value = M.value_for_position(voice_idx, lane, position, positions)
     if value == nil or not valid_cell(cell) then return nil end
@@ -132,11 +151,13 @@ return function(S)
     if lane == "hits" then
       if seq.step_mode(voice_idx) == "move" then
         seq.set_step_attr(voice_idx, cell, S.lib.lanes.STEP_KEYS.a, value)
+        value_turns_on(voice_idx, lane, cell)
       else
         seq.set_level(voice_idx, cell, value)
       end
     else
       seq.set_step_attr(voice_idx, cell, S.lib.lanes.STEP_KEYS[lane], value)
+      value_turns_on(voice_idx, lane, cell)
     end
     return value
   end
@@ -180,7 +201,7 @@ return function(S)
       local n = S.lib.lanes.length(voice_idx, lane)
       if n then return n, true end
     end
-    return params:get(voice_param(voice_idx, "seq_length")), lane == "hits"
+    return voice_length(voice_idx), lane == "hits"
   end
 
   -- The cell a lane read last, while the voice plays: a free lane's own
@@ -216,30 +237,19 @@ return function(S)
   end
 
   -- LN ----------------------------------------------------------------------
-  -- Armed by a tap of LN, the port's state holds the pane, page and side it
-  -- was armed on (ruling 3b-2); it reads as disarmed while that pane shows
-  -- anything else, so a half change of the 8×8 keeps it, and the page's
-  -- draw forgets an arming whose pane shows something else (forget_ln), so
-  -- coming back to side 2 through side 1 or another page finds it off
-
-  local function ln_of(port)
-    local state = page_state(port)
-    local ln = state and state.ln
-    if ln == nil then return nil end
-    local core = S.lib.grid_core
-    if core.page(port, ln.pane) ~= ln.page or core.side(port, ln.pane) ~= ln.side then return nil end
-    return ln
-  end
+  -- Armed by a tap of LN, the port's state holds the pane it was armed on
+  -- and that pane's count of page changes then (S.lib.grid_core's
+  -- page_changes, the controller's ruling for 3b's review: it moves at
+  -- every page or side change, the 8×8's chooser's among them, and never
+  -- at a half change). It reads as disarmed once the count has moved, so
+  -- leaving side 2 by any way disarms it and a half change keeps it. The
+  -- count replaces ruling 3b-2's page and side compare, which it implies
 
   -- Whether LN is armed on the port's pane
   function M.ln_armed(port, pane_index)
-    local ln = ln_of(port)
-    return ln ~= nil and ln.pane == pane_index
-  end
-
-  local function forget_ln(port)
     local state = page_state(port)
-    if state and state.ln and ln_of(port) == nil then state.ln = nil end
+    local ln = state and state.ln
+    return ln ~= nil and ln.pane == pane_index and ln.changes == S.lib.grid_core.page_changes(port, pane_index)
   end
 
   local function disarm(port)
@@ -277,6 +287,7 @@ return function(S)
       value = LANE_SIDE.tap_first[lane] or params:get(voice_param(voice_idx, "seq_gate_length"))
     end
     seq.set_step_attr(voice_idx, cell, key, value)
+    value_turns_on(voice_idx, lane, cell)
   end
 
   local function press_cell(pane, voice_idx, lane, x, y, z)
@@ -312,9 +323,10 @@ return function(S)
       if M.ln_armed(pane.port, pane.index) then
         disarm(pane.port)
       else
-        page_state(pane.port, true).ln = {pane = pane.index, page = pane.page, side = pane.side}
+        page_state(pane.port, true).ln = {pane = pane.index,
+          changes = S.lib.grid_core.page_changes(pane.port, pane.index)}
       end
-    elseif target then
+    elseif target and x < LANE_SIDE.b_x then
       if pane.pressed_as(LANE_SIDE.b_x, line, LANE_SIDE.b_role) then
         lanes.choose_target(voice_idx, "b", target_option(voice_idx, "b") == target and lanes.MOVE.first.b or target)
       else
@@ -401,12 +413,16 @@ return function(S)
 
   -- Side 1 -------------------------------------------------------------------
 
+  -- The picked voice's empty steps inside its length light picked_empty;
+  -- past its length they stay dark (the controller's ruling for 3b's
+  -- review), so the length shows
   local function draw_steps(pane, led)
     local picked = M.voice(pane.port)
+    local picked_length = voice_length(picked)
     for voice_idx = 1, NUM_VOICES do
       for step = 1, PATTERN_LENGTH do
         local level = S.lib.lanes.hit_light(voice_idx, step)
-        if voice_idx == picked and level == 0 and S.patterns[voice_idx][step] == 0 then
+        if voice_idx == picked and level == 0 and S.patterns[voice_idx][step] == 0 and step <= picked_length then
           level = LANE_SIDE.levels.picked_empty
         end
         led(step, voice_idx, level)
@@ -428,7 +444,6 @@ return function(S)
       pane.step_key(x, y, z, y, x)
     end,
     redraw = function(pane, led)
-      forget_ln(pane.port)
       if pane.side == LANE_SIDE.side then
         draw_lanes(pane, led)
       else

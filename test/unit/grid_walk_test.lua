@@ -234,6 +234,13 @@ end
 -- A press of physical key (px, py)
 function Walk.press(state, px, py)
   local S, model, core = state.S, state.model, state.core
+  -- the model knows patterns' side 1 only (3.9's lane side, 3b, is not
+  -- walked yet): the 64's chooser keys of patterns' side 2 (column
+  -- patterns, rows 3 and 4) are skipped, so the model never misreads
+  local _, kind = Walk.layout(state)
+  if kind == "64" and model.chooser and px == S.constants.GRID_PAGES.patterns and (py == 3 or py == 4) then
+    return
+  end
   local name = key_name(px, py)
   state.fingers[name] = { px = px, py = py }
   local device = Walk.device(state)
@@ -264,6 +271,12 @@ function Walk.press(state, px, py)
     if layout_kind == "64" and model.chooser then
       entry.consumed = true  -- a chooser key: consumed, its release does nothing
     elseif page == S.constants.GRID_PAGES.patterns then
+      if side == 2 then
+        -- any way patterns' side 2 is reached (a page key pressed again):
+        -- named, never misread as side 1
+        state.problems[#state.problems + 1] = "pane " .. where.pane
+          .. " shows patterns' side 2, which the model does not know (3.9's 3b): extend the model (6b)"
+      end
       local voice, step = where.y, where.x
       local width = layout_kind == "64" and 8 or 16
       local offset = layout_kind == "64" and (Walk.half(state, where.pane) - 1) * 8 or 0
