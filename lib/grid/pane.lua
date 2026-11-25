@@ -151,13 +151,39 @@ return function(S)
     pane.on_hold, pane.consume, pane.consumed = wrap(grid_core.on_hold), wrap(grid_core.consume), wrap(grid_core.consumed)
     pane.press_as, pane.pressed_as = wrap(grid_core.press_as), wrap(grid_core.pressed_as)
     pane.gesture_key = wrap(grid_core.gesture_key)
+    -- the physical key of a pane key on a line, or nil
+    local function line_key(x, y)
+      if type(y) ~= "number" or y < 1 or y > NUM_VOICES then return nil end
+      return at(x, y)
+    end
     -- a pattern key: position x - offset of the width shown, so a level
-    -- follows 16 keys, or 8 on a half
-    function pane.step_key(x, y, z, voice_idx, step)
-      if type(y) ~= "number" or y < 1 or y > NUM_VOICES then return end
-      local px, py = at(x, y)
+    -- follows 16 keys, or 8 on a half. 3.9 (3a): `second` is "level" (nil,
+    -- the default) or a function second(voice, held step, step, x, y) for
+    -- the voice's second key before the hold fires, given the held key's
+    -- own pane place (this press's x, y, which the core never sees)
+    function pane.step_key(x, y, z, voice_idx, step, second)
+      local px, py = line_key(x, y)
       if px == nil then return end
-      grid_core.step_key(port, px, py, z, voice_idx, step, x - offset, width)
+      local core_second = second
+      if type(second) == "function" then
+        core_second = function(voice, held_step, second_step) return second(voice, held_step, second_step, x, y) end
+      end
+      grid_core.step_key(port, px, py, z, voice_idx, step, x - offset, width, core_second)
+    end
+    -- 3.9 (3a): a cell key of line `id`: on_tap(index) at a tap's release,
+    -- on_value(held index, position, positions) for a second key of the
+    -- line, its position x - offset of the width shown
+    function pane.cell_key(x, y, z, id, index, on_tap, on_value)
+      local px, py = line_key(x, y)
+      if px == nil then return end
+      grid_core.cell_key(port, px, py, z, id, index, x - offset, width, on_tap, on_value)
+    end
+    -- 3.9 (3a): the press now down at (x, y)'s own answer to "still held
+    -- on this view?" (the core's still); a place off the pane is never
+    function pane.still(x, y)
+      local px, py = line_key(x, y)
+      if px == nil then return function() return false end end
+      return grid_core.still(port, px, py)
     end
     return pane
   end

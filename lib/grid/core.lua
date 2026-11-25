@@ -160,7 +160,7 @@ return function(S)
   -- set on press and cleared on release, on the port's grid.remove and in
   -- cleanup. Private to this module, per port and key: the pending hold
   -- clocks (hold_clocks), the consumed keys (consumed_keys), the step keys
-  -- the step-level gesture sees (step_keys: {voice, step, level_key})
+  -- the step-level gesture sees (step_keys: {voice, step, level_key, second})
   -- and each port's layout state (port_states)
   S.grid_held = {}
   local hold_clocks = {}
@@ -171,6 +171,12 @@ return function(S)
   -- "gesture <k>", "mute <v>"; press_as, pressed_as): a release acts only
   -- for the key pressed in that role, never for one pressed on another page
   local key_roles = {}
+  -- 3.9 (3a): the cell keys a lane's line takes (cell_key: {id, index,
+  -- on_tap, on_value} for a held cell, {id, second = true} for a spent
+  -- second key), and each held key's press token (a fresh table at every
+  -- press, which M.still's answer compares), both per port and key
+  local cell_keys = {}
+  local press_tokens = {}
 
   -- tables[port][x][y], or nil
   local function key_value(tables, port, x, y)
@@ -329,6 +335,21 @@ return function(S)
     each_key(step_keys, function(x, y) drop_step_key(port, x, y) end)
     each_key(hold_clocks, function(x, y) stop_hold(port, x, y) end)
     each_key(key_roles, function(x, y) set_key_value(key_roles, port, x, y, nil) end)
+    each_key(cell_keys, function(x, y) set_key_value(cell_keys, port, x, y, nil) end)
+    each_key(press_tokens, function(x, y) set_key_value(press_tokens, port, x, y, nil) end)
+  end
+
+  -- 3.9 (3a): a function of no argument, true while the press now down at
+  -- (x, y) is still that same press on what its pane showed: false after
+  -- its release, a page, side or half change of its pane (end_pane_keys,
+  -- the 64's chooser opening among them), the port's forget (an unplug, a
+  -- rotation) and for any later press of the key. A pattern's replacement
+  -- leaves it. A key not held gives a function that is always false
+  function M.still(port, x, y)
+    local token = key_value(press_tokens, port, x, y)
+    return function()
+      return token ~= nil and key_value(press_tokens, port, x, y) == token
+    end
   end
 
   -- Forget a port's keys: pending holds (stopped), held, consumed and step
@@ -342,6 +363,8 @@ return function(S)
     S.grid_held[port] = nil
     consumed_keys[port] = nil
     step_keys[port] = nil
+    cell_keys[port] = nil
+    press_tokens[port] = nil
     port_states[port] = nil
     S.grid_panes[port] = nil
   end
@@ -352,7 +375,9 @@ return function(S)
     stop_hold(port, x, y)
     set_key_value(consumed_keys, port, x, y, nil)
     set_key_value(key_roles, port, x, y, nil)
+    set_key_value(cell_keys, port, x, y, nil)
     set_key_value(S.grid_held, port, x, y, util.time())
+    set_key_value(press_tokens, port, x, y, {})
   end
 
   local function release_key(port, x, y)
@@ -360,6 +385,8 @@ return function(S)
     set_key_value(S.grid_held, port, x, y, nil)
     set_key_value(consumed_keys, port, x, y, nil)
     set_key_value(key_roles, port, x, y, nil)
+    set_key_value(cell_keys, port, x, y, nil)
+    set_key_value(press_tokens, port, x, y, nil)
   end
 
   -- A step key's release (3.4, design §8.7): the held step it pressed
@@ -416,24 +443,96 @@ return function(S)
   -- held GRID_HOLD.step_edit_seconds (on_hold) it opens the step editor,
   -- and its release closes it. step_key's own z == 0 does nothing. A
   -- voice, step or position out of range does nothing, so only valid
-  -- steps are ever recorded as held (and later take a level)
-  function M.step_key(port, x, y, z, voice_idx, step, position, positions)
+  -- steps are ever recorded as held (and later take a level).
+  -- 3.9 (3a): `second` is what the held step's second key does: "level"
+  -- (nil, the default) the above; or a function, second(voice, held step,
+  -- this key's step), called for a key of the voice pressed while the held
+  -- step is not yet consumed (before its hold fires), with both keys
+  -- consumed and the hold stopped as for a level. The held key's own
+  -- `second` decides. Once the held step is consumed (its hold fired, or a
+  -- second key spent it), a further key of the voice does nothing: it is
+  -- consumed, calls nothing and holds nothing. Any other `second` does
+  -- nothing
+  function M.step_key(port, x, y, z, voice_idx, step, position, positions, second)
     if z ~= 1 then return end
     if not whole_number_in(voice_idx, 1, NUM_VOICES) or not whole_number_in(step, 1, PATTERN_LENGTH) then return end
     if not whole_number_in(positions, 1, PATTERN_LENGTH) or not whole_number_in(position, 1, positions) then return end
+    second = second or "level"
+    if second ~= "level" and type(second) ~= "function" then return end
     local held, held_x, held_y = held_step(port, voice_idx, x, y)
     if held then
-      S.lib.sequencer.set_level(voice_idx, held.step, M.level_for_position(position, positions))
+      local spent_before = M.consumed(port, held_x, held_y)
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
       stop_hold(port, held_x, held_y)
       set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, level_key = true})
+      if held.second == "level" then
+        S.lib.sequencer.set_level(voice_idx, held.step, M.level_for_position(position, positions))
+      elseif not spent_before then
+        held.second(voice_idx, held.step, step)
+      end
       return
     end
-    set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step})
+    set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, second = second})
     M.on_hold(port, x, y, GRID_HOLD.step_edit_seconds, function()
       open_step_editor(port, x, y, voice_idx, step)
     end)
+  end
+
+  -- 3.9 (3a): the port's held cell of line `id`, other than (x, y): its
+  -- entry and coordinates, or nil. A line has at most one: cell_key
+  -- records a key as a held cell only while its line has none
+  local function held_cell_of(port, id, x, y)
+    for key_x, rows in pairs(cell_keys[port] or {}) do
+      for key_y, entry in pairs(rows) do
+        if entry.id == id and not entry.second and not (key_x == x and key_y == y)
+          and M.held(port, key_x, key_y) ~= nil then
+          return entry, key_x, key_y
+        end
+      end
+    end
+    return nil
+  end
+
+  -- The line id and index of the held cell at (x, y), or nil (a key that
+  -- is no cell, a spent second key, a cell its pane's change ended)
+  function M.held_cell(port, x, y)
+    local entry = key_value(cell_keys, port, x, y)
+    if entry == nil or entry.second then return nil end
+    return entry.id, entry.index
+  end
+
+  -- 3.9 (3a): a cell key of a lane's line, `id` (a string) naming the line.
+  -- Pressed, the key becomes the line's held cell on this port, unless the
+  -- line has one: then that cell's on_value(its index, this key's
+  -- position, positions) is called, both keys are consumed and this key is
+  -- a spent second key while it is down (a further key of the line, with
+  -- the cell still held, sets the value again). A held cell's release, not
+  -- consumed, calls its on_tap(index) (release_cell_key). No hold clock,
+  -- no editor. A pane's change and the port's forget end a held cell (its
+  -- release then calls nothing); a pattern's replacement leaves it.
+  -- cell_key's own z == 0 does nothing; anything out of range does nothing
+  function M.cell_key(port, x, y, z, id, index, position, positions, on_tap, on_value)
+    if z ~= 1 or M.held(port, x, y) == nil then return end
+    if type(id) ~= "string" or not whole_number_in(index, 1, PATTERN_LENGTH) then return end
+    if not whole_number_in(positions, 1, PATTERN_LENGTH) or not whole_number_in(position, 1, positions) then return end
+    if type(on_tap) ~= "function" or type(on_value) ~= "function" then return end
+    local held, held_x, held_y = held_cell_of(port, id, x, y)
+    if held then
+      M.consume(port, x, y)
+      M.consume(port, held_x, held_y)
+      set_key_value(cell_keys, port, x, y, {id = id, second = true})
+      held.on_value(held.index, position, positions)
+      return
+    end
+    set_key_value(cell_keys, port, x, y, {id = id, index = index, on_tap = on_tap, on_value = on_value})
+  end
+
+  -- A cell key's release: a held cell, not consumed, is tapped
+  local function release_cell_key(port, x, y)
+    local entry = key_value(cell_keys, port, x, y)
+    if entry == nil or entry.second or M.consumed(port, x, y) then return end
+    entry.on_tap(entry.index)
   end
 
   -- End the step gesture on voice_idx's step keys, on every port:
@@ -960,6 +1059,7 @@ return function(S)
       stop_hold(port, x, y)
       if layout and not M.consumed(port, x, y) then layout.key(port, x, y, 0) end
       release_step_key(port, x, y)
+      release_cell_key(port, x, y)
     end
   end
 
@@ -1058,8 +1158,8 @@ return function(S)
     norns_grid().remove = function() end
   end)
 
-  -- Only a held key is a step key, is consumed, waits for a hold or has a
-  -- role; the step editor's key and an open editor agree; a port has an
+  -- Only a held key is a step key, is consumed, waits for a hold, has a
+  -- role, is a cell key or has a press token (3.9, 3a); the step editor's key and an open editor agree; a port has an
   -- attached device recorded exactly while it is attached (norns' ports and
   -- the virtual ones), and no grid is on any other port
   S.register_invariant("grid keys", function()
@@ -1091,7 +1191,7 @@ return function(S)
       return "the step editor is open for port " .. tostring(editor.port) .. " with no held, consumed step key of that port"
     end
     for _, tables_of in ipairs({{"a step key", step_keys}, {"consumed", consumed_keys}, {"hold pending", hold_clocks},
-        {"held in a role", key_roles}}) do
+        {"held in a role", key_roles}, {"a cell key", cell_keys}, {"pressed (a still's token)", press_tokens}}) do
       local kind, tables = tables_of[1], tables_of[2]
       for port, columns in pairs(tables) do
         for x, rows in pairs(columns) do

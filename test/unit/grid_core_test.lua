@@ -1555,6 +1555,45 @@ test("the grid keys invariant fails for a step key that is not held", function()
   assert_equal(grid_keys_broken(), "grid keys: grid 1 key 5,1 is a step key but not held")
 end)
 
+-- 3.9 (3a): the invariant covers a held cell and a press's own token (still)
+test("the grid keys invariant fails for a held cell or a press token whose key is not held", function()
+  local context = load_strata(); finish_startup(context)
+  local S, core = local_value("S"), grid_core()
+  context.grid.plug(1, 16, 16)
+  local probe = h.probe_grid_page(PAGES().fx)
+  probe.press = function(pane, x, y, z) pane.cell_key(x, y, z, "line " .. y, x, function() end, function() end) end
+  core.set_page(1, PAGES().fx, 1)
+  context.grid.press(1, 5, 2, 1)
+  assert_equal(core.held_cell(1, 5, 2), "line 2", "the key is a held cell")
+  assert_equal(grid_keys_broken(), "", "held, the cell breaks nothing")
+  h.allow_broken_invariants("a held cell's held mark is taken away")
+  S.grid_held[1][5][2] = nil
+  local broken = grid_keys_broken()
+  assert_true(broken:find("grid 1 key 5,2 is a cell key but not held", 1, true) ~= nil, "the held cell: " .. broken)
+  local cell_keys = upvalue_of(core.cell_key, "cell_keys")
+  cell_keys[1][5][2] = nil
+  assert_equal(grid_keys_broken(), "grid keys: grid 1 key 5,2 is pressed (a still's token) but not held")
+end)
+
+test("a pattern's replacement leaves a held cell and a press's still", function()
+  local context = load_strata(); finish_startup(context)
+  local S, core = local_value("S"), grid_core()
+  context.grid.plug(1, 16, 16)
+  local probe = h.probe_grid_page(PAGES().fx)
+  local taps, stills = {}, {}
+  probe.press = function(pane, x, y, z)
+    if z == 1 then stills[#stills + 1] = pane.still(x, y) end
+    pane.cell_key(x, y, z, "line " .. y, x, function(index) taps[#taps + 1] = index end, function() end)
+  end
+  core.set_page(1, PAGES().fx, 1)
+  context.grid.press(1, 5, 2, 1)
+  S.lib.sequencer.replace_pattern(2, {15, 0, 15})
+  assert_equal(core.held_cell(1, 5, 2), "line 2", "still a held cell")
+  assert_true(stills[1](), "still its press")
+  context.grid.press(1, 5, 2, 0)
+  assert_equal(table.concat(taps, " "), "5", "its release taps")
+end)
+
 test("the grid keys invariant fails for a step editor key that is not a held, consumed step key", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
@@ -1605,6 +1644,22 @@ end)
 -- see, so the rows that enter "waiting" and "dropped" release the key to
 -- show it (a step key's release toggles its step, a dropped one's nothing)
 local KEY = {port = 1, x = 5, y = 1, voice = 1, step = 5, level_x = 8}
+-- The page's function second key's calls, from the "page's press" event on
+local PAGE_SECONDS = {calls = {}}
+local function page_seconds() return #PAGE_SECONDS.calls end
+-- The second key (the level key's place) pressed and both keys released:
+-- the page's function called `calls` times in all, nothing toggled
+local function second_key_spends(calls)
+  return function(context)
+    local patterns = local_value("patterns")
+    context.grid.press(KEY.port, KEY.level_x, KEY.y, 1)
+    assert_equal(page_seconds(), calls, "the page's function is called " .. calls .. " times")
+    context.grid.press(KEY.port, KEY.level_x, KEY.y, 0)
+    context.grid.press(KEY.port, KEY.x, KEY.y, 0)
+    assert_equal(patterns[KEY.voice][KEY.step], 0, "the held step toggles nothing and takes no level")
+    assert_equal(patterns[KEY.voice][KEY.level_x], 0, "nor does the second key's step")
+  end
+end
 local function key_press(z) return function(context) context.grid.press(KEY.port, KEY.x, KEY.y, z) end end
 local function key_state()
   local core = grid_core()
@@ -1652,6 +1707,18 @@ local KEY_EVENTS = {
     S.lib.sequencer.replace_pattern(KEY.voice, steps)
   end,
   ["unplug"] = function(context) context.grid.unplug(KEY.port) end,
+  -- 3.9 (3a): the key pressed on a page that gives step_key a function
+  -- second key (a probe in the patterns page's place, its calls in
+  -- PAGE_SECONDS): its own release still toggles, a second key before the
+  -- hold calls the function, and a key after the hold fired does nothing
+  ["page's press"] = function(context)
+    local probe = h.probe_grid_page(PAGES().patterns)
+    PAGE_SECONDS.calls = {}
+    probe.press = function(pane, x, y, z)
+      pane.step_key(x, y, z, y, x, function(...) PAGE_SECONDS.calls[#PAGE_SECONDS.calls + 1] = {...} end)
+    end
+    context.grid.press(KEY.port, KEY.x, KEY.y, 1)
+  end,
 }
 -- level_for_position(8, 16): 8 * 15 / 16 = 7.5 -> 8
 local LEVELED = 8
@@ -1709,6 +1776,219 @@ h.transition_table({
     end},
     {"dropped", "pattern replaced", "dropped", check = released_toggles(false)},
     {"dropped", "unplug", "up"},
+    {"up", "page's press", "waiting", check = function(context)
+      second_key_spends(1)(context)
+      assert_equal(table.concat(PAGE_SECONDS.calls[1], " "),
+        table.concat({KEY.voice, KEY.step, KEY.level_x, KEY.x, KEY.y}, " "),
+        "with the voice, the held step, the second key's step and the held key's place")
+      context.clock.run_for(0.35)
+      editor_closed()
+    end},
+    {"waiting", "page's press", "waiting", check = function(context)
+      context.clock.run_for(0.35)
+      assert_equal(shown_step_editor(), KEY.voice .. " " .. KEY.step .. " " .. KEY.port, "the hold fires")
+      second_key_spends(0)(context)  -- a late second key does nothing
+    end},
+    {"consumed", "page's press", "waiting", check = released_toggles(true)},
+    {"editing", "page's press", "waiting", check = function(context)
+      editor_closed()
+      second_key_spends(1)(context)
+    end},
+    {"dropped", "page's press", "waiting", check = released_toggles(true)},
+  },
+  impossible = {},
+})
+
+-- 3.9 (3a): a cell key (docs/notes/lua/grid/keys.md, ### grid cell key), on
+-- a 256 on port 1 whose pane 1 shows a two-sided probe at the FX page's
+-- index, every key a cell key of its line's id: the key (5, 2) is index 5
+-- of "line 2", the second key (8, 2) the same line's
+local CELL = {port = 1, x = 5, y = 2, second_x = 8}
+local CELL_SEEN = {taps = {}, values = {}}
+local function cell_state()
+  local core = grid_core()
+  if core.held(CELL.port, CELL.x, CELL.y) == nil then return "up" end
+  local id, consumed = core.held_cell(CELL.port, CELL.x, CELL.y), core.consumed(CELL.port, CELL.x, CELL.y)
+  if id and not consumed then return "held" end
+  if id then return "spent" end
+  return consumed and "ended" or "dropped"
+end
+local function cell_press(x, z) return function(context) context.grid.press(CELL.port, x, CELL.y, z) end end
+local function cell_enter(...)
+  local steps = {...}
+  return function(context)
+    context.grid.plug(CELL.port, 16, 16)
+    CELL_SEEN.taps, CELL_SEEN.values = {}, {}
+    local probe = h.probe_grid_page(PAGES().fx, {sides = 2})
+    probe.press = function(pane, x, y, z)
+      pane.cell_key(x, y, z, "line " .. y, x,
+        function(index) CELL_SEEN.taps[#CELL_SEEN.taps + 1] = index end,
+        function(...) CELL_SEEN.values[#CELL_SEEN.values + 1] = table.concat({...}, " ") end)
+    end
+    grid_core().set_page(CELL.port, PAGES().fx, 1)
+    for _, step in ipairs(steps) do step(context) end
+  end
+end
+local CELL_EVENTS = {
+  ["press"] = cell_press(CELL.x, 1),
+  ["release"] = cell_press(CELL.x, 0),
+  ["second key"] = cell_press(CELL.second_x, 1),
+  ["page change"] = function() grid_core().set_page(CELL.port, PAGES().patterns, 1) end,
+  ["side change"] = function() grid_core().set_page(CELL.port, PAGES().fx, 1, 3 - grid_core().side(CELL.port, 1)) end,
+  ["unplug"] = function(context) context.grid.unplug(CELL.port) end,
+}
+-- The key's release (and the second key's, when held) taps `taps` (a
+-- string of indexes) and sets `values` values in all
+local function cell_ends(taps, values)
+  return function(context)
+    context.grid.press(CELL.port, CELL.second_x, CELL.y, 0)
+    context.grid.press(CELL.port, CELL.x, CELL.y, 0)
+    assert_equal(table.concat(CELL_SEEN.taps, " "), taps, "the taps")
+    assert_equal(#CELL_SEEN.values, values, "the values set")
+  end
+end
+-- After an unplug: the grid plugged back on the probe, the keys' releases
+-- (which the core never saw pressed) tap nothing
+local function cell_ends_plugged_back(values)
+  return function(context)
+    context.grid.plug(CELL.port, 16, 16)
+    grid_core().set_page(CELL.port, PAGES().fx, 1)
+    cell_ends("", values)(context)
+  end
+end
+local CELL_VALUE = CELL.x .. " " .. CELL.second_x .. " 16"
+h.transition_table({
+  name = "grid cell key",
+  notes = {"docs/notes/lua/grid/keys.md", "grid cell key"},
+  states = {
+    ["up"] = cell_enter(),
+    ["held"] = cell_enter(CELL_EVENTS["press"]),
+    ["spent"] = cell_enter(CELL_EVENTS["press"], CELL_EVENTS["second key"]),
+    ["dropped"] = cell_enter(CELL_EVENTS["press"], CELL_EVENTS["side change"]),
+    ["ended"] = cell_enter(CELL_EVENTS["press"], CELL_EVENTS["second key"], CELL_EVENTS["side change"]),
+  },
+  events = CELL_EVENTS,
+  state_of = cell_state,
+  rows = {
+    {"up", "press", "held", check = cell_ends(tostring(CELL.x), 0)},
+    {"up", "release", "up"},
+    {"up", "second key", "up", check = cell_ends(tostring(CELL.second_x), 0)},
+    {"up", "page change", "up"},
+    {"up", "side change", "up"},
+    {"up", "unplug", "up"},
+    {"held", "press", "held", check = cell_ends(tostring(CELL.x), 0)},
+    {"held", "release", "up", check = cell_ends(tostring(CELL.x), 0)},
+    {"held", "second key", "spent", check = function(context)
+      assert_equal(CELL_SEEN.values[1], CELL_VALUE, "on_value(held index, position, positions)")
+      cell_ends("", 1)(context)
+    end},
+    {"held", "page change", "dropped", check = cell_ends("", 0)},
+    {"held", "side change", "dropped", check = cell_ends("", 0)},
+    {"held", "unplug", "up", check = cell_ends_plugged_back(0)},
+    {"spent", "press", "held", check = cell_ends(tostring(CELL.x), 1)},
+    {"spent", "release", "up", check = cell_ends("", 1)},
+    {"spent", "second key", "spent", check = function(context)
+      assert_equal(CELL_SEEN.values[2], CELL_VALUE, "the second key pressed again sets the value again")
+      cell_ends("", 2)(context)
+    end},
+    {"spent", "page change", "ended", check = cell_ends("", 1)},
+    {"spent", "side change", "ended", check = cell_ends("", 1)},
+    {"spent", "unplug", "up", check = cell_ends_plugged_back(1)},
+    {"dropped", "press", "held", check = cell_ends(tostring(CELL.x), 0)},
+    {"dropped", "release", "up", check = cell_ends("", 0)},
+    {"dropped", "second key", "dropped", check = cell_ends(tostring(CELL.second_x), 0)},
+    {"dropped", "page change", "dropped", check = cell_ends("", 0)},
+    {"dropped", "side change", "dropped", check = cell_ends("", 0)},
+    {"dropped", "unplug", "up", check = cell_ends_plugged_back(0)},
+    {"ended", "press", "held", check = cell_ends(tostring(CELL.x), 1)},
+    {"ended", "release", "up", check = cell_ends("", 1)},
+    {"ended", "second key", "ended", check = cell_ends(tostring(CELL.second_x), 1)},
+    {"ended", "page change", "ended", check = cell_ends("", 1)},
+    {"ended", "side change", "ended", check = cell_ends("", 1)},
+    {"ended", "unplug", "up", check = cell_ends_plugged_back(1)},
+  },
+  impossible = {},
+})
+
+-- 3.9 (3a): a press's still (docs/notes/lua/grid/keys.md, ### grid key
+-- still), on a 64 on port 1 showing a two-sided probe at the FX page's
+-- index whose every press asks pane.still of its own place: the key (3, 2)
+-- and the still its first press gave (STILL.kept), against the press's
+-- own and every later one's
+local STILL = {port = 1, x = 3, y = 2, kept = nil, taken = {}}
+local function still_state()
+  local held = grid_core().held(STILL.port, STILL.x, STILL.y) ~= nil
+  local still = STILL.kept ~= nil and STILL.kept()
+  if not held then return still and "up, its still true" or "up" end
+  return still and "still" or "gone"
+end
+local function still_press(z) return function(context) context.grid.press(STILL.port, STILL.x, STILL.y, z) end end
+local function still_enter(...)
+  local steps = {...}
+  return function(context)
+    context.grid.plug(STILL.port, 8, 8)
+    STILL.kept, STILL.taken = nil, {}
+    local probe = h.probe_grid_page(PAGES().fx, {sides = 2})
+    probe.press = function(pane, x, y, z)
+      if z == 1 then STILL.taken[#STILL.taken + 1] = pane.still(x, y) end
+    end
+    grid_core().set_page(STILL.port, PAGES().fx, 1)
+    still_press(1)(context)
+    STILL.kept = STILL.taken[1]
+    for _, step in ipairs(steps) do step(context) end
+  end
+end
+local STILL_EVENTS = {
+  ["press"] = still_press(1),
+  ["release"] = still_press(0),
+  ["page change"] = function() grid_core().set_page(STILL.port, PAGES().patterns, 1) end,
+  ["side change"] = function() grid_core().set_page(STILL.port, PAGES().fx, 1, 3 - grid_core().side(STILL.port, 1)) end,
+  ["half change"] = function() grid_core().set_half(STILL.port, 1, 3 - grid_core().half(STILL.port, 1)) end,
+  ["pattern replaced"] = function()
+    local S = local_value("S")
+    local steps = {}
+    for step = 1, #S.patterns[STILL.y] do steps[step] = S.patterns[STILL.y][step] end
+    S.lib.sequencer.replace_pattern(STILL.y, steps)
+  end,
+  ["unplug"] = function(context) context.grid.unplug(STILL.port) end,
+}
+-- The latest press's own still is true (a later press is its own press)
+local function later_still()
+  assert_true(#STILL.taken >= 2, "the later press asked its still")
+  assert_true(STILL.taken[#STILL.taken](), "the later press's own still is true")
+end
+h.transition_table({
+  name = "grid key still",
+  notes = {"docs/notes/lua/grid/keys.md", "grid key still"},
+  states = {
+    ["up"] = still_enter(STILL_EVENTS["release"]),
+    ["still"] = still_enter(),
+    ["gone"] = still_enter(STILL_EVENTS["side change"]),
+  },
+  events = STILL_EVENTS,
+  state_of = still_state,
+  rows = {
+    {"up", "press", "gone", check = later_still},
+    {"up", "release", "up"},
+    {"up", "page change", "up"},
+    {"up", "side change", "up"},
+    {"up", "half change", "up"},
+    {"up", "pattern replaced", "up"},
+    {"up", "unplug", "up"},
+    {"still", "press", "gone", check = later_still},
+    {"still", "release", "up"},
+    {"still", "page change", "gone"},
+    {"still", "side change", "gone"},
+    {"still", "half change", "gone"},
+    {"still", "pattern replaced", "still"},
+    {"still", "unplug", "up"},
+    {"gone", "press", "gone", check = later_still},
+    {"gone", "release", "up"},
+    {"gone", "page change", "gone"},
+    {"gone", "side change", "gone"},
+    {"gone", "half change", "gone"},
+    {"gone", "pattern replaced", "gone"},
+    {"gone", "unplug", "up"},
   },
   impossible = {},
 })
