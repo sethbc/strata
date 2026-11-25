@@ -63,7 +63,6 @@ end)
 
 test("64 NV: a tap plays or stops on release, the chooser shows the right half", function()
   local context = load_strata(); finish_startup(context)
-  h.level_side_one()  -- 3.9 (5a): the core's level gesture on side 1, which now loops
   local device = context.grid.plug(1, 8, 8)
   local patterns = local_value("patterns")
   local patterns_page = local_value("S").constants.GRID_PAGES.patterns
@@ -87,13 +86,16 @@ test("64 NV: a tap plays or stops on release, the chooser shows the right half",
   assert_equal(patterns[1][11], 15, "half 2: (3,1) toggles voice 1 step 11")
   assert_equal(patterns[1][3], 0, "step 3 untouched")
   assert_equal(device:get_led(3, 1), 15, "the LED shows step 11")
-  -- the step-level gesture uses positions 1-8 of the shown half
+  -- a second key loops to its own step of the shown half (3.9's 5a,
+  -- re-based from 3.4's level gesture over positions 1-8)
+  local loop_roll = local_value("S").lib.loop_roll
   context.grid.press(1, 3, 2, 1); context.grid.press(1, 4, 2, 1)
-  assert_equal(patterns[2][11], 8, "held step 11 takes round(4 * 15 / 8) = 8")
-  assert_equal(patterns[2][12] + patterns[2][4], 0, "the level key does not toggle")
+  local lo, hi = loop_roll.loop(2)
+  assert_equal(lo, 11, "held step 11 loops"); assert_equal(hi, 12, "to step 12")
+  assert_equal(patterns[2][11] + patterns[2][12] + patterns[2][4], 0, "neither key toggles")
   context.grid.press(1, 4, 2, 0); context.grid.press(1, 3, 2, 0)
   context.grid.press(1, 5, 3, 1); context.grid.press(1, 8, 3, 1)
-  assert_equal(patterns[3][13], 15, "column 8 is the top level")
+  assert_equal(select(2, loop_roll.loop(3)), 16, "column 8 is step 16")
   context.grid.press(1, 8, 3, 0); context.grid.press(1, 5, 3, 0)
   -- back to the left half
   choose(context, 1, patterns_page, 1)
@@ -202,7 +204,6 @@ end)
 
 test("end_port_step_gestures ignores a port that is not a grid port (nil and NaN raise nothing)", function()
   local context = load_strata(); finish_startup(context)
-  h.level_side_one()  -- 3.9 (5a): the core's level gesture on side 1, which now loops
   local patterns = local_value("patterns")
   local S = local_value("S")
   context.grid.plug(1, 8, 8)
@@ -219,8 +220,8 @@ test("end_port_step_gestures ignores a port that is not a grid port (nil and NaN
   for key in pairs(S.grid_held) do after[#after + 1] = key end
   assert_equal(#after, #before, "no port entry made")
   context.grid.press(1, 4, 1, 1)
-  assert_equal(patterns[1][3], 8, "port 1's held step still takes the level (4 * 15 / 8 = 7.5 -> 8)")
-  assert_equal(patterns[1][4], 0, "the level key does not toggle")
+  assert_equal(select(2, S.lib.loop_roll.loop(1)), 4, "port 1's held step still meets its second key: a loop 3 to 4 (3.9's 5a)")
+  assert_equal(patterns[1][3] + patterns[1][4], 0, "neither key toggles")
 end)
 
 -- 3.4 (design §8.7, §11): a held step opens the step editor on either

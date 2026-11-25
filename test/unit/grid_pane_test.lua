@@ -746,7 +746,7 @@ local function key_probe(pages, keys)
   local probe = probe_grid_page(pages.fx, {sides = 2})
   local seen = {seconds = {}, taps = {}, values = {}}
   probe.press = function(pane, x, y, z)
-    if keys == "level" then
+    if keys == "none" then
       pane.step_key(x, y, z, y, x)
     elseif keys == "second" then
       pane.step_key(x, y, z, y, x, function(...) seen.seconds[#seen.seconds + 1] = {...} end)
@@ -866,20 +866,25 @@ test("after a hold whose editor did not open, no key calls the page's function",
   end
 end)
 
-test("the default second key still sets the level", function()
+-- Re-based by 3.9's 5a (the controller's ruling: the core's default
+-- "level" second key went with side 1's loop) from "the default second key
+-- still sets the level"
+test("a page that gives no second key gets nothing from one", function()
   for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
     local context = load_bare()
     local pages = PAGES()
-    key_probe(pages, "level")
+    key_probe(pages, "none")
     local pane = grid_pane(context, arrangement)
     pane.show(pages.fx)
     local first, last = shown_keys(arrangement)
     local patterns = local_value("patterns")
     pane.press(first, 4, 1)
     pane.press(last, 4, 1)
-    assert_equal(patterns[4][first], 15, arrangement .. ": the last key shown is the top level")
+    assert_equal(patterns[4][first], 0, arrangement .. ": the held step takes no level")
+    context.clock.run_for(0.35)
+    assert_equal(h.shown_step_editor(), nil, arrangement .. ": the second key stopped the held step's hold")
     pane.press(last, 4, 0); pane.press(first, 4, 0)
-    assert_equal(patterns[4][first], 15, arrangement .. ": neither release toggles")
+    assert_equal(patterns[4][first], 0, arrangement .. ": neither release toggles")
     assert_equal(patterns[4][last], 0, arrangement .. ": the second key's step is untouched")
   end
 end)

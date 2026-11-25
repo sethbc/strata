@@ -497,21 +497,6 @@ local function probe_grid_page(index, opts)
   return probe
 end
 
--- 3.9's loop (5a): the patterns page's side 1 second key loops its voice
--- (S.lib.loop_roll), so the tests of the core's level gesture (step_key's
--- default second, unchanged) run it on side 1 as 3.8 had it: the page's
--- press there passes no second key
-local function level_side_one()
-  local S = local_value("S")
-  local record = S.lib.grid_pages_patterns.record
-  local press = record.press
-  record.press = function(pane, x, y, z)
-    if pane.side ~= 1 or y < 1 or y > S.constants.NUM_VOICES or x < 1 or x > S.constants.PATTERN_LENGTH then return press(pane, x, y, z) end
-    if z == 1 then S.lib.grid_pages_patterns.pick(pane.port, y) end
-    pane.step_key(x, y, z, y, x)
-  end
-end
-
 -- No record at the page's index in the test's own S (a page main may have)
 local function no_grid_page(index)
   local_value("S").registry.grid_pages[index] = nil
@@ -1904,7 +1889,6 @@ return {
   GRID_ARRANGEMENTS = GRID_ARRANGEMENTS,
   grid_pane = grid_pane,
   probe_grid_page = probe_grid_page,
-  level_side_one = level_side_one,
   no_grid_page = no_grid_page,
   resize_grid = resize_grid,
   slice_doubles = slice_doubles,

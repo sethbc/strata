@@ -4,8 +4,8 @@
 -- S.param_page, S.grid_voice_select), the faders' GRID_LAYOUT
 -- (S.lib.grid_core.GRID_LAYOUT), attaching vports, hot-plug, voice
 -- selection, each port's held keys and holds (S.grid_held) and their end
--- per pane (end_pane_keys), the step keys (3.4: a toggle on release, the
--- level gesture and the held step's step editor, S.lib.pages_seq), the
+-- per pane (end_pane_keys), the step keys (3.4: a toggle on release, a
+-- page's second key and the held step's step editor, S.lib.pages_seq), the
 -- gesture recorder keys, the key helpers and levels the pages share, and
 -- the dispatch of key presses, releases and redraws to the layout records
 -- in S.registry.grid_layouts (each lib/grid/layout_<size>.lua's
@@ -178,7 +178,7 @@ return function(S)
   -- set on press and cleared on release, on the port's grid.remove and in
   -- cleanup. Private to this module, per port and key: the pending hold
   -- clocks (hold_clocks), the consumed keys (consumed_keys), the step keys
-  -- the step-level gesture sees (step_keys: {voice, step, level_key, second,
+  -- the step-key gesture sees (step_keys: {voice, step, second_key, second,
   -- fired})
   -- and each port's layout state (port_states)
   S.grid_held = {}
@@ -401,8 +401,8 @@ return function(S)
   -- End what the keys of one pane of a port were pressed to do (a page,
   -- side or half change, the 64's chooser opening): for each key the
   -- layout puts in that pane (pane_at), its step gesture ends (it toggles
-  -- nothing at its release, takes no level and closes a step editor it
-  -- opened), its pending hold is stopped and its role forgotten. The keys
+  -- nothing at its release, meets no second key and closes a step editor
+  -- it opened), its pending hold is stopped and its role forgotten. The keys
   -- stay held; a strip key (pane_at nil) and the other pane's are never
   -- touched, so fill, a tempo repeat and NV go on. 3.9 (3c): a key given
   -- as `spare` ({x, y}: the step editor's key as the step view starts or
@@ -480,17 +480,18 @@ return function(S)
   end
 
   -- A step key's release (3.4, design §8.7): the held step it pressed
-  -- toggles, unless it was consumed (by the level gesture, or because it
-  -- opened the step editor) or its gesture ended meanwhile; a level key
+  -- toggles, unless it was consumed (by a second key, or because it
+  -- opened the step editor) or its gesture ended meanwhile; a second key
   -- toggles nothing. The core does it for every layout, whatever the
   -- layout does with the release
   local function release_step_key(port, x, y)
     local entry = key_value(step_keys, port, x, y)
-    if entry == nil or entry.level_key or M.consumed(port, x, y) then return end
+    if entry == nil or entry.second_key or M.consumed(port, x, y) then return end
     toggle_pattern_step(entry.voice, entry.step)
   end
 
-  -- A step's level from a key's position along the voice's shown steps
+  -- A level from a key's position along the keys shown (3.9: the pages'
+  -- values, lib/grid/pages/patterns.lua's value_for_position)
   function M.level_for_position(position, positions)
     local level = math.max(1, util.round(position * MAX_STEP_LEVEL / positions))
     return math.min(level, MAX_STEP_LEVEL)
@@ -499,11 +500,11 @@ return function(S)
   -- The voice's held step on this port, other than (x, y): its entry and
   -- coordinates, or nil. A voice has at most one (#450): step_key records a
   -- key as a held step only while the voice has none, and every later key
-  -- of the voice is a level key, which never counts
+  -- of the voice is a second key, which never counts
   local function held_step(port, voice_idx, x, y)
     for key_x, rows in pairs(step_keys[port] or {}) do
       for key_y, entry in pairs(rows) do
-        if entry.voice == voice_idx and not entry.level_key and not (key_x == x and key_y == y)
+        if entry.voice == voice_idx and not entry.second_key and not (key_x == x and key_y == y)
           and M.held(port, key_x, key_y) ~= nil then
           return entry, key_x, key_y
         end
@@ -532,41 +533,36 @@ return function(S)
 
   -- A pattern key (3.4, design §8.7). Pressed, the key becomes the voice's
   -- held step on this port and toggles nothing yet, unless the voice already
-  -- has one: then that step gets this key's level (its position,
-  -- 1..positions, along the voice's shown steps), both keys are consumed,
-  -- the held step's pending editor hold is stopped and this key is a
-  -- level key for as long as it is down (it never takes a level itself).
-  -- A held step toggles at its release (release_step_key, unless consumed);
-  -- held GRID_HOLD.step_edit_seconds (on_hold) it opens the step editor,
-  -- and its release closes it. step_key's own z == 0 does nothing. A
-  -- voice, step or position out of range does nothing, so only valid
-  -- steps are ever recorded as held (and later take a level).
-  -- 3.9 (3a): `second` is what the held step's second key does: "level"
-  -- (nil, the default) the above; or a function, second(voice, held step,
-  -- this key's step), called for every key of the voice pressed before
-  -- the held step's hold fires (a third key calls it again), with both
-  -- keys consumed and the hold stopped as for a level. The held key's own
-  -- `second` decides. Once its hold has fired (the entry's `fired`, set
-  -- whether or not the editor opened), a further key of the voice does
-  -- nothing: it is consumed, calls nothing and holds nothing. Any other
-  -- `second` does nothing
+  -- has one: then this key is the held step's second key: both keys are
+  -- consumed, the held step's pending editor hold is stopped and this key
+  -- is a second key for as long as it is down (it is never a held step
+  -- itself). A held step toggles at its release (release_step_key, unless
+  -- consumed); held GRID_HOLD.step_edit_seconds (on_hold) it opens the
+  -- step editor, and its release closes it. step_key's own z == 0 does
+  -- nothing. A voice, step or position (1..positions, the key's place
+  -- along the keys shown, which the pane gives) out of range does nothing,
+  -- so only valid steps are ever recorded as held.
+  -- 3.9 (3a, 5a): `second` is what the held step's second key does: a
+  -- function, second(voice, held step, this key's step), called for every
+  -- key of the voice pressed before the held step's hold fires (a third key
+  -- calls it again); nil, nothing (3.4's level gesture, the old default,
+  -- went with side 1's loop: the patterns page's side 2 gives its own).
+  -- The held key's own `second` decides. Once its hold has fired (the
+  -- entry's `fired`, set whether or not the editor opened), a further key
+  -- of the voice calls nothing. Any `second` that is no function and not
+  -- nil does nothing
   function M.step_key(port, x, y, z, voice_idx, step, position, positions, second)
     if z ~= 1 then return end
     if not whole_number_in(voice_idx, 1, NUM_VOICES) or not whole_number_in(step, 1, PATTERN_LENGTH) then return end
     if not whole_number_in(positions, 1, PATTERN_LENGTH) or not whole_number_in(position, 1, positions) then return end
-    second = second or "level"
-    if second ~= "level" and type(second) ~= "function" then return end
+    if second ~= nil and type(second) ~= "function" then return end
     local held, held_x, held_y = held_step(port, voice_idx, x, y)
     if held then
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
       stop_hold(port, held_x, held_y)
-      set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, level_key = true})
-      if held.second == "level" then
-        S.lib.sequencer.set_level(voice_idx, held.step, M.level_for_position(position, positions))
-      elseif not held.fired then
-        held.second(voice_idx, held.step, step)
-      end
+      set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, second_key = true})
+      if held.second and not held.fired then held.second(voice_idx, held.step, step) end
       return
     end
     local entry = {voice = voice_idx, step = step, second = second}
@@ -636,8 +632,8 @@ return function(S)
   -- End the step gesture on voice_idx's step keys, on every port:
   -- S.lib.sequencer.replace_pattern (every whole-pattern change: clear,
   -- randomize, a 256's paste, a scene recall, a chain link) calls it, so a
-  -- step held from before never takes a level in the new pattern, never
-  -- toggles at its release and closes a step editor it opened (its pending
+  -- step held from before never meets a second key in the new pattern,
+  -- never toggles at its release and closes a step editor it opened (its pending
   -- hold is stopped). The keys stay held; the next step key of the voice
   -- is a held step of its own. Ruling 71: a replacement the open step
   -- editor makes itself (S.lib.pages_seq.step_editor_replacing(): its
@@ -657,8 +653,8 @@ return function(S)
   end
 
   -- End the step gesture on every step key held on one port, whatever the
-  -- voice and pane, so a step held never takes a level, never toggles at
-  -- its release and closes a step editor it opened. The keys stay held. A
+  -- voice and pane, so a step held never meets a second key, never toggles
+  -- at its release and closes a step editor it opened. The keys stay held. A
   -- port that is neither 1..S.MAX_GRID_PORTS nor a virtual one does nothing
   function M.end_port_step_gestures(port)
     if not grid_port_number(port) then return end
@@ -1284,7 +1280,7 @@ return function(S)
       local entry = key_value(step_keys, key.port, key.x, key.y)
       if M.held(key.port, key.x, key.y) == nil then return what .. "not held" end
       if not M.consumed(key.port, key.x, key.y) then return what .. "not consumed" end
-      if entry == nil or entry.level_key then return what .. "no held step" end
+      if entry == nil or entry.second_key then return what .. "no held step" end
     end
     local editor = S.lib.pages_seq and S.lib.pages_seq.step_editor()
     if editor and not (key and key.port == editor.port) then
