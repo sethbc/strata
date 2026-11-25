@@ -924,7 +924,7 @@ test("a letter's tap waits and blinks, its second tap switches", function()
     end
     assert_true(changes >= 3, arrangement .. ": a repaint at each phase, saw " .. changes .. " changes")
     assert_true(seen[LEVELS.waiting_high] and seen[LEVELS.waiting_low], arrangement .. ": B blinks while it waits")
-    if letters.waiting(2) ~= "B" then pane.tap(LETTER_X.B, 2) end  -- the bar took it: wait again
+    assert_equal(letters.waiting(2), "B", arrangement .. ": B still waits before the second tap")
     pane.tap(LETTER_X.B, 2)
     assert_equal(letters.current(2), "B", arrangement .. ": the second tap switches at once")
     assert_equal(letters.waiting(2), nil, arrangement .. ": nothing waits")
@@ -1156,6 +1156,58 @@ test("the 64 shows mutes, letters, OR and LP on the left half and the rolls, the
     assert_equal(table.concat(lights, " "), case[3], case[1] .. ": the half's keys")
     assert_true(not pane.shows(case[1] == "64 left" and 9 or 8, 1), case[1] .. ": the other half is not shown")
   end
+end)
+
+-- The controller's ruling (5c's review): a press's state on the perform
+-- side is per port and pane. Both panes of one 16x16 on side 2
+local function both_panes_on_perform()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local top, bottom = grid_pane(context, "256 top"), grid_pane(context, "256 bottom")
+  perform_side(S, top); perform_side(S, bottom)
+  return context, S, top, bottom
+end
+
+test("two panes' FL keys on one line never end each other's hold", function()
+  local context, S, top, bottom = both_panes_on_perform()
+  local fill = S.lib.conditions.fill
+  top.press(PERFORM.fill, 3, 1)
+  bottom.press(PERFORM.fill, 3, 1)
+  top.press(PERFORM.fill, 3, 0)
+  assert_true(fill(), "the top pane's release leaves the bottom pane's hold")
+  context.clock.run_for(0.1)
+  assert_true(fill(), "which goes on")
+  bottom.press(PERFORM.fill, 3, 0)
+  assert_true(not fill(), "the bottom pane's release ends it")
+  bottom.press(PERFORM.fill, 5, 1)
+  top.press(PERFORM.fill, 5, 1)
+  bottom.press(PERFORM.fill, 5, 0)
+  assert_true(fill(), "and the other way round")
+  top.press(PERFORM.fill, 5, 0)
+  assert_true(not fill(), "both let go: no fill")
+end)
+
+test("an order is built on its own pane: the other pane's letters and OR leave it alone", function()
+  local _, S, top, bottom = both_panes_on_perform()
+  local letters = S.lib.pattern_letters
+  -- a letter tapped on the other pane does not join the build: it switches
+  top.press(PERFORM.order, 2, 1)
+  top.tap(LETTER_X.A, 2)
+  bottom.tap(LETTER_X.B, 2)
+  assert_equal(letters.current(2), "B", "the bottom pane's letter switched voice 2 (the patterns stopped)")
+  top.tap(LETTER_X.C, 2)
+  top.press(PERFORM.order, 2, 0)
+  assert_equal(table.concat((letters.order(2)), " "), "A C", "the top pane's order has its own letters only")
+  -- a second OR on the other pane starts its own build and leaves the first alone
+  top.press(PERFORM.order, 4, 1)
+  top.tap(LETTER_X.A, 4)
+  bottom.press(PERFORM.order, 4, 1)
+  bottom.tap(LETTER_X.B, 4)
+  bottom.press(PERFORM.order, 4, 0)
+  assert_equal(table.concat((letters.order(4)), " "), "B", "the bottom pane's order at its release")
+  top.tap(LETTER_X.D, 4)
+  top.press(PERFORM.order, 4, 0)
+  assert_equal(table.concat((letters.order(4)), " "), "A D", "the top pane's build went on, and is set at its release")
 end)
 
 end

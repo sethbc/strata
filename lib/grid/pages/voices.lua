@@ -18,7 +18,8 @@
 -- loop's latch, S.lib.loop_roll.press_latch), R1-R4 (held: a roll at that
 -- rate, held by the key's own pane.still), the mode keys (pulse, move,
 -- accent: S.lib.lanes.choose_mode) and FL (held: fill, holder
--- "grid:<port>:<line>"). Side 2 has no fader line
+-- "grid:<port>:<pane>:<line>"). Side 2 has no fader line; a press's
+-- state there is per port and pane
 
 return function(S)
   local M = {}
@@ -40,7 +41,7 @@ return function(S)
   -- The perform side (side 2): its keys (pane x), its mode keys' modes,
   -- the roles its held keys are pressed in, and the lights
   local PERFORM = {
-    side = 2,
+    side = 2, side_count = 2,  -- the perform side, and how many sides the page has
     keys = {mute = 1, solo = 2, first_letter = 3, order = 7, latch = 8, first_roll = 9, rolls = 4, fill = 16},
     modes = {[13] = "pulse", [14] = "move", [15] = "accent"},
     order_role = "perform order", fill_role = "perform fill",
@@ -142,11 +143,22 @@ return function(S)
   -- The letter of key x (A-D from first_letter), or nil
   local function letter_of(x) return all_letters()[x - PERFORM.keys.first_letter + 1] end
 
-  -- The order being built while OR is held: the port's page state keeps,
-  -- per voice, {pane, still (OR's own press), letters}; it counts only
-  -- while OR's still holds, so it never outlives its key
+  -- The orders being built while OR is held, per port and pane (the
+  -- controller's ruling for 5c's review): the port's page state keeps
+  -- orders[pane][voice] = {still (OR's own press), letters}, so the other
+  -- pane's letters and OR never touch a build. One counts only while its
+  -- OR's still holds, so it never outlives its key
+  local function pane_builds(pane, create)
+    local state = pane.state()
+    if create then
+      state.orders = state.orders or {}
+      state.orders[pane.index] = state.orders[pane.index] or {}
+    end
+    return state.orders and state.orders[pane.index]
+  end
+
   local function order_build(pane, voice_idx)
-    local builds = pane.state().orders
+    local builds = pane_builds(pane)
     local build = builds and builds[voice_idx]
     if build and build.still() then return build end
     return nil
@@ -158,16 +170,15 @@ return function(S)
   -- voice's order on or off (set_order_on). Only the release of OR pressed
   -- as OR on this pane acts, so a page change before it does nothing
   local function order_key(pane, x, voice_idx, z)
-    local state, letters = pane.state(), S.lib.pattern_letters
+    local letters = S.lib.pattern_letters
     if z == 1 then
       pane.press_as(x, voice_idx, PERFORM.order_role)
-      state.orders = state.orders or {}
-      state.orders[voice_idx] = {pane = pane.index, still = pane.still(x, voice_idx), letters = {}}
+      pane_builds(pane, true)[voice_idx] = {still = pane.still(x, voice_idx), letters = {}}
       return
     end
     local build = order_build(pane, voice_idx)
-    if build == nil or build.pane ~= pane.index then return end
-    state.orders[voice_idx] = nil
+    if build == nil then return end
+    pane_builds(pane)[voice_idx] = nil
     if not pane.pressed_as(x, voice_idx, PERFORM.order_role) then return end
     if #build.letters > 0 then
       letters.set_order(voice_idx, build.letters)
@@ -188,10 +199,11 @@ return function(S)
     end
   end
 
-  -- FL: held, fill, held by the key's own still under the line's holder;
-  -- only its own release ends that hold
+  -- FL: held, fill, held by the key's own still under its port's, pane's
+  -- and line's holder (the controller's ruling for 5c's review: two panes'
+  -- FL keys never end each other's hold); only its own release ends it
   local function fill_key(pane, x, voice_idx, z)
-    local holder = "grid:" .. pane.port .. ":" .. voice_idx
+    local holder = "grid:" .. pane.port .. ":" .. pane.index .. ":" .. voice_idx
     if z == 1 then
       pane.press_as(x, voice_idx, PERFORM.fill_role)
       S.lib.conditions.hold_fill(holder, true, pane.still(x, voice_idx))
@@ -365,7 +377,7 @@ return function(S)
   M.record = {
     name = "voices",
     index = S.constants.GRID_PAGES.voices,
-    sides = PERFORM.side,
+    sides = PERFORM.side_count,
     press = press,
     redraw = redraw,
     faders = faders,
