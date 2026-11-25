@@ -1643,7 +1643,7 @@ end)
 -- step). Whether a held key is still a step key is no field a reader can
 -- see, so the rows that enter "waiting" and "dropped" release the key to
 -- show it (a step key's release toggles its step, a dropped one's nothing)
-local KEY = {port = 1, x = 5, y = 1, voice = 1, step = 5, level_x = 8}
+local KEY = {port = 1, x = 5, y = 1, voice = 1, step = 5, level_x = 8, third_x = 11}
 -- The page's function second key's calls, from the "page's press" event on
 local PAGE_SECONDS = {calls = {}}
 local function page_seconds() return #PAGE_SECONDS.calls end
@@ -1777,12 +1777,21 @@ h.transition_table({
     {"dropped", "pattern replaced", "dropped", check = released_toggles(false)},
     {"dropped", "unplug", "up"},
     {"up", "page's press", "waiting", check = function(context)
-      second_key_spends(1)(context)
+      local patterns = local_value("patterns")
+      context.grid.press(KEY.port, KEY.level_x, KEY.y, 1)
       assert_equal(table.concat(PAGE_SECONDS.calls[1], " "),
         table.concat({KEY.voice, KEY.step, KEY.level_x, KEY.x, KEY.y}, " "),
         "with the voice, the held step, the second key's step and the held key's place")
-      context.clock.run_for(0.35)
+      context.clock.run_for(0.35)  -- both keys down past the hold time: the hold was stopped
       editor_closed()
+      context.grid.press(KEY.port, KEY.level_x, KEY.y, 0)
+      context.grid.press(KEY.port, KEY.third_x, KEY.y, 1)  -- a third key, the hold never fired
+      assert_equal(page_seconds(), 2, "a third key calls the page's function again")
+      assert_equal(PAGE_SECONDS.calls[2][3], KEY.third_x, "with its own step")
+      context.grid.press(KEY.port, KEY.third_x, KEY.y, 0)
+      context.grid.press(KEY.port, KEY.x, KEY.y, 0)
+      assert_equal(patterns[KEY.voice][KEY.step] + patterns[KEY.voice][KEY.level_x] + patterns[KEY.voice][KEY.third_x], 0,
+        "no release toggles")
     end},
     {"waiting", "page's press", "waiting", check = function(context)
       context.clock.run_for(0.35)
@@ -1794,7 +1803,15 @@ h.transition_table({
       editor_closed()
       second_key_spends(1)(context)
     end},
-    {"dropped", "page's press", "waiting", check = released_toggles(true)},
+    {"dropped", "page's press", "waiting", check = function(context)
+      local S = local_value("S")
+      local open = S.lib.pages_seq.open_step_editor
+      S.lib.pages_seq.open_step_editor = function() return false end  -- the editor refuses at the hold
+      context.clock.run_for(0.35)
+      S.lib.pages_seq.open_step_editor = open
+      editor_closed()
+      second_key_spends(0)(context)  -- the hold fired: a later key calls nothing
+    end},
   },
   impossible = {},
 })

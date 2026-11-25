@@ -10,7 +10,7 @@
 ### grid cell key
 - **State:** per port and key, `cell_keys[port][x][y]` (a core local): `{id, index, on_tap, on_value}` for a held cell, `{id, second = true}` for a spent second key; read through `held_cell(port, x, y)` (the id and index of a held cell, nil for a spent second key or no cell), with the key's `held` and `consumed`. The table follows one key, (5, 2) of a 256's pane 1 showing a two-sided probe whose every key is a cell key of its line (`"line 2"`, index 5), and a second key (8, 2) of the same line.
 - **Invariant:** none of its own: the `grid keys` invariant (`docs/notes/lua/grid-core.md`) checks that only a held key is a cell key.
-- **Test:** `test/unit/grid_core_test.lua`: "grid cell key: every cell is decided" and its rows; on every arrangement, `test/unit/grid_pane_test.lua`'s "a cell tap calls on_tap at its release", "a second key gives the held cell its place" and "a held cell ends at a side change and at an unplug".
+- **Test:** `test/unit/grid_core_test.lua`: "grid cell key: every cell is decided" and its rows; on every arrangement, `test/unit/grid_pane_test.lua`'s "a cell tap calls on_tap at its release", "a second key gives the held cell its place" and "a held cell ends at a side change and at an unplug"; the 64's chooser: "the 64's chooser opening ends a press's still and a held cell".
 
 `held` is a held cell, `spent` one a second key consumed, `dropped` a held key whose cell a pane's change ended and `ended` a spent one so ended. The checks release both keys and count the taps and the values set.
 
@@ -50,7 +50,7 @@
 ### grid key still
 - **State:** per port and key, `press_tokens[port][x][y]` (a core local, a fresh table at each press, cleared at the release, by `end_pane_keys` and by `forget_port`), against the token a `still` function read when it was made (`M.still(port, x, y)`, through `pane.still(x, y)`). The table follows the still the first press of (3, 2) gave, on a 64 on port 1 showing a two-sided probe whose every press asks `pane.still` of its place.
 - **Invariant:** none of its own: the `grid keys` invariant (`docs/notes/lua/grid-core.md`) checks that only a held key has a press token.
-- **Test:** `test/unit/grid_core_test.lua`: "grid key still: every cell is decided" and its rows; on every arrangement, `test/unit/grid_pane_test.lua`'s "still is true while the press is down and false after its release, a page change, a side change, a half change and an unplug, and false for a later press of the same key".
+- **Test:** `test/unit/grid_core_test.lua`: "grid key still: every cell is decided" and its rows; on every arrangement, `test/unit/grid_pane_test.lua`'s "still is true while the press is down and false after its release, a page change, a side change, a half change and an unplug, and false for a later press of the same key" and "the 64's chooser opening ends a press's still and a held cell".
 
 `still` is the key down with its still true, `gone` the key down with it false, `up` the key up (its still false). A press's own still is true (the checks of the press rows).
 
