@@ -5254,4 +5254,85 @@ test("a recall's lock change runs the hooks contained (#910)", function()
   assert_true(errors[1]:find("scene lock hook boom", 1, true) ~= nil, errors[1])
 end)
 
+-- #1050: a fade's released voice keeps its whole pattern. Voices 2 and 3
+-- are given two patterns: shape 2 is captured as scene 2, shape 1 plays
+-- (each with its own levels, a step's chance, a lane length and letters:
+-- B playing, A stored, an order), and while the patterns play a tap on A
+-- waits for the next bar. A fade of 0.5 s to scene 2 lands before that bar
+local function pattern_shape(S, voice_idx, n)
+  local seq, letters = S.lib.sequencer, S.lib.pattern_letters
+  clear_pattern(voice_idx)
+  seq.set_level(voice_idx, n, 15)
+  letters.switch_now(voice_idx, "B")  -- B a copy of A
+  seq.set_level(voice_idx, n + 4, 9)
+  seq.set_step_attr(voice_idx, n + 4, "prob", 10 * n)
+  S.lib.lanes.set_length(voice_idx, "chance", n + 2)
+  letters.set_order(voice_idx, n == 1 and {"A", "B"} or {"B", "A", "B"})
+  letters.set_order_on(voice_idx, n ~= 1)
+end
+
+-- The voice's levels, steps, lanes and letters (with the one waiting)
+local function whole_of(S, voice_idx)
+  local levels = {}
+  for step = 1, S.constants.PATTERN_LENGTH do levels[step] = S.patterns[voice_idx][step] end
+  return {levels = levels, steps = deep_copy(S.pattern_steps[voice_idx]), lanes = S.lib.lanes.lengths(voice_idx),
+    letters = S.lib.pattern_letters.capture()[voice_idx], waiting = S.lib.pattern_letters.waiting(voice_idx)}
+end
+
+-- Scene 2 holds shape 2; shape 1 plays with A waiting on voices 2 and 3;
+-- then scene 2 is recalled over `seconds`, voice 2 let go of when it
+-- fades. Each voice's whole before the recall, scene 2's and after
+local function recall_over_shapes(seconds)
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  for voice_idx = 2, 3 do pattern_shape(S, voice_idx, 2) end
+  capture_scene(2)
+  local scene = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do scene[voice_idx] = whole_of(S, voice_idx) end
+  for voice_idx = 2, 3 do pattern_shape(S, voice_idx, 1) end
+  pattern_clock_start()
+  context.clock.run_for(0.1)
+  for voice_idx = 2, 3 do S.lib.pattern_letters.switch(voice_idx, "A") end
+  local before = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do before[voice_idx] = whole_of(S, voice_idx) end
+  assert_equal(before[2].waiting, "A", "voice 2's A waits for the bar")
+  assert_true(first_difference(before[2], scene[2]) ~= nil, "voice 2 plays another pattern than scene 2's")
+  recall_scene(2, seconds)
+  if seconds > 0 then assert_true(S.lib.scenes.release_voice(2), "voice 2 let go") end
+  context.clock.run_for(seconds + 0.2)
+  assert_true(not S.scene_transition_active, "landed")
+  assert_equal(S.current_scene, 2, "scene 2 current")
+  local after = {}
+  for voice_idx = 1, S.constants.NUM_VOICES do after[voice_idx] = whole_of(S, voice_idx) end
+  pattern_clock_stop()
+  return before, scene, after
+end
+
+test("a released voice keeps its levels, steps, lanes and letters through a fade", function()
+  local before, _, after = recall_over_shapes(0.5)
+  local changed = {}
+  for _, part in ipairs({"levels", "steps", "lanes", "letters", "waiting"}) do
+    changed[#changed + 1] = first_difference(after[2][part], before[2][part], "voice 2's " .. part)
+  end
+  assert_equal(table.concat(changed, "; "), "", "voice 2 kept as it was")
+end)
+
+test("a voice not released takes the scene's four", function()
+  local _, scene, after = recall_over_shapes(0.5)
+  for _, part in ipairs({"levels", "steps", "lanes", "letters"}) do
+    assert_same(after[3][part], scene[3][part], "voice 3's " .. part)
+  end
+  assert_equal(after[3].waiting, nil, "voice 3's wait cleared")
+end)
+
+test("a recall with no fade applies every voice as before", function()
+  local _, scene, after = recall_over_shapes(0)
+  for voice_idx = 1, #after do
+    for _, part in ipairs({"levels", "steps", "lanes", "letters"}) do
+      assert_same(after[voice_idx][part], scene[voice_idx][part], "voice " .. voice_idx .. "'s " .. part)
+    end
+    assert_equal(after[voice_idx].waiting, nil, "voice " .. voice_idx .. ": no wait")
+  end
+end)
+
 end

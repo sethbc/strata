@@ -1302,38 +1302,64 @@ test("a chain link that errors at a start leaves the patterns stopped", function
   pattern_clock_stop()
 end)
 
--- Review round 1 (4b), a probe: a late wake past more than one chain
--- period (chain bars 1, three bars late) links how many scenes? Each
--- participant waking on the late beat finds chain.next_beat still behind it
--- (at_beat moves it one period a call), so it links again: three links in
--- a burst, scenes 2, 3 and 4 loaded one after the other on one beat. A
--- known fault, left as it is (4b's review: a probe, not a fix; the
--- controller files its issue); this test asserts today's burst, so a fix
--- changes its expected count
-test("a late wake past three chain periods links three times in a burst (probe, a known fault)", function()
+-- #1051 (found by 4b's review round 1, a probe): a late wake past more
+-- than one chain period moves the chain on by the periods that passed,
+-- from the beat clock.sync returned, and links once, to the scene its
+-- place has reached; every other participant waking on that beat finds
+-- the next link ahead. Four scenes, each lighting its own step on the
+-- voices given, chained a bar each; the patterns start and run 0.5 s, then
+-- run(context, S) moves the clocks on. The places the links loaded, in
+-- order, and the place after
+local function chain_run(voices, run)
   local context, S = setup()
   local seq = S.lib.sequencer
   for slot = 1, 4 do
-    clear_pattern(1)
-    seq.set_level(1, slot, 15)
+    for _, voice_idx in ipairs(voices) do
+      clear_pattern(voice_idx)
+      seq.set_level(voice_idx, slot, 15)
+    end
     capture_scene(slot)
   end
   params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 4)
   params:set("seq_chain_bars", 1)
   pattern_clock_start()
   context.clock.run_for(0.5)
-  local links, apply_block = 0, S.lib.pattern_letters.apply_block
+  local linked, apply_block = {}, S.lib.pattern_letters.apply_block
   S.lib.pattern_letters.apply_block = function(...)
-    links = links + 1
+    linked[#linked + 1] = tostring((seq.chain_place()))
     return apply_block(...)
   end
-  context.clock.advance_until(S.pattern_clocks[1], function() context.set_time(util.time() + 6.0) end)
-  context.clock.run_for(0.01)
+  run(context, S)
   S.lib.pattern_letters.apply_block = apply_block
   local slot = seq.chain_place()
   pattern_clock_stop()
-  assert_equal(links, 3, "today: a link a period passed, in a burst on one beat")
-  assert_equal(slot, 4, "today: on scene 4, scenes 2 and 3 loaded on the way")
+  return table.concat(linked, " "), slot
+end
+
+-- Voice `voice_idx`'s next resume, delivered `seconds` late
+local function late_resume(voice_idx, seconds)
+  return function(context, S)
+    context.clock.advance_until(S.pattern_clocks[voice_idx], function() context.set_time(util.time() + seconds) end)
+    context.clock.run_for(0.01)
+  end
+end
+
+test("a late wake past three chain periods links once, to scene 4 (probe, #1051)", function()
+  local linked, slot = chain_run({1}, late_resume(1, 6.0))
+  assert_equal(linked, "4", "one link, to the scene three periods on: scenes 2 and 3 never loaded")
+  assert_equal(slot, 4, "on scene 4")
+end)
+
+test("two voices waking on the same late beat link once", function()
+  local linked, slot = chain_run({1, 2}, late_resume(2, 6.0))
+  assert_equal(linked, "4", "one link for both voices, to scene 4")
+  assert_equal(slot, 4, "on scene 4")
+end)
+
+test("an on-time chain links each period as before", function()
+  local linked, slot = chain_run({1}, function(context) context.clock.run_for(8.0) end)
+  assert_equal(linked, "2 3 4 1", "a link a bar, each to the next scene, wrapping")
+  assert_equal(slot, 1, "back on scene 1")
 end)
 
 test("seq_division_reset puts every voice back at step 1 at the next bar", function()

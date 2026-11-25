@@ -377,10 +377,14 @@ return function(S)
     return copy
   end
 
-  -- Every voice's step attributes from a (valid) steps block
-  local function set_all_steps(steps)
+  -- Every voice's step attributes from a (valid) steps block, but those of
+  -- the voices in skip (a set by voice, apply_entries': a fade's released
+  -- voices keep theirs, #1050)
+  local function set_all_steps(steps, skip)
     local copy = copy_steps(steps)
-    for voice_idx = 1, NUM_VOICES do S.pattern_steps[voice_idx] = copy[voice_idx] end
+    for voice_idx = 1, NUM_VOICES do
+      if not (skip and skip[voice_idx]) then S.pattern_steps[voice_idx] = copy[voice_idx] end
+    end
   end
 
   -- The steps scene block (design 8.1, 9.2): switched at a transition's
@@ -1425,10 +1429,18 @@ return function(S)
     end
   end
 
-  -- Every move but a repeat links its slot, the one playing too (ruling 36)
-  local function chain_link()
-    local slot, move = next_chain_scene(chain.current)
-    if slot and move ~= "repeat" then load_chain_scene(slot) end
+  -- Every move but a repeat links its slot, the one playing too (ruling 36).
+  -- periods (#1051): the chain periods that passed, 1 but after a late
+  -- wake; the place moves on a move a period, and the slot it reaches is
+  -- linked once, unless every move was a repeat (those between never load)
+  local function chain_link(periods)
+    local place, linked = chain.current, false
+    for _ = 1, periods or 1 do
+      local slot, move = next_chain_scene(place)
+      if not slot then break end
+      place, linked = slot, linked or move ~= "repeat"
+    end
+    if linked then load_chain_scene(place) end
   end
 
   -- 4b: every bar hook, in the order registered (first: the patterns'
@@ -1439,14 +1451,18 @@ return function(S)
   end
 
   -- Whatever falls on a beat before its steps: a chain link due then (the
-  -- first participant to reach it links, for all), then, at a bar of the
+  -- first participant to reach it links, for all), once however late the
+  -- beat, moved on by the periods that passed (#1051), then, at a bar of the
   -- count (4b), the bar hooks: once however late the beat (the participant's
   -- beat, the one its clock.sync returned, moved on to the latest step that
   -- has come), told how many bars passed (review round 1)
   local function at_beat(beat)
     if chain.next_beat and beat >= chain.next_beat - SEQ.beat_tolerance then
-      chain.next_beat = chain.next_beat + params:get("seq_chain_bars") * SEQ.bar_beats
-      chain_link()
+      local period, periods = params:get("seq_chain_bars") * SEQ.bar_beats, 0
+      while beat >= chain.next_beat - SEQ.beat_tolerance do
+        chain.next_beat, periods = chain.next_beat + period, periods + 1
+      end
+      chain_link(periods)
     end
     if play.next_bar and beat >= play.next_bar - SEQ.beat_tolerance then
       local bars = 0
