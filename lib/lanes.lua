@@ -210,11 +210,14 @@ return function(S)
     return copy
   end
 
-  -- Set all five of the voice's lengths from such a table (a lane it does
-  -- not name follows)
+  -- Set all five of the voice's lengths from such a table: a lane it does
+  -- not name, or names with no whole 1 to PATTERN_LENGTH, follows
   function M.set_lengths(voice_idx, lengths)
     if not valid_voice(voice_idx) or type(lengths) ~= "table" then return end
-    for _, lane in ipairs(M.LANES) do M.set_length(voice_idx, lane, lengths[lane]) end
+    for _, lane in ipairs(M.LANES) do
+      local n = lengths[lane]
+      M.set_length(voice_idx, lane, valid_length(n) and n or nil)
+    end
   end
 
   -- The lane's value at the hit: its step key at hit_step while it follows,

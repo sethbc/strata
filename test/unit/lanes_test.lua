@@ -1011,6 +1011,20 @@ test("the lanes and their step keys; a length is 1 to 16 or none, and nil follow
   assert_equal(lanes.length(2, "b"), 2, "and b is 2")
 end)
 
+-- Fix round 1 (item 4): a lane set_lengths names badly follows, as one it
+-- does not name does, whatever length it had
+test("set_lengths makes a lane it names badly follow", function()
+  local _, S = setup()
+  local lanes = S.lib.lanes
+  for _, bad in ipairs({0, 17, 2.5, "3", true}) do
+    lanes.set_lengths(1, {a = 5, chance = 4})
+    lanes.set_lengths(1, {a = bad, chance = 4})
+    assert_equal(lanes.length(1, "a"), nil, "a length of " .. tostring(bad) .. " drops the old 5: lane A follows")
+    assert_equal(lanes.position(1, "a"), nil, "with no position")
+    assert_equal(lanes.length(1, "chance"), 4, "and a good one stays")
+  end
+end)
+
 test("a free lane keeps its own position", function()
   local context, S = setup()
   every_step(S)
@@ -1171,34 +1185,55 @@ test("the lanes block fills an old scene with no lengths, refuses a bad name and
   assert_equal(lanes.length(1, "a"), nil, "and its recall leaves every lane following")
 end)
 
-test("a chain link applies the lane lengths, and the chain start's undo puts them back", function()
-  local _, S = setup()
-  local lanes, mutation = S.lib.lanes, S.lib.mutation
-  set_step(S, 1)
-  lanes.set_length(1, "a", 5)
+-- Scene 1 with voice 1's step 1 at a chance of 50 and lane A 5 long; the
+-- live step without the chance, lane A following and the chance lane 3 long
+local function lanes_scene(S)
+  set_step(S, 1, {prob = 50})
+  S.lib.lanes.set_length(1, "a", 5)
   capture_scene(1)
-  lanes.set_length(1, "a", nil); lanes.set_length(2, "chance", 3)
+  S.lib.sequencer.set_step_attr(1, 1, "prob", nil)
+  S.lib.lanes.set_length(1, "a", nil); S.lib.lanes.set_length(2, "chance", 3)
+end
+
+-- Fix round 1 (item 5): the lanes block comes before the steps block, at
+-- a chain link (load_chain_scene) as at a recall (the blocks' registry
+-- order: lib/lanes.lua is included before lib/sequencer.lua). Nothing
+-- depends on the order; the notes state it, and this keeps it so
+test("a chain link applies the lane lengths, before the steps", function()
+  local _, S = setup()
+  local lanes = S.lib.lanes
+  lanes_scene(S)
+  local real_apply, chance_then = lanes.apply_block, "not called"
+  lanes.apply_block = function(block)
+    chance_then = S.lib.sequencer.step_attr(1, 1, "prob")
+    return real_apply(block)
+  end
   params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
   pattern_clock_start()
+  lanes.apply_block = real_apply
+  assert_equal(chance_then, nil, "the lengths came before the scene's steps")
+  assert_equal(S.lib.sequencer.step_attr(1, 1, "prob"), 50, "the steps came after")
   assert_equal(lanes.length(1, "a"), 5, "the start's link applies the scene's lane A")
   assert_equal(lanes.length(2, "chance"), nil, "and makes the live chance lane follow")
   pattern_clock_stop()
-  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "the start's undo is held")
-  mutation.undo()
-  assert_equal(lanes.length(1, "a"), nil, "the undo puts lane A back to following")
-  assert_equal(lanes.length(2, "chance"), 3, "and the chance lane's 3")
 end)
 
-test("a chain start that changes only a lane length holds its undo", function()
+test("a recall applies the lanes block before the steps block", function()
   local _, S = setup()
-  local lanes, mutation = S.lib.lanes, S.lib.mutation
-  set_step(S, 1)
-  capture_scene(1)
-  lanes.set_length(1, "gate", 2)
-  params:set("seq_chain", 1); params:set("seq_chain_from", 1); params:set("seq_chain_scenes", 1)
-  pattern_clock_start(); pattern_clock_stop()
-  assert_equal(lanes.length(1, "gate"), nil, "the link made the gate lane follow")
-  assert_true(mutation.undo_for(S.constants.UI_PAGES.index.SEQ, "pattern", 1), "a lane length alone holds the undo")
+  lanes_scene(S)
+  local order = {}
+  for _, record in ipairs(S.registry.scene_blocks) do
+    if record.key == "lanes" or record.key == "steps" then
+      local real = record.apply
+      record.apply = function(value)
+        order[#order + 1] = record.key
+        return real(value)
+      end
+    end
+  end
+  recall_scene(1)
+  assert_equal(table.concat(order, " "), "lanes steps", "the lanes block first")
+  assert_equal(S.lib.lanes.length(1, "a"), 5, "and it applied")
 end)
 
 -- The machine `lane position`: voice 1's lane A, with the patterns playing
@@ -1226,9 +1261,13 @@ local function read_cell(cell, step)
   end
 end
 
-local function lane_length(n)
+-- The row's check: lane A's length and its position (fix round 1, item 1:
+-- the cell its next read reads, nil while it follows)
+local function lane_length(n, position)
   return function()
-    assert_equal(local_value("S").lib.lanes.length(1, "a"), n, "lane A's length " .. tostring(n))
+    local lanes = local_value("S").lib.lanes
+    assert_equal(lanes.length(1, "a"), n, "lane A's length " .. tostring(n))
+    assert_equal(lanes.position(1, "a"), position, "lane A at cell " .. tostring(position))
   end
 end
 
@@ -1261,25 +1300,25 @@ h.transition_table({
     {"following", "tick played", "following", check = read_cell(2, 2)},
     {"following", "tick skipped", "following", check = read_cell(3, 3)},
     {"following", "voice started", "following", check = read_cell(1, 1)},
-    {"following", "length set", "free at 1", check = lane_length(8)},
-    {"following", "set back to following", "following", check = lane_length(nil)},
+    {"following", "length set", "free at 1", check = lane_length(8, 1)},
+    {"following", "set back to following", "following", check = lane_length(nil, nil)},
     {"free at 1", "tick played", "free inside", check = read_cell(1, 2)},
     {"free at 1", "tick skipped", "free inside", check = read_cell(2, 3)},
     {"free at 1", "voice started", "free inside", check = read_cell(1, 1)},
-    {"free at 1", "length set", "free at 1", check = lane_length(8)},
-    {"free at 1", "set back to following", "following", check = lane_length(nil)},
+    {"free at 1", "length set", "free at 1", check = lane_length(8, 1)},
+    {"free at 1", "set back to following", "following", check = lane_length(nil, nil)},
     {"free inside", "tick played", "free inside", check = read_cell(3, 4)},
     {"free inside", "tick skipped", "free at its end", check = read_cell(4, 5)},
     {"free inside", "voice started", "free inside", check = read_cell(1, 1)},
-    {"free inside", "length set", "free inside", check = lane_length(8)},
-    {"free inside", "length set below", "free at 1", check = lane_length(2)},
-    {"free inside", "set back to following", "following", check = lane_length(nil)},
+    {"free inside", "length set", "free inside", check = lane_length(8, 3)},
+    {"free inside", "length set below", "free at 1", check = lane_length(2, 1)},
+    {"free inside", "set back to following", "following", check = lane_length(nil, nil)},
     {"free at its end", "tick played", "free at 1", check = read_cell(5, 6)},
     {"free at its end", "tick skipped", "free inside", check = read_cell(1, 7)},
     {"free at its end", "voice started", "free inside", check = read_cell(1, 1)},
-    {"free at its end", "length set", "free inside", check = lane_length(8)},
-    {"free at its end", "length set below", "free at 1", check = lane_length(2)},
-    {"free at its end", "set back to following", "following", check = lane_length(nil)},
+    {"free at its end", "length set", "free inside", check = lane_length(8, 5)},
+    {"free at its end", "length set below", "free at 1", check = lane_length(2, 1)},
+    {"free at its end", "set back to following", "following", check = lane_length(nil, nil)},
   },
   impossible = {
     {"following", "length set below",
