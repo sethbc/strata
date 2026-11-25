@@ -734,6 +734,222 @@ test("h.grid_pane's show raises when the pane does not end on the page, side and
   assert_true(pcall(pane.show, pages.fx, 1), "a side it has is shown")
 end)
 
+-- 3.9 (package 3a): the step key's second key, a cell key and a key's
+-- still, on every arrangement. A probe page at the FX page's index with two
+-- sides: its line y is voice y, its key x step x, and `keys` says what its
+-- press does (a step key with a function or the default second key, or a
+-- cell key of line y's id). The keys used are those the arrangement shows:
+-- `first` and `last` are its first and last shown x
+local function key_probe(pages, keys)
+  local probe = probe_grid_page(pages.fx, {sides = 2})
+  local seen = {seconds = {}, taps = {}, values = {}}
+  probe.press = function(pane, x, y, z)
+    if keys == "level" then
+      pane.step_key(x, y, z, y, x)
+    elseif keys == "second" then
+      pane.step_key(x, y, z, y, x, function(...) seen.seconds[#seen.seconds + 1] = {...} end)
+    elseif keys == "cell" then
+      pane.cell_key(x, y, z, "line " .. y, x,
+        function(index) seen.taps[#seen.taps + 1] = index end,
+        function(...) seen.values[#seen.values + 1] = {...} end)
+    end
+  end
+  return probe, seen
+end
+
+local function shown_keys(arrangement)
+  if arrangement == "64 left" then return 1, 8 end
+  if arrangement == "64 right" then return 9, 16 end
+  return 1, 16
+end
+
+test("a second key before the hold calls the page's function and toggles nothing", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    local _, seen = key_probe(pages, "second")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first, last = shown_keys(arrangement)
+    local patterns = local_value("patterns")
+    pane.press(first, 2, 1)
+    pane.press(last, 2, 1)
+    assert_equal(#seen.seconds, 1, arrangement .. ": the function is called once")
+    local call = seen.seconds[1]
+    assert_equal(table.concat(call, " "), table.concat({2, first, last, first, 2}, " "),
+      arrangement .. ": with the voice, the held step, the second key's step and the held key's place")
+    context.clock.run_for(0.35)
+    assert_equal(h.shown_step_editor(), nil, arrangement .. ": no editor opens at 0.3 s")
+    pane.press(last, 2, 0); pane.press(first, 2, 0)
+    assert_equal(patterns[2][first], 0, arrangement .. ": the held step's release toggles nothing")
+    assert_equal(patterns[2][last], 0, arrangement .. ": nor the second key's")
+    assert_equal(#seen.seconds, 1, arrangement .. ": and nothing more is called")
+  end
+end)
+
+test("a further key after the hold has fired does nothing", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    local _, seen = key_probe(pages, "second")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first, last = shown_keys(arrangement)
+    local patterns = local_value("patterns")
+    pane.press(first, 3, 1)
+    context.clock.run_for(0.35)
+    assert_equal(h.shown_step_editor(), "3 " .. first .. " 1", arrangement .. ": the hold opened the editor")
+    pane.press(last, 3, 1)
+    assert_equal(#seen.seconds, 0, arrangement .. ": the late key calls nothing")
+    assert_equal(patterns[3][first], 0, arrangement .. ": sets no level")
+    context.clock.run_for(0.35)
+    assert_equal(h.shown_step_editor(), "3 " .. first .. " 1", arrangement .. ": opens nothing of its own")
+    pane.press(last, 3, 0)
+    assert_equal(patterns[3][last], 0, arrangement .. ": its release toggles nothing")
+    assert_equal(h.shown_step_editor(), "3 " .. first .. " 1", arrangement .. ": and the editor stays open")
+    pane.press(first, 3, 0)
+    assert_equal(h.shown_step_editor(), nil, arrangement .. ": the held key's release closes it")
+    assert_equal(patterns[3][first], 0, arrangement .. ": and toggles nothing")
+  end
+end)
+
+test("the default second key still sets the level", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    key_probe(pages, "level")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first, last = shown_keys(arrangement)
+    local patterns = local_value("patterns")
+    pane.press(first, 4, 1)
+    pane.press(last, 4, 1)
+    assert_equal(patterns[4][first], 15, arrangement .. ": the last key shown is the top level")
+    pane.press(last, 4, 0); pane.press(first, 4, 0)
+    assert_equal(patterns[4][first], 15, arrangement .. ": neither release toggles")
+    assert_equal(patterns[4][last], 0, arrangement .. ": the second key's step is untouched")
+  end
+end)
+
+test("a cell tap calls on_tap at its release", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    local _, seen = key_probe(pages, "cell")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first = shown_keys(arrangement)
+    pane.press(first + 2, 5, 1)
+    assert_equal(#seen.taps, 0, arrangement .. ": nothing at the press")
+    context.clock.run_for(0.5)
+    assert_equal(#seen.taps, 0, arrangement .. ": no hold fires")
+    assert_equal(h.shown_step_editor(), nil, arrangement .. ": and no editor opens")
+    pane.press(first + 2, 5, 0)
+    assert_equal(table.concat(seen.taps, " "), tostring(first + 2), arrangement .. ": on_tap(index) at the release")
+    assert_equal(#seen.values, 0, arrangement .. ": no value")
+  end
+end)
+
+test("a second key gives the held cell its place", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    local _, seen = key_probe(pages, "cell")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first, last = shown_keys(arrangement)
+    local half = arrangement:find("^64") ~= nil
+    -- 16 keys shown: key 12 is position 12 of 16; a 64's half: its last key 8 of 8
+    local second = half and last or 12
+    pane.press(first, 6, 1)
+    pane.press(second, 6, 1)
+    assert_equal(#seen.values, 1, arrangement .. ": on_value once")
+    assert_equal(table.concat(seen.values[1], " "), half and (first .. " 8 8") or (first .. " 12 16"),
+      arrangement .. ": the held cell's index, the second key's position and the keys shown")
+    pane.press(first + 1, 5, 1)
+    assert_equal(#seen.values, 1, arrangement .. ": a key of another line is no second key")
+    pane.press(first + 1, 5, 0)
+    pane.press(second, 6, 0); pane.press(first, 6, 0)
+    assert_equal(table.concat(seen.taps, " "), tostring(first + 1), arrangement .. ": both spent: only the other line's tap")
+  end
+end)
+
+test("a held cell ends at a side change and at an unplug", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    local _, seen = key_probe(pages, "cell")
+    local pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    local first, last = shown_keys(arrangement)
+    pane.press(first, 1, 1)
+    pane.show(pages.fx, 2)
+    pane.press(last, 1, 1)
+    assert_equal(#seen.values, 0, arrangement .. ": after a side change the held cell takes no value")
+    pane.press(last, 1, 0); pane.press(first, 1, 0)
+    assert_equal(table.concat(seen.taps, " "), tostring(last), arrangement .. ": and taps nothing at its release")
+    seen.taps = {}
+    pane.press(first, 1, 1)
+    context.grid.unplug(1)
+    context.grid.plug(1, pane.device.cols, pane.device.rows)
+    pane = grid_pane(context, arrangement)
+    pane.show(pages.fx)
+    pane.press(first, 1, 0)
+    assert_equal(#seen.taps, 0, arrangement .. ": after an unplug its release taps nothing")
+    context.grid.unplug(1)
+  end
+end)
+
+test("still is true while the press is down and false after its release, a page change, a side change, a half change and an unplug, and false for a later press of the same key", function()
+  for _, arrangement in ipairs(h.GRID_ARRANGEMENTS) do
+    local context = load_bare()
+    local pages = PAGES()
+    local probe = probe_grid_page(pages.fx, {sides = 2})
+    local stills, page_pane = {}, nil
+    probe.press = function(pane, x, y, z)
+      page_pane = pane
+      if z == 1 then stills[#stills + 1] = pane.still(x, y) end
+    end
+    local pane = grid_pane(context, arrangement)
+    local first, last = shown_keys(arrangement)
+    local half = arrangement:find("^64") ~= nil and (arrangement == "64 right" and 2 or 1) or 1
+    local ends = {
+      {"its release", function() pane.press(first, 2, 0) end},
+      {"a page change", function() pane.show(pages.patterns) end},
+      {"a side change", function() pane.show(pages.fx, 2) end},
+      {"an unplug", function() context.grid.unplug(1) end},
+    }
+    if arrangement:find("^64") then
+      ends[#ends + 1] = {"a half change", function() local_value("S").lib.grid_core.set_half(1, 1, 3 - half) end}
+    end
+    for _, ending in ipairs(ends) do
+      pane = grid_pane(context, arrangement)
+      pane.show(pages.fx)
+      stills = {}
+      pane.press(first, 2, 1)
+      local still = stills[1]
+      assert_equal(type(still), "function", arrangement .. ": still is a function")
+      context.clock.run_for(0.5)
+      assert_true(still(), arrangement .. ": true while the press is down")
+      ending[2]()
+      assert_true(not still(), arrangement .. ": false after " .. ending[1])
+      -- the grid back (after an unplug) on the probe, the key let go and
+      -- pressed again: a later press of the same key
+      pane = grid_pane(context, arrangement)
+      pane.show(pages.fx)
+      pane.press(first, 2, 0)
+      pane.press(first, 2, 1)
+      assert_true(not still(), arrangement .. ": false for a later press of the same key, after " .. ending[1])
+      assert_true(stills[#stills](), arrangement .. ": whose own still is true")
+      pane.press(first, 2, 0)
+    end
+    -- the page's own pane object: a place it does not show is never still
+    local off = arrangement == "64 left" and last + 1 or (arrangement == "64 right" and first - 1 or 0)
+    assert_true(not page_pane.still(off, 2)(), arrangement .. ": a place off the pane is never still")
+    context.grid.unplug(1)
+  end
+end)
+
 -- Step 5: every key of every registered page -----------------------------
 
 test("every key of every registered page runs on every arrangement", function()
