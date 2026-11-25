@@ -918,6 +918,7 @@ return function(S)
       values[key] = x
       note_param_edit(param_id)  -- an edit ends a randomize's undo
       send_param_to_engine(param_id, x)
+      S.lib.sequencer.param_set(voice_idx, param_id)  -- #1047: a set ends a held step value on it
       if own_action then own_action(x) end
     end
     params:add(args)

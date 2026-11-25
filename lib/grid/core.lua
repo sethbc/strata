@@ -499,8 +499,9 @@ return function(S)
 
   -- The page and side of the pane the layout puts (x, y) in, as
   -- "<page>:<side>" (pane 1's with no layout): a step key's view (the final
-  -- review's M1). A page or side change ends the pane's keys, so a held
-  -- step's recorded view is always its pane's
+  -- review's M1), worked out from the key's pane whenever it is asked (fx2,
+  -- #1054: no entry keeps a copy). A page or side change ends the pane's
+  -- keys, so a held step's view is the one it was pressed on
   local function key_view(port, x, y)
     local layout = M.layout_of(port)
     local pane = layout and layout.pane_at and layout.pane_at(x, y) or 1
@@ -510,14 +511,15 @@ return function(S)
   -- The voice's held step on this port and view, other than (x, y): its
   -- entry and coordinates, or nil. A voice has at most one a view (#450;
   -- the final review's M1): step_key records a key as a held step only
-  -- while the voice has none on its view, and every later key of the voice
-  -- there is a second key, which never counts. Side 1 on both panes of a
-  -- 256 is one view, so a voice's keys there pair up across the panes
+  -- while the voice has none on its view (each held key's own, key_view),
+  -- and every later key of the voice there is a second key, which never
+  -- counts. Side 1 on both panes of a 256 is one view, so a voice's keys
+  -- there pair up across the panes
   local function held_step(port, voice_idx, x, y, view)
     for key_x, rows in pairs(step_keys[port] or {}) do
       for key_y, entry in pairs(rows) do
-        if entry.voice == voice_idx and entry.view == view and not entry.second_key and not (key_x == x and key_y == y)
-          and M.held(port, key_x, key_y) ~= nil then
+        if entry.voice == voice_idx and not entry.second_key and not (key_x == x and key_y == y)
+          and M.held(port, key_x, key_y) ~= nil and key_view(port, key_x, key_y) == view then
           return entry, key_x, key_y
         end
       end
@@ -574,14 +576,14 @@ return function(S)
       M.consume(port, x, y)
       M.consume(port, held_x, held_y)
       stop_hold(port, held_x, held_y)
-      set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, view = view, second_key = true})
+      set_key_value(step_keys, port, x, y, {voice = voice_idx, step = step, second_key = true})
       if held.second and not held.fired then
         local keep = held.second(voice_idx, held.step, step)
         if type(keep) == "function" then held.keep = keep end
       end
       return
     end
-    local entry = {voice = voice_idx, step = step, view = view, second = second}
+    local entry = {voice = voice_idx, step = step, second = second}
     set_key_value(step_keys, port, x, y, entry)
     M.on_hold(port, x, y, GRID_HOLD.step_edit_seconds, function()
       entry.fired = true

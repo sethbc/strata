@@ -1206,6 +1206,37 @@ test("in move, the Euclidean fill gives each step it turns on a value A", functi
   assert_equal(seq.step_attr(1, 1, "va"), 6, "step 1 keeps its own")
 end)
 
+-- fx2 (#1054 item 2): the undo puts back each step's value A, so a step
+-- the randomize turned on, tapped on later in accent, moves nothing
+test("a randomize's undo in move puts back each step's value A, so a later tap in accent moves nothing", function()
+  local context, S = setup()
+  local seq, mutation = S.lib.sequencer, S.lib.mutation
+  local SEQ_PAGE = S.constants.UI_PAGES.index.SEQ
+  seq.replace_pattern(1, {})
+  move_voice(S)
+  seq.set_step_attr(1, 5, "va", 4)  -- an off step's own value A, which the undo keeps
+  math.randomseed(3)
+  assert_true(mutation.randomize({page = SEQ_PAGE, section = "pattern", voice = 1, pattern = 1}), "randomized")
+  local turned_on
+  for step = 1, S.constants.PATTERN_LENGTH do
+    if S.patterns[1][step] > 0 and step ~= 5 then turned_on = turned_on or step end
+  end
+  assert_true(turned_on ~= nil and seq.step_attr(1, turned_on, "va") ~= nil, "a step turned on, with a value A")
+  assert_true(mutation.undo(), "undone")
+  for step = 1, S.constants.PATTERN_LENGTH do
+    assert_equal(S.patterns[1][step], 0, "step " .. step .. " off again")
+    assert_equal(seq.step_attr(1, step, "va"), step == 5 and 4 or nil, "step " .. step .. "'s value A as it was")
+  end
+  params:set("v1_seq_gate", 1)  -- accent
+  toggle_pattern_step(1, turned_on)
+  pattern_clock_start()
+  for _ = 2, turned_on do context.clock.advance_until(S.pattern_clocks[1]) end
+  assert_equal(seq.sounding_step(1), turned_on, "the tapped step played")
+  assert_equal(seq.held_value(1, "pitch"), nil, "it moved nothing")
+  assert_near(S.lib.engine_sync.engine_base_value("v1_freq"), params:get("v1_freq"), 1e-9, "the voice's own freq plays")
+  pattern_clock_stop()
+end)
+
 test("the chain loads the next scene's patterns every N bars and nothing else", function()
   local context, S = setup()
   local seq = S.lib.sequencer
