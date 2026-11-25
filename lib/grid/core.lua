@@ -280,18 +280,6 @@ return function(S)
     return key ~= nil and key.port == port and key.x == x and key.y == y
   end
 
-  -- Close the step editor if the key at (x, y) on the port opened it and
-  -- it is still open for that port (S.lib.pages_seq.step_editor()), so a
-  -- stale key never closes an editor opened elsewhere since. The key is
-  -- forgotten after the close, so the step view's end (M.end_step_view,
-  -- which the close calls) still reads which pane it was on
-  local function close_step_editor_of(port, x, y)
-    if not opened_step_editor(port, x, y) then return end
-    local open = S.lib.pages_seq.step_editor()
-    if open and open.port == port then S.lib.pages_seq.close_step_editor(port) end
-    step_editor.key = nil
-  end
-
   -- 3.9 (3c): the step view (design section 4, "A held step shows its
   -- values"): a pane showing the patterns page's side 2 draws bars for the
   -- step the editor shows, while the editor is open from a key of the
@@ -331,20 +319,41 @@ return function(S)
   end
 
   -- The step view's start or end on the port: its pane's keys end but the
-  -- editor's key (end_pane_keys' spare), as a side change ends them.
-  -- Nothing without a view. The caller repaints once the view is what it
-  -- will be (open_step_editor; close_step_editor after it forgets its editor)
-  local function end_view_keys(port, view)
+  -- editor's key (spare, end_pane_keys'; step_editor.key by default), as a
+  -- side change ends them. Nothing without a view. The caller repaints once
+  -- the view is what it will be (open_step_editor; close_step_editor after
+  -- it forgets its editor; close_step_editor_of)
+  local function end_view_keys(port, view, spare)
     if view == nil then return end
-    M.end_pane_keys(port, view.pane, step_editor.key)
+    M.end_pane_keys(port, view.pane, spare or step_editor.key)
   end
 
   -- The step editor of the port is closing (S.lib.pages_seq's
   -- close_step_editor calls it before it forgets its editor, and repaints
-  -- the grids after: K2, the modal stack's close_all, the key's gesture
-  -- ending through close_step_editor_of): the step view, if any, ends
+  -- the grids after: K2, the modal stack's close_all): the step view, if
+  -- any, ends. Through close_step_editor_of the key is already forgotten,
+  -- so this finds no view and that function ends it itself
   function M.end_step_view(port)
     end_view_keys(port, M.step_view(port))
+  end
+
+  -- Close the step editor if the key at (x, y) on the port opened it and
+  -- it is still open for that port (S.lib.pages_seq.step_editor()), so a
+  -- stale key never closes an editor opened elsewhere since. The key is
+  -- forgotten before the close (round 1 of 3c's review), so a close that
+  -- raises never leaves step_editor.key on a key whose gesture ended: the
+  -- step view is read first, and its pane's keys end after the close,
+  -- sparing that key, then the grids repaint
+  local function close_step_editor_of(port, x, y)
+    if not opened_step_editor(port, x, y) then return end
+    local key, view = step_editor.key, M.step_view(port)
+    step_editor.key = nil
+    local open = S.lib.pages_seq.step_editor()
+    if open and open.port == port then S.lib.pages_seq.close_step_editor(port) end
+    if view then
+      end_view_keys(port, view, key)
+      grid_redraw()
+    end
   end
 
   -- End the step gesture of the key at (x, y) on the port: its pending

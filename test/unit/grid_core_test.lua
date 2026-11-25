@@ -2506,6 +2506,55 @@ test("step_view is nil with no editor, an editor no key of the port opened, and 
   assert_equal(core.step_view(2), nil, "the release ends it")
 end)
 
+-- 3c's review, round 1: the key is forgotten before the close, so a close
+-- that raises leaves no step editor key on the released key (the step
+-- view, read from that key, is gone even with the editor left open)
+test("a step editor close that raises leaves no key recorded for the step view (3.9's 3c)", function()
+  local context = load_strata(); finish_startup(context)
+  local core, pages = grid_core(), PAGES()
+  local pages_seq = local_value("S").lib.pages_seq
+  context.grid.plug(1, 16, 16)
+  core.set_page(1, pages.patterns, 1, 1)
+  core.set_page(1, pages.patterns, 2, 2)
+  context.grid.press(1, 5, 1, 1); context.clock.run_for(0.35)
+  assert_true(core.step_view(1) ~= nil, "the view is open on pane 2")
+  local close = pages_seq.close_step_editor
+  pages_seq.close_step_editor = function() error("a close that raises") end
+  local released = pcall(context.grid.press, 1, 5, 1, 0)
+  pages_seq.close_step_editor = close
+  assert_true(not released, "the release raised the close's error")
+  assert_equal(shown_step_editor(), "1 5 1", "the close raised: the editor is still open")
+  assert_equal(core.step_view(1), nil, "but the key was forgotten first: no view reads it")
+  pages_seq.close_step_editor(1)
+end)
+
+-- 3c's review, round 1: a second open from another port ends the first
+-- port's view there (open_step_editor's own branch: no close_step_editor
+-- runs, SEQ pops the first editor itself). Port 1's 256 shows patterns'
+-- side 2 on its bottom pane (lines on rows 9-15: chance's line 4 is row 12,
+-- the utility line row 15, LN its key 4)
+test("a second open from another port ends the first port's step view and its pane's keys (3.9's 3c)", function()
+  local context = load_strata(); finish_startup(context)
+  local core, pages = grid_core(), PAGES()
+  context.grid.plug(1, 16, 16); context.grid.plug(2, 16, 8)
+  core.set_page(1, pages.patterns, 1, 1)
+  core.set_page(1, pages.patterns, 2, 2)
+  core.set_page(2, pages.patterns, 1, 1)
+  context.grid.press(1, 5, 1, 1); context.clock.run_for(0.35)
+  assert_true(core.step_view(1) ~= nil, "port 1's view on its bottom pane")
+  context.grid.press(1, 8, 12, 1)  -- a bar key of the view, held
+  local bar_still = core.still(1, 8, 12)
+  assert_equal(local_value("S").lib.sequencer.step_attr(1, 5, "prob"), 53, "the bar key set step 5's chance")
+  context.grid.press(2, 6, 3, 1); context.clock.run_for(0.35)
+  assert_equal(shown_step_editor(), "3 6 2", "port 2's hold opened the editor over port 1's")
+  assert_equal(core.step_view(1), nil, "port 1's view ended")
+  assert_true(not bar_still(), "and its pane's held bar key was ended")
+  assert_equal(context.grid.vports[1].device:get_led(4, 15), 4, "port 1's bottom pane is the lane side again: LN at 4")
+  context.grid.press(1, 8, 12, 0); context.grid.press(1, 5, 1, 0)
+  assert_equal(shown_step_editor(), "3 6 2", "port 1's keys close nothing")
+  context.grid.press(2, 6, 3, 0)
+end)
+
 test("end_pane_keys spares the key it is given (3.9's 3c)", function()
   local context = load_strata(); finish_startup(context)
   local patterns = local_value("patterns")
