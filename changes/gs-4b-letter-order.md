@@ -1,3 +1,0 @@
-### Added
-- **Letters switch on the bar** ([Variations](docs/user/sequencer.md#variations)): while the patterns play, a letter you pick waits for the next bar of the chain's count and plays from its first step; picking it again switches at once, and stopping the patterns, a scene recall or a chain link on that bar drops the wait. With the patterns stopped a switch is at once.
-- **An order of letters a voice**: up to eight letters (A A B A, ...) that the voice walks a bar each while the order is on, from its first letter when the patterns start; switching a letter by hand turns it off, and scenes keep it. Picking letters and setting an order from the grid and SEQ come in a later step of this work.

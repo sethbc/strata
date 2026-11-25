@@ -1,6 +1,6 @@
 # Strata roadmap
 
-The order and scope of the releases from 3.1 to 3.9 and 4.0. 3.1 to 3.8 have shipped (Shipped, below); **3.9, what 3.8 delays, is next**, then the pre-4.0 review. `docs/status.md` has the open items.
+The order and scope of the releases from 3.1 to 3.9 and 4.0. 3.1 to 3.9 have shipped (Shipped, below); **the pre-4.0 review is next**, then 4.0. `docs/status.md` has the open items.
 
 Date: 2026-11-07
 Status: brainstorm, reviewed 2026-11-07; cross-release decisions added 2026-11-08 (see "Cross-release decisions (2026-11-08)"). Added 2026-11-11, at the maintainer's request: releases 3.7 (rhythm) and 3.8 (sound), with fourteen features from a review of four hardware granular instruments, and in 3.6 the iii scripts and program change. It sets the order and scope of the releases after 3.0.2. It is not a build plan: each release gets its own design document (like `docs/design/3.0-design.md`) and an implementation plan before any code is written.
@@ -25,7 +25,7 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 6. 3.6: integration. crow, Just Friends and other ii (i2c) devices reached through crow, MIDI out, transport, OSC, dedicated controller layouts, and iii scripts for grids and arcs that run them.
 7. 3.7: rhythm (added 2026-11-11). Sample slices, buffers that follow the tempo and carry a key, scan modes, trig conditions, pattern directions, scene chains with chance, a synced delay, and envelope and random-sequence modulators.
 8. 3.8: sound (added 2026-11-11). More voice types, a deeper grain (a continuous window, grain probability, a grain arpeggiator, constant overlap), voices that grain each other, an input channel per voice, microtuning with a scale editor, shimmer, a delay freeze and per-voice sound presets.
-9. 3.9: what 3.8 delays (added 2026-11-18). A version number was kept free before 4.0 for this: a feature cut from 3.8 or a finding too large for its last fix wave is built here. Its first part, the state machines made explicit, has landed (2026-11-24); its second, the grid's sequencer reworked, is built (2026-11-24 to 2026-11-25); its third, the high tier's reverb freeze, is built (2026-11-25; its design, `docs/design/3.9-reverb-freeze-design.md`), so all three parts are built.
+9. 3.9: what 3.8 delays (added 2026-11-18). A version number was kept free before 4.0 for this: a feature cut from 3.8 or a finding too large for its last fix wave is built here. It shipped as 3.9.0 (2026-11-25) in three parts: the state machines made explicit, the grid's sequencer reworked and the high tier's reverb freeze.
 10. 4.0: a full code review of the whole project once 3.9 is out (a pre-4.0 release), then 4.0 with its fixes, the hardware check (#6) and the factory presets' sounds.
 
 ## Non-goals
@@ -64,7 +64,7 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 | 3.6 | Integration | Mostly Lua | Low to medium |
 | 3.7 | Rhythm: slices, tempo-aware buffers, scan modes, sequencer and scene-chain depth, modulators | Engine and Lua | Medium |
 | 3.8 | Sound: voice types, a deeper grain, voice-to-voice graining, microtuning, shimmer, voice presets | Engine and Lua | Medium to high |
-| 3.9 | What 3.8 delays: the state machines made explicit (landed), the grid's sequencer reworked (built), the high tier's reverb freeze (built) | Engine and Lua | Medium |
+| 3.9 | What 3.8 delays: the state machines made explicit, the grid's sequencer reworked, the high tier's reverb freeze | Engine and Lua | Medium |
 | pre-4.0 | Full code review of the whole project | Everything (review fixes only) | Low to medium |
 | 4.0 | Release of the reviewed code, checked on hardware, with factory sounds | Everything | Low |
 
@@ -72,7 +72,7 @@ The development norns is a shield with a Raspberry Pi 4 (8 GB). 3.0.2 has run on
 - 3.2's grain-engine rework comes before 3.3 and 3.5. Freeing memory per voice makes polyphony affordable, and the unified grain path gives buffer, input and synth voices the same features.
 - 3.3 comes before 3.4 (2026-11-08): 3.4 builds on 3.3's scene version, its bookmarks and its per-voice mix stage. The brainstorm's "3.4 can move ahead of 3.3" no longer holds.
 - 3.7 and 3.8 (added 2026-11-11) come after 3.6: slices and trig conditions build on 3.4's sequencer and 3.3's positions, and new voice types, microtuning and voice presets on 3.5's note allocation, so neither is designed before those have shipped. Each gets its own design first, like every release.
-- 3.9 (added 2026-11-18) takes what 3.8 delays, so that 3.8 ships at its planned scope less what failed its own conditions and nothing is pushed into the review. Its three parts go in the order the maintainer set on 2026-11-23: the state machines made explicit (landed 2026-11-24), the grid's sequencer (built 2026-11-24 to 2026-11-25), then the reverb freeze (built 2026-11-25).
+- 3.9 (added 2026-11-18) takes what 3.8 delays, so that 3.8 ships at its planned scope less what failed its own conditions and nothing is pushed into the review. Its three parts went in the order the maintainer set on 2026-11-23: the state machines made explicit, the grid's sequencer, then the reverb freeze, all shipped in 3.9.0 (2026-11-25).
 - The full review comes last, after 3.9, when every planned feature is in, so it reviews the code 4.0 ships. Since 2026-11-16 it is the review alone: everything else once kept for it was moved up to before 3.8 or into 3.8 (the maintainer), and only what needs a norns in hand (#6, the factory sounds) waits for 4.0.
 
 ## Development approach (all releases)
@@ -84,7 +84,7 @@ The code and documents are restructured for agent-driven development, and every 
 
 ---
 
-## Shipped: 3.1 to 3.8
+## Shipped: 3.1 to 3.9
 
 | Release | Theme | Design | Shipped |
 |---|---|---|---|
@@ -96,23 +96,15 @@ The code and documents are restructured for agent-driven development, and every 
 | 3.6 | Integration | `docs/design/3.6-design.md` | 3.6.0, 2026-11-15 |
 | 3.7 | Rhythm | `docs/design/3.7-design.md` | 3.7.0, 2026-11-16 |
 | 3.8 | Sound | `docs/design/3.8-design.md` | 3.8.0, 2026-11-18 |
+| 3.9 | What 3.8 delays | `docs/design/3.9-state-machines-design.md`, `docs/design/3.9-grid-sequencer-design.md`, `docs/design/3.9-reverb-freeze-design.md` | 3.9.0, 2026-11-25 |
 
-Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 3.6's on 2026-11-15, 3.7's on 2026-11-16, 3.8's on 2026-11-18): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table. The work between 3.7 and 3.8 (done 2026-11-17: the three revisions, `frozen` renamed `locked`, the 256's fader pages for newer params and MIDI note off as latch or release; the fixes of #738-#744 and #747-#754; and the three questions moved up from the pre-4.0 review: an LFO's own destination as a home routing of the matrix, one stepper under the pattern chain and the scene sequencer, the per-voice values as one table with one registration path, and scenes that travel with the PSET) had no release of its own and shipped in 3.8.0; its design is `docs/design/3.8-groundwork-design.md`.
+Their sections of this roadmap were removed on 2026-11-12 (3.5's on 2026-11-13, 3.6's on 2026-11-15, 3.7's on 2026-11-16, 3.8's on 2026-11-18, 3.9's on 2026-11-25): each release's design replaced its section, CHANGELOG.md and `docs/history.md` say what shipped, and git history keeps the text (the file was docs/design/3.1-3.6-roadmap.md until then). A release that ships moves from its section below to this table. The work between 3.7 and 3.8 (done 2026-11-17: the three revisions, `frozen` renamed `locked`, the 256's fader pages for newer params and MIDI note off as latch or release; the fixes of #738-#744 and #747-#754; and the three questions moved up from the pre-4.0 review: an LFO's own destination as a home routing of the matrix, one stepper under the pattern chain and the scene sequencer, the per-voice values as one table with one registration path, and scenes that travel with the PSET) had no release of its own and shipped in 3.8.0; its design is `docs/design/3.8-groundwork-design.md`. 3.9 took what 3.8 delayed, in three parts, each with its own design (above): the state machines made explicit (#864-#949, and #951-#1040 that its build found), the grid's sequencer reworked (for which old scenes and PSETs need not play as before, the maintainer's word of 2026-11-24), and the high tier's reverb freeze (#819, cut from 3.8).
 
 ---
 
-## 3.9: what 3.8 delays
-
-Added 2026-11-18 (the maintainer): a version number was left free before 4.0 on purpose, and 3.9 takes whatever 3.8 delays. Each item has its issue on the 3.9 milestone; 3.9 gets its own design first, like every release.
-
-- **The high tier's reverb freeze** (#819). 3.8's package built the design's freeze on the FDN and measured it on SuperCollider 3.13 and 3.14.1: frozen, the tail lost 2.4 to 3.2 dB above 6 kHz in six seconds and stepped by up to 1.24 dB at the freeze, so by the plan's own condition it was cut. The cause is known (an interpolating delay line never lands on a whole sample once its time has moved), and so is what a freeze that holds needs: whole-sample reads on every line while frozen, by a second read of each line (about 144 KB of the real-time pool) or by moving the lines into buffers (that much back to the pool), and taps that keep their interpolation and damping. The FX page and the grids' FX page already reach the freeze through one test (`S.lib.fx_hold.offered`), so they light up when it exists. **Built** (2026-11-25, `docs/design/3.9-reverb-freeze-design.md`): the lines moved into buffers and the frozen loop reads whole samples, so after a minute frozen the level and the band above 6 kHz stay within 1 dB; `reverb_freeze` is offered on the high tier only, and FX marks the held size.
-- **What 3.8's last review deferred**: nothing. Its findings (#823-#861) were moved to 3.8 and fixed before 3.8.0, at the maintainer's word, so nothing of 3.8's is on the 3.9 milestone but #819; a finding too large for a release's last fix wave still comes here with its issue, never into the pre-4.0 review.
-- **The state machines made explicit** (added 2026-11-21, the maintainer; #864-#949). A search of the whole script and engine for the state machines kept without a name found about 110, and filed every finding: 86 issues, from defects in transitions (a freeze key's waiting toggle, the 64's chooser and the positions keys, a key press lost under a covering editor) to states the player cannot see and machines with no table. Its design, `docs/design/3.9-state-machines-design.md`, makes a machine explicit in four forms (one name and one reader, a table a test runs, a seeded walk, a state shown where it changes what a key does), adds no stored state and no engine command, and fixes every issue but #939, now in #6's checklist. It is 3.9's first part, and it has landed (57 packages in seven waves and about forty more for what the build found, 2026-11-23 to 2026-11-24): every issue #864-#949 (#939 into a line of #6's section 14) and the build's own, #951-#1040, are all closed. Its decisions are in `docs/decisions/3.9.md`.
-- **The grid's sequencer, reworked** (added 2026-11-23, the maintainer). A step on the grid did too little: a swell of at most 6 dB on a voice that sounds anyway, keys that only turn a step on and off, nothing to perform with. Its design, `docs/design/3.9-grid-sequencer-design.md`, gives each voice a step mode (a voice with steps pulses by default, or its steps move its position, pitch, size or filter), turns what a step holds into lanes with their own lengths, shown and entered on a second side of the grid's patterns page, and adds a loop, a roll, four variations a voice with an order, and mutes, solo and fill on every grid size. It is 3.9's second part, and it is built (sixteen packages in six waves and one fix package, 2026-11-24 to 2026-11-25, a batch landing a wave): #1050 and #1051, which the build found, are closed, and #1047 (a held value masks a set that is not a hand edit) is open. For this rework old scenes and PSETs need not play as before (the maintainer, 2026-11-24). Its decisions are in `docs/decisions/3.9.md`.
-
 ## pre-4.0 and 4.0: full review, then release
 
-Added 2026-11-08. After 3.9 ships (3.6, until 3.7 and 3.8 were added on 2026-11-11; 3.8, until 3.9 was added on 2026-11-18), the whole project gets one full code review before 4.0, as 3.0.2 did for 3.0.1:
+Added 2026-11-08. Now that 3.9 has shipped (it waited for 3.6, until 3.7 and 3.8 were added on 2026-11-11; for 3.8, until 3.9 was added on 2026-11-18), the whole project gets one full code review before 4.0, as 3.0.2 did for 3.0.1:
 - **Scope.** All of it: the Lua script and its modules, the engine and its areas, the tests and checks (the Lua suites, the sync check, the engine check), CI, the user docs and the notes. Correctness first (bugs, broken invariants, races, memory on the standard and high tiers, SuperCollider 3.13 behavior on norns), then dead code, duplication and docs that no longer match the code.
 - **Every finding is filed and fixed, whatever its priority.** Each finding gets its own GitHub issue, from a crash to a stale comment, and each issue is fixed in its own pull request, through the usual checks. Nothing is triaged out, deferred to a later release or recorded as "known and accepted, no action": a finding is closed only by a merged fix. A final review of those fixes follows, and everything it finds is filed and fixed the same way, until a review finds nothing.
 - **Stricter than 3.0.2.** 3.0.2 followed this pattern (issues #10-#27, then #46-#52, one pull request each, all fixed), but grouped its findings by area into checklist issues and accepted three small ones without a fix (the "Known and accepted, no action" list in `docs/status.md`). pre-4.0 files one issue per finding and accepts none; the items on that list today are among its findings.
