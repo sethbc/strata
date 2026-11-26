@@ -1624,10 +1624,20 @@ return function(S)
     backup_suffix = PSET_SCENES.backup_suffix,
     capture = function() return S.scenes end, validate = scenes_problem, load = load_pset_scenes,
   })
+  -- A silent PSET read skips the switch's action. Once its scenes are
+  -- loaded, take only the missing start or stop so a running hold keeps
+  -- its position, draw and wake time.
+  local function sync_pset_sequencer(silent)
+    if not silent then return end
+    local enabled = params:get("scene_sequencer_enabled") == 1
+    if enabled == S.scene_sequencer_enabled then return end
+    if enabled then scene_sequencer_start() else scene_sequencer_stop() end
+  end
+
   -- registered at include, so it runs before morph's hook (which forgets
   -- its plan once the slots changed): a PSET save marks the live file as
   -- held by it, the delete of that PSET clears the mark
-  S.register_pset_hook(pset_scene_files.pset_hook(nil, nil, function(written, path_base)
+  S.register_pset_hook(pset_scene_files.pset_hook(nil, sync_pset_sequencer, function(written, path_base)
     if not written then return end
     S.scene_file.pset = path_base
     rewrite_live_pset()
