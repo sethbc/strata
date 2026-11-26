@@ -326,7 +326,8 @@ local function grain_restart_hook_reads(sources)
   for _, source in ipairs(sources) do
     local code = sync_check.sanitize_lua(source.text)
     for start, open in code:gmatch("()%f[%w_]register_grain_restart%s*()%(") do
-      local before = code:sub(1, start - 1)
+      -- Spaces and newlines can separate names from their dots or method colon.
+      local before = code:sub(1, start - 1):gsub("([%w_])%s*([.:])%s*", "%1%2")
       if not before:match("%f[%w_]function%s+[%w_.:]*%s*$") then
         local _, newlines = source.text:sub(1, start - 1):gsub("\n", "")
         local where = source.path .. ":" .. (newlines + 1)
@@ -365,14 +366,21 @@ function M.register_grain_restart(fn) end
 local example = "S.register_grain_restart(unsafe)"
 -- S.register_grain_restart(unsafe)
 S.register_grain_restart(function() end and unsafe or function() end)
+function S . register_grain_restart(fn) end
+function namespace
+  . S
+  : register_grain_restart(fn) end
+function unrelated() end
+S . register_grain_restart(unsafe)
 ]] } })
-  assert_equal(table.concat(hooks, " "), "probe.lua:3 probe.lua:5 probe.lua:8 probe.lua:12 probe.lua:14 probe.lua:19",
+  assert_equal(table.concat(hooks, " "), "probe.lua:3 probe.lua:5 probe.lua:8 probe.lua:12 probe.lua:14 probe.lua:19 probe.lua:25",
     "each registration is counted once, including a call with an unsupported expression")
-  assert_equal(#reads, 4, "two forbidden reads and two unrecognized hook expressions")
+  assert_equal(#reads, 5, "three forbidden reads and two unrecognized hook expressions")
   assert_equal(reads[1], "probe.lua:5", "the named function reads .active")
   assert_equal(reads[2], "probe.lua:8", "the inline function reads .active")
   assert_true(reads[3]:match("^probe%.lua:14 ") ~= nil, "report the unrecognized argument at its registration")
   assert_true(reads[4]:match("^probe%.lua:19 ") ~= nil, "a function literal inside an expression is not the hook")
+  assert_equal(reads[5], "probe.lua:25", "a call following another function definition still runs the check")
 end)
 
 test("no grain-restart hook reads voice.active", function()
