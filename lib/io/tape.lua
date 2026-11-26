@@ -67,7 +67,7 @@ return function(S)
     local length = params:get("tapeloop_length")
     local rate, level = current("tapeloop_rate"), current("tapeloop_level")
     local feedback, wear = current("tapeloop_feedback"), current("tapeloop_wear")
-    local recording = params:get("tapeloop_rec") == 1
+    local input_level = params:get("tapeloop_rec")
     each_voice(function(v)
       softcut.buffer(v, v)
       softcut.pan(v, v == 1 and -1 or 1)
@@ -79,10 +79,10 @@ return function(S)
       softcut.rate_slew_time(v, TAPE.rate_slew_seconds)
       softcut.rate(v, rate)
       softcut.level(v, level)
-      softcut.level_input_cut(v, v, 1)
+      softcut.level_input_cut(v, v, input_level)
       softcut.pre_level(v, 0)
       softcut.level_cut_cut(v, v, feedback / TAPE.write_gain)
-      softcut.rec_level(v, recording and 1 or 0)
+      softcut.rec_level(v, 1)  -- the filtered feedback is written even with the input closed
       softcut.pre_filter_fc_mod(v, 0)
       softcut.pre_filter_fc(v, cutoff_for(wear))
       softcut.pre_filter_rq(v, TAPE.filter_rq)
@@ -126,7 +126,7 @@ return function(S)
       end}
     params:add{type = "binary", behavior = "toggle", id = "tapeloop_rec", name = "tape record", default = 1,
       action = function(x)
-        if engaged then each_voice(function(v) softcut.rec_level(v, x == 1 and 1 or 0) end) end
+        if engaged then each_voice(function(v) softcut.level_input_cut(v, v, x) end) end
       end}
     params:add{type = "control", id = "tapeloop_length", name = "tape length",
       controlspec = controlspec.new(TAPE.length.min, TAPE.length.max, "exp", 0, TAPE.length.default, "s"),
