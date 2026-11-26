@@ -171,17 +171,17 @@ startCheckNode = { arg def, inBus, outBus, silent, buffers, controls, target;
 // input says otherwise. The values of each case, as windowField reads them
 runCases = { arg cases, seconds;
     var group = Group.after(context.xg), silent = Bus.audio(server, 2), seedBus = Bus.control(server, 1);
-    var condition = Condition(false), ended = 0, results;
-    var made = cases.collect({ arg case;
-        (inBus: if (case[\inputFrom].isNil) { Bus.audio(server, 2) }, outBus: Bus.audio(server, 2),
-            resultBus: Bus.control(server, numWindows * fields), controlBuses: List.new, buffers: newLines.value)
-    });
+    var made;
     check.((8 + cases.size) <= server.options.numRGens,
         "reverb: a batch's % inputs each get a random generator of their own (8 + its index under the server's %)".format(
             cases.size, server.options.numRGens));
-    made.do({ arg each; each[\resultBus].setAll(0) });
-    server.sync;
-    server.makeBundle(nil, {
+    h.measureWindows(seconds, cases.size, group, {
+        made = cases.collect({ arg case;
+            (inBus: if (case[\inputFrom].isNil) { Bus.audio(server, 2) }, outBus: Bus.audio(server, 2),
+                resultBus: Bus.control(server, numWindows * fields), controlBuses: List.new, buffers: newLines.value)
+        });
+        made.collect({ arg each; each[\resultBus] })
+    }, { arg onEnd;
         cases.do({ arg case, index;
             var each = made[index];
             if (case[\inputFrom].notNil) { each[\inBus] = made[case[\inputFrom]][\inBus] } {
@@ -214,21 +214,17 @@ runCases = { arg cases, seconds;
             var analysis = Synth(\strataCheckReverbWindows, [\in, made[index][\outBus],
                 \ref, case[\ref] !? { arg ref; made[ref][\outBus] } ? silent, \out, made[index][\resultBus],
                 \seconds, seconds, \windows, windows], group, \addToTail);
-            OSCFunc({ ended = ended + 1; if (ended == cases.size) { condition.test = true; condition.signal } },
-                '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
+            onEnd.(analysis);
         });
-    });
-    awaitReply.(condition, (seconds * 10) + 10);
-    results = made.collect({ arg each; readBus.(each[\resultBus]) });
-    group.free; server.sync;
-    made.do({ arg each, index;
-        if (cases[index][\inputFrom].isNil) { each[\inBus].free };
-        [each[\outBus], each[\resultBus]].do(_.free);
-        each[\controlBuses].do(_.free);
-        (each[\buffers][\lines] ++ each[\buffers][\rings]).do(_.free);
-    });
-    silent.free; seedBus.free; server.sync;
-    results
+    }, {
+        made.do({ arg each, index;
+            if (cases[index][\inputFrom].isNil) { each[\inBus].free };
+            [each[\outBus], each[\resultBus]].do(_.free);
+            each[\controlBuses].do(_.free);
+            (each[\buffers][\lines] ++ each[\buffers][\rings]).do(_.free);
+        });
+        silent.free; seedBus.free;
+    })
 };
 
 // A check that raises (a method the engine does not have) fails, naming it
@@ -263,6 +259,9 @@ checkAsBefore = {
             labels.add("size %, shimmer %".format(if (swept) { "swept 0.3 to 0.9" } { 0.8 }, shimmer));
         });
     });
+    // A late caller gets the same wall-clock deadlines (#1066). Start this
+    // real batch ten logical seconds behind, without making the check wait.
+    thisThread.seconds = Main.elapsedTime - 10;
     results = runCases.(cases.asArray, seconds + 0.05);
     largest = labels.collect({ arg label, pair; windowField.(results[pair * 2], 0, 3) });
     check.(labels.every({ arg label, pair; windowField.(results[pair * 2], 0, 2) > 0.01 })

@@ -571,6 +571,64 @@ var readBus = { arg bus;
     awaitReply.(condition);
     values ? []
 };
+// Both effects run all their window probes in one server bundle. One lost
+// reply ends the shard: the watchdog runs on SystemClock while the check
+// Routine is suspended, even inside Server.sync. Quitting this private
+// server also releases the batch's nodes, buffers and outstanding replies.
+var measureWindows = { arg area, seconds, count, group, prepare, launch, release;
+    var start = Main.elapsedTime, deadline = start + (2 * seconds) + 10;
+    var label = "%: % cases, % s of server audio".format(area, count, seconds);
+    var condition = Condition(false), ended = 0, timer, buses, results;
+    var stage = { arg name, allowance = 5;
+        var now = Main.elapsedTime;
+        ("batch %: % (+% s)".format(label, name, (now - start).round(0.01))).postln;
+        timer !? { timer.stop };
+        timer = Routine({
+            ("ENGINE CHECK FAILED: batch % timed out at % after % s (%/% probes ended)".format(
+                label, name, (Main.elapsedTime - start).round(0.01), ended, count)).postln;
+            server.quit;
+            1.exit;
+        });
+        // The caller's logical time can lag wall time after a slow step.
+        SystemClock.schedAbs(deadline.min(now + allowance), timer);
+    };
+    // Buffer operations each return a /done datagram. Pace both directions:
+    // one small bundle and its /synced before the next, so hundreds of
+    // /done replies cannot crowd the barrier out of the UDP receive queue.
+    var syncCommands = { arg body;
+        server.makeBundle(false, body).clump(32).do({ arg messages; server.sync(nil, messages) });
+    };
+    protect {
+        stage.("setup sync");
+        syncCommands.({
+            buses = prepare.value;
+            buses.do(_.setAll(0));
+        });
+        stage.("measurement", (2 * seconds) + 5);
+        server.makeBundle(nil, {
+            launch.value({ arg analysis;
+                OSCFunc({
+                    ended = ended + 1;
+                    if (ended == count) { condition.test = true; condition.signal };
+                }, '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
+            });
+        });
+        condition.wait;
+        results = buses.collect({ arg bus, index;
+            var ready = Condition(false), values;
+            stage.("read windows %/% (bus %)".format(index + 1, count, bus.index));
+            bus.getn(bus.numChannels, { arg reply; values = reply; ready.test = true; ready.signal });
+            ready.wait;
+            values
+        });
+        stage.("group free sync");
+        group.free; server.sync;
+        stage.("buffer free sync");
+        syncCommands.(release);
+        ("batch %: end (+% s)".format(label, (Main.elapsedTime - start).round(0.01))).postln;
+    } { timer !? { timer.stop } };
+    results
+};
 // Reset a peak probe, wait, and read what it measured meanwhile
 var measure = { arg probe, bus, seconds = 0.3;
     probe.set(\t_reset, 1);
@@ -1112,6 +1170,8 @@ runChecks = {
             commandTo: { arg self, target, name ... args; commandTo.(target, name, *args) },
             formatOf: { arg self, name; formatOf.(name) },
             awaitReply: { arg self, condition, timeout = 5; awaitReply.(condition, timeout) },
+            measureWindows: { arg self, seconds, count, group, prepare, launch, release;
+                measureWindows.(running, seconds, count, group, prepare, launch, release) },
             // the bookkeeping sweep's lines for an engine now (#943, #1019)
             sweepLines: { arg self, target, area; sweepLines.(target, area) },
             waitFor: { arg self, condition, timeout = 3; waitFor.(condition, timeout) },

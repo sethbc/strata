@@ -22,7 +22,6 @@ var check = { arg condition, message; h.check(condition, message) };
 var command = { arg name ... args; h.command(name, *args) };
 var awaitReply = { arg condition, timeout = 5; h.awaitReply(condition, timeout) };
 var getControl = { arg synth, control; h.getControl(synth, control) };
-var readBus = { arg bus; h.readBus(bus) };
 var powerDb = { arg ratio; (ratio.max(1e-30).log10 * 10).round(0.01) };
 var ampDb = { arg ratio; ratio.max(1e-15).ampdb.round(0.1) };
 // the windows an analysis measures, and the values it gives each
@@ -236,24 +235,24 @@ startCheckNode = { arg def, inBus, outBus, silent, buffers, controls, target;
 // The values of each case, as windowField and bandsField read them
 runCases = { arg cases, seconds;
     var group = Group.after(context.xg), silent = Bus.audio(server, 2), seedBus = Bus.control(server, 1);
-    var condition = Condition(false), ended = 0, results;
-    var made = cases.collect({ arg case;
-        (inBus: if (case[\inputFrom].isNil) { Bus.audio(server, 2) }, outBus: Bus.audio(server, 2),
-            resultBus: Bus.control(server, (numWindows * fields) + bandsFields),
-            controlBuses: List.new,
-            buffers: (rings: 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }),
-                line: if (delayDefs.includes(case[\def])) { 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) }) } { [] },
-                lines: if (case[\def] == \strataReverbFDN) { engine.newReverbLines } { [] }))
-    });
+    var made;
     // each input's noise on a generator of its own: past the server's count
     // RandID falls back to the shared default generator, and the seeding
     // with it
     check.((8 + cases.size) <= server.options.numRGens,
         "shimmer: a batch's % inputs each get a random generator of their own (8 + its index under the server's %)".format(
             cases.size, server.options.numRGens));
-    made.do({ arg each; each[\resultBus].setAll(0) });
-    server.sync;
-    server.makeBundle(nil, {
+    h.measureWindows(seconds, cases.size, group, {
+        made = cases.collect({ arg case;
+            (inBus: if (case[\inputFrom].isNil) { Bus.audio(server, 2) }, outBus: Bus.audio(server, 2),
+                resultBus: Bus.control(server, (numWindows * fields) + bandsFields),
+                controlBuses: List.new,
+                buffers: (rings: 2.collect({ Buffer.alloc(server, engine.shimmerRingFrames, 1) }),
+                    line: if (delayDefs.includes(case[\def])) { 2.collect({ Buffer.alloc(server, engine.delayLineFrames, 1) }) } { [] },
+                    lines: if (case[\def] == \strataReverbFDN) { engine.newReverbLines } { [] }))
+        });
+        made.collect({ arg each; each[\resultBus] })
+    }, { arg onEnd;
         cases.do({ arg case, index;
             var each = made[index], node;
             if (case[\inputFrom].notNil) { each[\inBus] = made[case[\inputFrom]][\inBus] } {
@@ -285,26 +284,22 @@ runCases = { arg cases, seconds;
             var analysis = Synth(\strataCheckShimmerWindows, [\in, if (case[\probeInput] == true) { made[index][\inBus] } { made[index][\outBus] },
                 \ref, case[\ref] !? { arg ref; made[ref][\outBus] } ? silent, \out, made[index][\resultBus],
                 \seconds, seconds, \windows, windows], group, \addToTail);
-            OSCFunc({ ended = ended + 1; if (ended == cases.size) { condition.test = true; condition.signal } },
-                '/n_end', server.addr, argTemplate: [analysis.nodeID]).oneShot;
+            onEnd.(analysis);
             [case[\bands], case[\otherBands]].do({ arg bands, which;
                 bands !? { Synth(\strataCheckShimmerBands, [\in, if (case[\probeInput] == true) { made[index][\inBus] } { made[index][\outBus] },
                     \out, made[index][\resultBus].index + (numWindows * fields) + (which * 4), \freq, bands[0], \mode, bands[1],
                     \from, bands[2], \to, bands[3], \seconds, seconds], group, \addToTail) };
             });
         });
-    });
-    awaitReply.(condition, (seconds * 10) + 10);
-    results = made.collect({ arg each; readBus.(each[\resultBus]) });
-    group.free; server.sync;
-    made.do({ arg each, index;
-        if (cases[index][\inputFrom].isNil) { each[\inBus].free };
-        [each[\outBus], each[\resultBus]].do(_.free);
-        each[\controlBuses].do(_.free);
-        (each[\buffers][\rings] ++ each[\buffers][\line] ++ each[\buffers][\lines]).do(_.free);
-    });
-    silent.free; seedBus.free; server.sync;
-    results
+    }, {
+        made.do({ arg each, index;
+            if (cases[index][\inputFrom].isNil) { each[\inBus].free };
+            [each[\outBus], each[\resultBus]].do(_.free);
+            each[\controlBuses].do(_.free);
+            (each[\buffers][\rings] ++ each[\buffers][\line] ++ each[\buffers][\lines]).do(_.free);
+        });
+        silent.free; seedBus.free;
+    })
 };
 
 // A check that raises (a command the engine does not have) fails, naming it
