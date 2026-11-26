@@ -204,6 +204,8 @@ def build(layout):
     name = layout["name"]
     root = ET.Element("lexml", {"version": "3"})
     top, props, values, messages = node(root, "GROUP", name, (0.0, 0.0, width, height), COLORS["background"], name)
+    # Use the same OSC connection as the controls (00001).
+    prop(props, "s", "script", 'function init()\n  sendOSC("%s", {true})\nend' % layout["on_open"])
     children = ET.SubElement(top, "children")
     pager, pager_props, _, _ = node(children, "PAGER", "pages", (0.0, 0.0, width, height), COLORS["background"],
                                     name + "/pages")
