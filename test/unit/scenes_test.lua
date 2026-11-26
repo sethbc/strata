@@ -2006,6 +2006,39 @@ test("a saved scene is on disk before the script exits; an exit with nothing new
   end
 end)
 
+test("a scene archive that init cannot open survives the next save and cleanup (#1068)", function()
+  local options = {data_subdir = "scene_read_denied"}
+  local context = load_strata(options)
+  local S = local_value("S")
+  assert_equal(S.scene_file.start_outcome, "missing", "first launch")
+  S.lib.scenes.save(1)
+  local path = context.data_dir .. "strata/scenes.data"
+  local original = assert(file_text(path))
+  cleanup()
+
+  local open = io.open
+  io.open = function(name, mode)
+    if name == path and mode == "rb" then return nil, "Permission denied", 13 end
+    return open(name, mode)
+  end
+  local ok, problem = pcall(function()
+    load_strata(options)
+    S = local_value("S")
+    S.lib.scenes.save(2)
+    cleanup()
+  end)
+  io.open = open
+  assert_true(ok, tostring(problem))
+  assert_equal(S.scene_file.start_outcome, "unreadable")
+  assert_equal(file_text(path .. ".bak"), original, "the original archive survived")
+  load_strata(options)
+  S = local_value("S")
+  assert_true(S.scenes[2].populated, "new scenes can still be saved")
+  assert(os.rename(path .. ".bak", path))
+  assert_equal(load_scenes_from_disk(), "loaded")
+  assert_true(S.scenes[1].populated, "the original scene loads again")
+end)
+
 test("a scenes write that fails keeps the old file and says so; the next save that works clears it (#301)", function()
   local context = load_strata({ data_subdir = "scene_write_fails" }); finish_startup(context)
   local S = local_value("S")
