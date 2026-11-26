@@ -265,6 +265,36 @@ test("ALT+K2 held 0.5 s then released clears a slot; quick does nothing", functi
 end)
 
 
+-- A clear belongs to the filled slot where K2 went down. On a canceled
+-- hold the on-disk library, including both occupied slots, must survive.
+for _, gesture in ipairs({
+  {name = "from a voice row onto a filled slot", moves = {}},
+  {name = "from one filled slot to another", start_slot = 1, moves = {1}},
+  {name = "from an empty slot to a filled one", start_slot = 3, moves = {-1}},
+  {name = "away from a filled slot and back", start_slot = 1, moves = {1, -1}},
+  {name = "through a close and reopen", start_slot = 1, moves = {}, close = true},
+}) do
+  test("a picker clear held " .. gesture.name .. " preserves the library", function()
+    local context, S, picker = opened()
+    assert_true(S.lib.voice_presets.save(2, 1, "glass"))
+    assert_true(S.lib.voice_presets.save(3, 2, "fold"))
+    local path = context.data_dir .. "strata/voices.data"
+    local before = h.file_text(path)
+    if gesture.start_slot then enc(2, S.constants.NUM_VOICES - 2 + gesture.start_slot) end
+    key(1, 1); key(2, 1)
+    context.clock.run_for(0.6)
+    if not gesture.start_slot then enc(2, S.constants.NUM_VOICES - 1) end
+    for _, delta in ipairs(gesture.moves) do enc(2, delta) end
+    if gesture.close then picker.close(); picker.open(1) end
+    local hint = S.lib.ui_modal.top().hints(true)
+    key(2, 0); key(1, 0)
+    assert_true(h.file_text(path) == before, "both presets survive byte for byte")
+    assert_equal(S.lib.voice_presets.preset(1).name, "glass")
+    assert_equal(S.lib.voice_presets.preset(2).name, "fold")
+    if not gesture.close then assert_equal(hint, "K2:cancel", "the release cannot clear this slot") end
+  end)
+end
+
 test("a name entry the norns menu took over is forgotten when the menu closes", function()
   local context, S, picker = opened()
   local te = context.textentry.library

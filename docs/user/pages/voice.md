@@ -10,7 +10,7 @@ The second row, `preset`, shows the name of the preset last loaded into the voic
 - **E2** - Move through the list (E3 does nothing)
 - **K3** - On a voice row, copy that voice's sound into this one; on a slot, load its preset. The hint row says what was loaded (`loaded glass pad`), and the picker stays open, so you can try one after another
 - **ALT+K3** - On a slot, save this voice's sound there: a name entry opens when you let go of K3, starting from the slot's name; a name longer than twelve characters is cut to twelve, and canceling saves nothing
-- **ALT+K2** - Held half a second on a filled slot, then let go: clear the slot. A quick press does nothing
+- **ALT+K2** - Hold for half a second on a filled slot, then release to clear it. Moving to another row cancels the hold, even if you move back
 - **K2** - Back to VOICE
 
 The hint row shows `K2:back K3:copy` on a voice row, `K2:back K3:load` on a filled slot and `K2:back` on an empty one; with ALT, `K2:clear K3:save` (`K3:save` on an empty slot), then `K2:hold` while ALT+K2 is down and `K2:clear` once letting go will clear. A quick ALT+K2 back on VOICE, within 5 seconds and on any row of that voice, undoes the load or the copy, and the `preset` row shows again the name it showed before. See [Voice presets](../voices-and-grains.md#voice-presets).
