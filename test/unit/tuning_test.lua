@@ -281,6 +281,7 @@ test("a tuning with a tone or a period that is not a number, or infinite, is ref
     t.select({name = "bad " .. index, period = entry.period, tones = entry.tones})
     assert_equal(#sent_tuning(context), 0, "nothing sent for entry " .. index)
     assert_equal(t.count(), 12, "the tuning stays ji normal (entry " .. index .. ")")
+    assert_equal(t.name(), "ji normal", "the refused entry keeps the tuning name")
   end
 end)
 
@@ -344,6 +345,10 @@ test("the Scala reader takes comments, ratios, cents and whole numbers", functio
     {{"x", "1", "99.0"}, "period"},
     {{"x", "1", "4801.0"}, "period"},
     {{"x", "2", "1300.0", "1200.0"}, "above the period"},
+    -- These are distinct OSC floats as written. At four decimal places
+    -- 4500.0001 and 4500.0002 both reach the engine as exactly 4500.
+    {{"x", "3", "4500.00014", "4500.000249", "4800.0"}, "ascend"},
+    {{"x", "2", "4500.00014", "4500.000249"}, "above the period"},
   }
   for _, case in ipairs(refusals) do
     local refused, reason = t.parse_scl(table.concat(case[1], "\n"))
@@ -353,6 +358,53 @@ test("the Scala reader takes comments, ratios, cents and whole numbers", functio
   end
   local big = "x\n1\n2/1\n" .. string.rep("!", t.TUNING.max_file_bytes)
   assert_equal(t.parse_scl(big), nil, "a file over max_file_bytes is refused")
+end)
+
+test("a Scala choice applies its saved tones or leaves the old tuning in the editor (#1080)", function()
+  local context = load_strata({data_subdir = "scala_choice_precision"}); finish_startup(context)
+  local t = tuning()
+  local folder = _path.data .. t.TUNING.folder
+  h.write_text(folder .. "clear.scl", "Clear\n3\n100.001\n100.004\n2/1\n")
+  h.write_text(folder .. "close.scl", "Close\n3\n100.00001\n100.00004\n2/1\n")
+  h.show_page("SETUP")
+  local_value("lib").ui_scale_editor.open()
+  enc(2, 3)
+  enc(3, #t.built_ins())  -- first file after the built-ins
+  context.clear_engine_calls()
+  h.tap(3)
+  local text = "1200 0 100.001 100.004"
+  assert_equal(t.name(), "clear", "the distinct pair applies under its file name")
+  assert_equal(params:get("tuning_tones"), text, "the PSET text keeps both pitches")
+  local function check_active()
+    assert_equal(t.count(), 3, "the three-tone tuning is active")
+    local calls = sent_tuning(context)
+    assert_equal(#calls, 4, "the engine gets the whole tuning")
+    assert_equal(calls[1].args[1], 3, "the count")
+    assert_equal(calls[1].args[2], 1200, "the period")
+    for index, cents in ipairs({0, 100.001, 100.004}) do
+      assert_equal(calls[index + 1].args[1], index - 1, "the engine tone index")
+      assert_equal(calls[index + 1].args[2], cents, "the engine tone in cents")
+      assert_equal(t.tones()[index], cents, "the active tone in cents")
+    end
+  end
+  check_active()
+  context.clear_engine_calls()
+  enc(3, 1)  -- next file, whose two pitches round to 100 cents
+  h.tap(3)
+  h.next_frame(context)
+  assert_equal(t.name(), "clear", "a refused choice keeps the active name")
+  assert_equal(params:get("tuning_tones"), text, "and its saved text")
+  assert_equal(t.tones()[3], 100.004, "the active table stays")
+  assert_equal(#sent_tuning(context), 0, "the engine keeps its table")
+  assert_true(h.hint_text(context):find("ascend", 1, true) ~= nil, "the editor explains the refusal")
+
+  local path = context.data_dir .. "scala.pset"
+  params:write(path, "scala")
+  use("12 equal")
+  context.clear_engine_calls()
+  params:read(path)
+  assert_equal(t.name(), "clear", "the PSET restores the name")
+  check_active()
 end)
 
 test("a Scala file with CRLF and a BOM reads as its Unix copy", function()
