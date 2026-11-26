@@ -52,8 +52,10 @@
     }
 
     // A peak as the file writes it: three decimals, always
-    peakText { arg value;
+    peakText { arg value, preserveNonzero = false;
         var milli = (value.clip(0, 1) * 1000).round.asInteger;
+        // Lua uses an all-zero waveform for silence when normalizing.
+        if (preserveNonzero and: { value > 0 }) { milli = milli.max(1) };
         ^(milli div: 1000).asString ++ "." ++ (milli % 1000).asString.padLeft(3, "0")
     }
 
@@ -375,7 +377,7 @@
     // slot's own unless given). Two files with the same content draw the
     // same waveform
     peaksContent { arg index, frames, rate;
-        var peaks = areaState[\waveform][\peaks][index].asArray.collect({ arg value; this.peakText(value) });
+        var peaks = areaState[\waveform][\peaks][index].asArray.collect({ arg value; this.peakText(value, true) });
         ^["frames %\nrate %\n".format(frames.asInteger, (rate ? bufferSampleRates[index]).round.asInteger), "peaks " ++ peaks.join(" ")]
     }
 

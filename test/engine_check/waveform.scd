@@ -162,7 +162,12 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
 // The file's format, slot, frames, rate and a rising generation
 {
     var path = scratchRoot +/+ "waveform-format.wav", slot = 2, peaksPath = engine.peaksPath(slot), first, second, values;
-    writePerBinFile.(path, rate, 200, binValues);
+    // Silence, two quiet 16-bit levels straddling the rounding boundary,
+    // and an ordinary peak whose reciprocal gain is below the cap.
+    var levels = [0, 9 / 32768, 25 / 32768, 0.125];
+    writePerBinFile.(path, rate, 200, { arg bin;
+        if (bin < levels.size) { [levels[bin], 0] } { binValues.(bin) }
+    });
     if (File.exists(peaksPath)) { File.delete(peaksPath) };
     command.(\loadBuffer, slot, path, 0);
     waitFor.({ engine.bufferFrames[slot] == (200 * points) });
@@ -175,6 +180,10 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
         "waveform: the peaks file has the format, slot, frames, rate and a rising generation (header: %)".format(first));
     check.((values.size == points) and: { values.every({ arg each; (each.size == 5) and: { each[1] == $. } }) },
         "waveform: the peaks file has the format, slot, frames, rate and a rising generation (64 values, three decimals: %)".format(values.keep(3)));
+    check.(levels.every({ arg level, bin; storedPeaks.(engine, slot)[bin] == level })
+        and: { values.keep(4) == ["0.000", "0.001", "0.001", "0.125"] },
+        "waveform: positive 16-bit peaks survive in the file for normalization (samples %, bytes %)".format(
+            storedPeaks.(engine, slot).keep(4), values.keep(4)));
     command.(\loadBuffer, slot, path, 0);
     0.1.wait; waitFor.({ engine.bufferFrames[slot] == (200 * points) });
     0.1.wait; server.sync;
