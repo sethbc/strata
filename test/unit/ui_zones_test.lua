@@ -259,6 +259,27 @@ test("a note while the step editor covers the zones editor is not learned", func
   zones.cancel_learn()
 end)
 
+test("zone learning passes notes to performance while the norns menu covers it", function()
+  local context, S, zones = loaded()
+  enc(2, 5)  -- voice 3
+  alt_tap(3)
+  assert_equal(zones.learning(), 3, "voice 3 is armed")
+  _menu.set_mode(true)
+  context.midi.send(1, { type = "note_on", note = 64, vel = 100, ch = 1 })
+  assert_equal(params:get("v3_zone_low"), 0, "the menu note leaves the low bound alone")
+  assert_true(S.midi_state.held[1][128 + 64], "the menu note plays on voice 1")
+  context.midi.send(1, { type = "note_off", note = 64, vel = 0, ch = 1 })
+  assert_equal(next(S.midi_state.held[1]), nil, "its release reaches voice 1")
+
+  _menu.set_mode(false)
+  context.midi.send(1, { type = "note_on", note = 65, vel = 100, ch = 1 })
+  assert_equal(params:get("v3_zone_low"), 65, "the first visible note sets the low bound")
+  context.midi.send(1, { type = "note_on", note = 77, vel = 100, ch = 1 })
+  assert_equal(params:get("v3_zone_high"), 77, "the second visible note sets the high bound")
+  assert_equal(zones.learning(), nil, "the learn is complete")
+  assert_equal(next(S.midi_state.held[1]), nil, "neither learned note plays")
+end)
+
 -- #626, as MOD's learn: the timeout clock is retired, never canceled, once
 -- its resume may be posted, and the old clock ends nothing a newer learn armed
 test("a learn ending as its timeout's resume is posted retires the clock, never cancels it (#626)", function()
