@@ -23,7 +23,7 @@ return function(S)
     decay = {min = 1, max = 10000, default = 500},    -- ms
     time_commands = {attack = "env_att", decay = "env_dec"},
     setup_lines = 3,                          -- env_act, env_att, env_dec
-    partial = "partial",                      -- active[output]: env_act reached the module, a time did not
+    partial = "partial",                      -- setup or a time needs retrying
     labels = {off = "off", out = "out %d  %s", row = "txo", attack = "txo attack", decay = "txo decay",
       output = "output", mode = "mode", ms = "%d ms"},
     -- IO's mark on a route set while Strata does not lead the bus (#937)
@@ -36,12 +36,11 @@ return function(S)
   -- was raised}. A note stays on the output and in the mode it started in
   -- until it ends, whatever its voice's params say by then.
   local lines = {}
-  -- active[output] = true: the output's envelope is set up on the module
-  -- (all three setup lines admitted); TXO.partial: its env_act 1 was
-  -- admitted and a time refused, at its setup or at a time change (#871),
-  -- so it is sent env_act 0 when no voice wants it, and its setup again
-  -- whole at the next sync
-  local active = {}
+  -- active projects the queue through its tail (true = complete setup).
+  -- delivered holds just the envelopes whose last env_act handed to crow
+  -- was 1. A lead change discards the queue, so it starts from delivered.
+  local active, delivered = {}, {}
+  local retry_needed = false
 
   local function out_id(voice) return "v" .. voice .. "_out_txo" end
   local function mode_id(voice) return "v" .. voice .. "_out_txo_cv" end
@@ -107,58 +106,71 @@ return function(S)
     return want
   end
 
-  -- The three setup lines; the output is set up (active true) only when the
-  -- bus admitted all three, and TXO.partial when it admitted the env_act
-  -- alone (#871: a full queue refuses the rest; the setup is then sent again
-  -- whole at the next sync, a second env_act 1 being what every output or
-  -- mode change sends). The bus returns false for a refused line; a refused
-  -- env_act leaves the output as it was, as the module still is
+  local function send_active(output, value)
+    return bus().send_tracked(function()
+      delivered[output] = value == 1 or nil
+    end, "txo", "env_act", output, value)
+  end
+
   local function set_up(output)
-    local act = bus().send("txo", "env_act", output, 1) ~= false
-    local att = bus().send("txo", "env_att", output, params:get("txo_attack")) ~= false
-    local dec = bus().send("txo", "env_dec", output, params:get("txo_decay")) ~= false
-    if act then active[output] = (att and dec) or TXO.partial end
+    local act = send_active(output, 1)
+    local att = bus().send("txo", "env_att", output, params:get("txo_attack"))
+    local dec = bus().send("txo", "env_dec", output, params:get("txo_decay"))
+    if act and att and dec then
+      active[output] = true
+    else
+      if act or active[output] then active[output] = TXO.partial end
+      retry_needed = true
+    end
   end
 
-  -- Whether the queue has room for a setup's three lines, as far as the bus
-  -- tells without a send (a retry it would refuse is not tried, so it is
-  -- not counted as a drop); true for a bus that does not tell
-  local function room_for_setup()
+  local function room_for(count)
     local ii = bus()
-    if type(ii.queued) ~= "function" or type(ii.II) ~= "table" then return true end
-    return ii.II.queue_max - ii.queued() >= TXO.setup_lines
+    return ii.II.queue_max - ii.queued() >= count
   end
 
-  -- Take the module to what the params say: an output no voice needs any
-  -- more gets env_act 0 (once), and the outputs named (one voice's, or all
-  -- of them) the three setup lines, with every other wanted output that is
-  -- not set up (its setup refused in whole or in part, #871) while the
-  -- queue has room for it
-  local function sync(only_voice)
+  -- Every route participates in the desired mode. Reconfigure the edited
+  -- voice's output and repair other incomplete transitions as room allows.
+  function M.sync(only_voice)
     if not leading() then return end
+    retry_needed = false
     local want = wanted()
     for _, output in ipairs(sorted_outputs(active)) do
       if not want[output] then
-        bus().send("txo", "env_act", output, 0)
-        active[output] = nil
+        if room_for(1) and send_active(output, 0) then
+          active[output] = nil
+        else
+          retry_needed = true
+        end
       end
     end
     local named = only_voice and envelope_output(only_voice)
     if named then set_up(named) end
     for _, output in ipairs(sorted_outputs(want)) do
-      local retry = output ~= named and active[output] ~= true and room_for_setup()
-      if not only_voice or retry then set_up(output) end
+      if output ~= named and active[output] ~= true then
+        if room_for(TXO.setup_lines) then
+          set_up(output)
+        else
+          retry_needed = true
+        end
+      end
     end
   end
 
-  -- A time changed: only its command, once per output whose envelope is
-  -- set up (a turn of the knob sends a line an output a detent, not three).
-  -- A refused line leaves the module on the old time, so its output becomes
-  -- TXO.partial and the next sync sends its setup again whole (#871)
+  -- The bus has drained its allowance before this hook. With no outstanding
+  -- work the clock does not scan routes or allocate any tables.
+  S.lib.lfos.on_step(function()
+    if retry_needed and leading() and room_for(1) then M.sync() end
+  end)
+
   local function send_time(command, value)
     if not leading() then return end
+    local want = wanted()
     for _, output in ipairs(sorted_outputs(active)) do
-      if bus().send("txo", command, output, value) == false then active[output] = TXO.partial end
+      if want[output] and not bus().send("txo", command, output, value) then
+        active[output] = TXO.partial
+        retry_needed = true
+      end
     end
   end
 
@@ -297,20 +309,20 @@ return function(S)
     },
   })
 
-  -- ready: the bus is led now, so every envelope output is set up again,
-  -- and one still active on the module that no voice wants is turned off
-  -- (a crow that leaves releases nothing, so active is what it holds, #752);
-  -- release: the bus is left, so each envelope that was set up is turned
-  -- off (sent direct, since the bus no longer leads), each output once;
-  -- ports: every command with an argument takes the output first, so the
-  -- ii queue gives each output one turn (crow-ii.md §2, #717)
+  -- Both transitions drop the old queue. Release has the space left after
+  -- the note offs; an envelope past its limit still needs attention at ready.
   S.register_ii_device({name = "txo", ports = true, param_count = TXO.param_count,
-    ready = function() sync() end,
-    release = function()
-      local outputs = sorted_outputs(active)
+    ready = function()
       active = {}
+      for output in pairs(delivered) do active[output] = TXO.partial end
+      M.sync()
+    end,
+    release = function()
+      active, retry_needed = {}, false
       if not bus() then return end
-      for _, output in ipairs(outputs) do bus().send_direct("txo", "env_act", output, 0) end
+      for _, output in ipairs(sorted_outputs(delivered)) do
+        if bus().send_direct("txo", "env_act", output, 0) then delivered[output] = nil end
+      end
     end,
     add_params = function() M.add_params() end})
 
@@ -322,7 +334,7 @@ return function(S)
     for voice = 1, NUM_VOICES do
       local function changed()
         route_changed(voice)
-        sync(voice)
+        M.sync(voice)
       end
       params:add{type = "number", id = out_id(voice), name = "v" .. voice .. " txo output",
         min = TXO.outputs.min, max = TXO.outputs.max, default = 0,
