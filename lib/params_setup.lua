@@ -209,13 +209,25 @@ return function(S)
   end
 
   -- The ids a PSET file's text has a line for
-  function pset.named_ids(text)
-    local named = {}
+  function pset.named_ids(text, order)
+    local named, index = {}, 0
     for line in text:gmatch("[^\n]+") do
       local id = M.pset_line(line)
-      if id then named[id] = true end
+      if id and not named[id] then
+        named[id] = true
+        if order then
+          index = index + 1
+          order[id] = index
+        end
+      end
     end
     return named
+  end
+
+  -- The order norns applied this id in the silent read whose hooks are
+  -- running. Only its first line counts; a missing id defaults after them.
+  function M.read_order(id)
+    return pset.order and pset.order[id]
   end
 
   -- The text of id's line in a PSET file's text (the rest of the line after
@@ -279,7 +291,7 @@ return function(S)
   -- Nothing is keyed on when a PSET was saved (3.7): a line for an id that
   -- is no param (3.3 to 3.6's strata_pset_format) is skipped by norns'
   -- read, and nothing is converted.
-  function M.migrate_read_pset(filename, silent)
+  function M.migrate_read_pset(filename, silent, order)
     -- 3.8 (ruling 63, P13 amended): a PSET read sets every voice's type, so
     -- every pending type choice is canceled, also where the type's line
     -- left the type as it was (its action runs only on a change)
@@ -289,7 +301,7 @@ return function(S)
     if file then file:close() end
     pset.read_changed = {}
     if text then
-      local named, defaulted = pset.named_ids(text), 0
+      local named, defaulted = pset.named_ids(text, order), 0
       for _, id in ipairs(M.record_param_ids()) do
         local default = not named[id] and M.load_default(params:lookup_param(id))
         if default then
@@ -332,8 +344,12 @@ return function(S)
   -- the three with the script's params, so no cleanup step is needed
   function pset.install_actions()
     params.action_read = function(filename, silent, number)
-      M.migrate_read_pset(filename, silent)
+      local order = silent and {} or nil
+      M.migrate_read_pset(filename, silent, order)
+      local previous = pset.order
+      pset.order = order
       run_pset_hooks("read", filename, number, filename, silent)
+      pset.order = previous
     end
     params.action_write = function(filename, name, number) run_pset_hooks("write", filename, number) end
     params.action_delete = function(filename, name, number) run_pset_hooks("delete", filename, number) end
