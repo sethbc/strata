@@ -16,9 +16,13 @@
                 // the chunks fileDecodes has read since alloc (the check counts them)
                 areaState[\files][\decodeChunks] = 0;
                 areaState[\files][\renames] = Dictionary.new;
+                areaState[\files][\wavTag] = File.use("/dev/urandom", "rb", { arg entropy;
+                    Array.fill(4, { entropy.getInt32.asHexString }).join
+                });
                 this.areaCall(\deleteStaleParts)
             },
-            addCommands: { this.areaCall(\addFileCommands) }
+            addCommands: { this.areaCall(\addFileCommands) },
+            free: { this.areaCall(\retireWavWrites) }
         )
     }
 
@@ -47,10 +51,148 @@
     // save_buffer counts the same), named in bufferSaveResult
     bufferSaves { ^areaState[\files][\saves] }
 
-    // Per output path: the write whose rename into place is under way (its
-    // generation), from the rename's start until it has ended, so a newer
-    // write to the path renames only after it. Holds only renames under way.
+    // Per path: the active WAV publication, or the count of an onsets rename.
     pathRenames { ^areaState[\files][\renames] }
+
+    // Separate sclang-wide budgets for preparations, queued WAV mover
+    // requests and fallback children. Retired engines use credits until done.
+    wavWorkLimit { ^16 }
+    reserveWavFallback {
+        if (wavFallbacks >= this.wavWorkLimit) { ^false };
+        wavFallbacks = wavFallbacks + 1;
+        ^true
+    }
+    releaseWavFallback { wavFallbacks = wavFallbacks - 1 }
+
+    wavPartToken { arg generation;
+        ^instanceTag.asString ++ "-" ++ generation ++ "-" ++ areaState[\files][\wavTag]
+    }
+
+    // Only the token is stored, never a caller-supplied path. A directory
+    // distinct from the output files keeps ordinary WAV names available.
+    wavReceipt { arg path; ^path.dirname +/+ ".strata-wav-writers" +/+ path.basename }
+
+    // Save destinations may be arbitrary paths. Reserve the actual engine
+    // filename grammars, including result markers and server staging WAVs.
+    wavPrivatePath { arg path;
+        var temp;
+        if (path.toLower.split($/).includesEqual(".strata-wav-writers")) { ^true };
+        if ("(\\.[0-9]+-[0-9]+(-[0-9A-Fa-f]{32})?(\\.(ack|fail))?|(^|/)strata-peaks-mover\\.[0-9]+)\\.part(/|$)".matchRegexp(path)) { ^true };
+        temp = File.realpath(Platform.defaultTempDir).withTrailingSlash;
+        ^path.beginsWith(temp) and: {
+            "^strata-buf[0-9]+-[0-9]+-(onsets[0-9]+|[0-9]+(-[0-9A-Fa-f]{32})?)-[LR]\\.wav(/|$)".matchRegexp(path.drop(temp.size))
+        }
+    }
+
+    // Walk before mkdir: a missing directory followed by .. may lead
+    // back to an existing symlink, including one into the server temp dir.
+    wavParent { arg dir;
+        var resolved = "/", kind;
+        dir.absolutePath.split($/).do({ arg name;
+            if (name == "..") { resolved = resolved.dirname } {
+                if (name.notEmpty and: { name != "." }) {
+                    resolved = resolved +/+ name;
+                    kind = File.type(resolved);
+                    if (kind == \symlink) {
+                        resolved = File.realpath(resolved);
+                        if (resolved.isNil) { ^nil };
+                        kind = File.type(resolved);
+                    };
+                    if ((kind != \directory) and: { kind != \not_found }) { ^nil };
+                    if (this.wavPrivatePath(resolved)) { ^nil };
+                };
+            };
+        });
+        if (File.type(resolved) == \not_found) { File.mkdir(resolved) };
+        ^File.realpath(resolved)
+    }
+
+    wavReceiptToken { arg receipt;
+        ^File.use(receipt, "r", { arg file;
+            var length = file.length, token;
+            if (length > 0 and: { length < 128 }) { token = file.getLine(128) };
+            if (token.notNil and: { token.size == length } and: {
+                "^[0-9]+-[0-9]+-[0-9A-Fa-f]{32}$".matchRegexp(token)
+            }) { token }
+        })
+    }
+
+    // Only a successful rename removes a live mover source outside this
+    // method. A missing source after a failed unlink means the rename won.
+    unlinkMoverPart { arg part;
+        var type = try { File.type(part) };
+        if (type == \regular and: { ("unlink " ++ part.shellQuote ++ " 2>/dev/null").systemCmd == 0 }) { ^\removed };
+        if (try { File.type(part) } == \not_found) { ^\gone };
+        ^\blocked
+    }
+
+    // Exactly one live sclang owns the norns engine. After a crash its OS
+    // carriers may still run. The receipt names their only rename source.
+    // At most one exceptional fork: unlink(1), unlike SC's File.delete,
+    // distinguishes removal from ENOENT when the rename races it.
+    retireWavPublication { arg path;
+        var receipt = this.wavReceipt(path), record = this.pathRenames[path], type, token, part, outcome;
+        type = File.type(receipt);
+        if (type == \not_found) { ^record.isNil };
+        if (type != \regular) { ^false };
+        token = this.wavReceiptToken(receipt);
+        if (token.isNil) { ^false };
+        if (record.notNil and: { record[\token] != token }) { ^false };
+        part = path ++ "." ++ token ++ ".part";
+        outcome = this.unlinkMoverPart(part);
+        if (outcome == \blocked) { ^false };
+        if (record.notNil) {
+            this.pathRenames.removeAt(path);
+            if (outcome == \gone and: { areaState[\files][\retired] != true }) {
+                record[\finish].value(true);
+            };
+        };
+        ^File.delete(receipt)
+    }
+
+    // Install an exclusive receipt before either OS carrier can see the
+    // part. An unreadable or unremovable old receipt refuses the new write.
+    claimWavPublication { arg path, token, finish;
+        var receipt = this.wavReceipt(path), file, record;
+        if (File.type(receipt.dirname) == \not_found) { File.mkdir(receipt.dirname) };
+        if (File.type(receipt.dirname) != \directory) { ^nil };
+        if (this.retireWavPublication(path).not) { ^nil };
+        file = File(receipt, "wx");
+        if (file.isOpen.not) { ^nil };
+        protect { file.write(token) } { file.close };
+        if (this.wavReceiptToken(receipt) != token) { File.delete(receipt); ^nil };
+        record = (token: token, finish: finish);
+        this.pathRenames[path] = record;
+        ^record
+    }
+
+    finishWavPublication { arg path, record, written;
+        if (this.pathRenames[path] === record) {
+            var receipt = this.wavReceipt(path), token = try { this.wavReceiptToken(receipt) };
+            this.pathRenames.removeAt(path);
+            if (token == record[\token]) {
+                File.delete(receipt);
+                // The parent may still serve a different output.
+                File.delete(receipt.dirname);
+            };
+            if (areaState[\files][\retired] != true) { record[\finish].value(written) };
+        };
+    }
+
+    retireWavWrites {
+        areaState[\files][\retired] = true;
+        writeGenerations !? { writeGenerations.clear };
+        this.pathRenames !? {
+            this.pathRenames.keys.asArray.do({ arg path;
+                if (this.pathRenames[path].isKindOf(Event)) {
+                    try { this.retireWavPublication(path) };
+                    // A failed unlink keeps its receipt on disk for the next engine.
+                    this.pathRenames.removeAt(path);
+                    File.delete(this.wavReceipt(path).dirname);
+                };
+            });
+        };
+    }
 
     // One float, as bufferLoadFailed (matron's /poll/value is typed "if"):
     // (save * 2 + failed) * numBuffers + slot index, where save is the slot's
@@ -211,7 +353,7 @@
                     if (try { File.exists(path) } { true }) { unreadable.add(path) };
                     nil
                 };
-                if (modified.notNil and: { modified < oldest }) { File.delete(path) };
+                if (modified.notNil and: { modified < oldest } and: { this.wavPartIsClaimed(path).not }) { File.delete(path) };
             });
         });
         unreadable.do({ arg path;
@@ -219,6 +361,23 @@
             if (postStaleFileLine.notNil) { postStaleFileLine.value(line) } { line.postln };
         });
         ^unreadable.asArray
+    }
+
+    // An OS carrier may have been suspended longer than stalePartAge.
+    // Keep its part for the recorded owner, even after an sclang restart.
+    wavPartIsClaimed { arg part;
+        var token, path, receipt;
+        if (part.endsWith(".part").not) { ^false };
+        token = part.drop(-5).basename.split($.).last;
+        if ("^[0-9]+-[0-9]+-[0-9A-Fa-f]{32}$".matchRegexp(token).not) { ^false };
+        path = part.drop((token.size + 6).neg);
+        receipt = this.wavReceipt(path);
+        ^try {
+            var type = File.type(receipt);
+            type != \not_found and: {
+                type != \regular or: { (this.wavReceiptToken(receipt) ? token) == token }
+            }
+        } { true }
     }
 
     // scratchDir and its parent, then the settings folder the performance
@@ -247,7 +406,7 @@
     // mono buffer to a temporary float file; sclang then interleaves them in
     // chunks (yielding between chunks from the real time, so a 300 s save
     // never holds up the commands) into a per-write
-    // path.<instanceTag>-<n>.part file and renames it into place, so a
+    // path.<writer token>.part file and renames it into place, so a
     // reader never sees a half-written file. The rename goes to the mover
     // (renameIntoPlace, the waveform area's: no fork of sclang, #217), after
     // any older write's rename to the path has ended, so renames land in
@@ -268,7 +427,7 @@
     writeSlot { arg index, path, done, start = 0, length = 1;
         var valid = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
-        var firstFrame, frames, generation, tempPaths, partPath;
+        var firstFrame, frames, generation, token, tempPaths, partPath, parent, sent;
         if (valid < 1) {
             postln("strata: buffer " ++ (index + 1) ++ " is empty; nothing written to " ++ path);
             done.value(false);
@@ -282,15 +441,27 @@
             ^this
         };
         path = path.standardizePath;
+        if ((wavPreparations >= this.wavWorkLimit) or: { this.wavPrivatePath(path) }) { done.value(false); ^this };
+        parent = try { this.wavParent(path.dirname) };
+        if (parent.isNil) { done.value(false); ^this };
+        path = parent +/+ path.basename;
+        if (this.wavPrivatePath(path)) { done.value(false); ^this };
+        wavPreparations = wavPreparations + 1;
         writeCount = writeCount + 1;
         generation = writeCount;
         writeGenerations[path] = generation;
+        token = this.wavPartToken(generation);
         tempPaths = ["L", "R"].collect({ arg side;
-            Platform.defaultTempDir +/+ "strata-buf%-%-%-%.wav".format(index + 1, instanceTag, generation, side)
+            Platform.defaultTempDir +/+ "strata-buf%-%-%.wav".format(index + 1, token, side)
         });
-        partPath = path ++ "." ++ instanceTag ++ "-" ++ generation ++ ".part";
-        buffersL[index].write(tempPaths[0], "wav", "float", frames, firstFrame);
-        buffersR[index].write(tempPaths[1], "wav", "float", frames, firstFrame);
+        partPath = path ++ "." ++ token ++ ".part";
+        sent = try {
+            buffersL[index].write(tempPaths[0], "wav", "float", frames, firstFrame);
+            buffersR[index].write(tempPaths[1], "wav", "float", frames, firstFrame);
+            true
+        } { false };
+        // Even a partial send owns its temporaries and credit until the
+        // server has processed any /b_write accepted before the exception.
         fork({
             var current = { writeGenerations[path] == generation };
             // done runs at most once, whatever happens below
@@ -302,10 +473,10 @@
             // which reports; never deleted or reported here after that.
             // newest: it passed the newest-write check, so it reports even
             // after its writeGenerations entry has gone
-            var written, folder, handedOff = false, renameEnded = false, newest = false, waitStart;
+            var written, folder, handedOff = false, record, newest = false, waitStart;
             try {
                 context.server.sync;
-                written = current.value and: {
+                written = sent and: { current.value } and: {
                     this.interleaveFiles(tempPaths, partPath, sampleRate, current, frames, openFiles)
                 };
                 tempPaths.do({ arg tempPath; File.delete(tempPath) });
@@ -313,7 +484,8 @@
                 // mover's, or a subprocess's): wait for it, so renames land in
                 // write order whatever carries them (a newer one by subprocess
                 // could land before an older one the mover still holds). At
-                // most twice peaksMoverTimeout; it ends by then. Polled as
+                // most twice peaksMoverTimeout; then claimWavPublication must
+                // establish that the earlier source can no longer rename. Polled as
                 // often as the mover's acknowledgment (peaksMoverPollStep).
                 waitStart = Main.elapsedTime;
                 // A write a newer one supersedes stops waiting at once.
@@ -334,19 +506,15 @@
                     if (folder) { postln("strata: cannot write " ++ path ++ " (a folder is in the way)") };
                     writeGenerations.removeAt(path);
                     if (written and: { folder.not }) {
-                        this.areaCall(\renameIntoPlace, partPath, path, { arg moved;
-                            renameEnded = true;
-                            if (this.pathRenames[path] == generation) { this.pathRenames.removeAt(path) };
-                            if (moved) {
-                                postln("strata: wrote buffer " ++ (index + 1) ++ " to " ++ path);
-                            } {
-                                postln("strata: cannot move " ++ partPath ++ " to " ++ path);
-                            };
-                            finish.(moved);
-                        });
-                        // scheduled: from here the rename owns the .part and reports
-                        handedOff = true;
-                        if (renameEnded.not) { this.pathRenames[path] = generation };
+                        record = this.claimWavPublication(path, token, finish);
+                        if (record.notNil) {
+                            this.areaCall(\renameIntoPlace, partPath, path, { arg moved;
+                                this.areaCall(\finishWavPublication, path, record, moved);
+                            }, true);
+                            handedOff = true;
+                        } {
+                            finish.(false);
+                        };
                     } {
                         finish.(false);
                     };
@@ -366,9 +534,12 @@
                 if (handedOff.not) {
                     deleteIfThere.(partPath);
                     if (current.value) { writeGenerations.removeAt(path); newest = true };
-                    if (newest) { finish.(false) };
+                    if (record.notNil) { this.areaCall(\finishWavPublication, path, record, false) } {
+                        if (newest) { finish.(false) };
+                    };
                 };
             };
+            wavPreparations = wavPreparations - 1;
         }, SystemClock);
     }
 
