@@ -53,14 +53,25 @@ SynthDef(\strataCheckFreezeRead, { arg in, now, out, t_reset = 0;
         Sweep.ar(reset, on)
     ]));
 }).add;
-// Where each grain starts reading: its read 1 ms in (a latch on the
-// grain's first sample may still hold the read before it), held between
-// grains
-SynthDef(\strataCheckFreezeGrainStart, { arg in, out;
+// Measure consecutive grain starts on the server. A probe may begin in the
+// middle of a grain: the second onset is the baseline, the third the first
+// step. Read the timecode 1 ms into each grain, past its first sample.
+SynthDef(\strataCheckFreezeScan, { arg in, out, ringSeconds, seconds;
     var sig = In.ar(in, 2), on = sig[1] > 0.05;
-    var read = sig[0] / sig[1].max(0.001);
-    var onset = (on - Delay1.ar(on)) > 0;
-    Out.kr(out, A2K.kr(Latch.ar(read, DelayN.ar(onset, 0.001, 0.001))));
+    var hit = DelayN.ar((on - Delay1.ar(on)) > 0, 0.001, 0.001);
+    var read = Latch.ar(sig[0] / sig[1].max(0.001), hit);
+    var time = Latch.ar(Sweep.ar(0, 1), hit);
+    var grains = PulseCount.ar(hit), first = grains >= 2, step = hit * (grains > 2);
+    var delta = read - Delay1.ar(read), dt = time - Delay1.ar(time);
+    var seam = delta > (ringSeconds * 0.5), jumps = PulseCount.ar(step * seam);
+    // A backward step spans ringSeconds * dt seconds of recorded audio.
+    // At a seam the timecode jumps forward by one ring in that step.
+    var error = (delta - (seam * ringSeconds) + (dt * ringSeconds)).abs;
+    var elapsed = time - Latch.ar(time, first);
+    var distance = Latch.ar(read, first) - read + (jumps * ringSeconds);
+    Out.kr(out, A2K.kr([grains - 2, elapsed, jumps, distance,
+        RunningMax.ar(step * error), RunningMax.ar(step * dt)]));
+    Line.kr(0, 0, seconds, doneAction: 2);
 }).add;
 // The longest silence (s) since t_reset: a stretch where both channels'
 // samples together stay under 1e-4 (a tone's zero crossings last
@@ -315,38 +326,30 @@ check.(ok and: { state[\frozen][0] } and: { state[\mode][0] == \hold } and: { re
     and: { (readings[2] - readings[3]) < 0.15 },
     "freeze: a frozen synth voice keeps sounding after its voice synth falls silent (writer paused %, % s of grains, reads % to % s, frozen at % s)".format(
         ok, readings[4].round(0.01), readings[3].round(0.001), readings[2].round(0.001), frozenAt.round(0.001)));
-// the scan moves the read point back through the frozen ring, wrapping:
-// at bufScan 1 (one ring length, 4 s, a second) each grain (0.1 s apart, 0.05 s long)
-// starts about 0.4 s further back, and the start jumps up to the newest
-// audio (the seam) once per 4 s of travel. Each grain's start, polled at
-// 20 Hz for about 3 s
-readings = { arg seconds;
-    var bus = Bus.control(server, 1), synth = grainOf.(0), probe, starts = List.new, began, travel;
+// At bufScan 1 the read point travels one ring per second. The probe hears
+// the actual 50 ms grains at 10 Hz and retains its measurements until read.
+{
+    var synth = grainOf.(0), group = Group.head(probeGroup), bus = Bus.control(server, 6);
+    var seconds = 3.35, ring = engine.ringSeconds, count, elapsed, jumps, distance, worstError, longestGap, expected;
     synth.set(\out, readOut.index);
-    probe = Synth(\strataCheckFreezeGrainStart, [\in, readOut, \out, bus], probeGroup);
-    command.(\setGrainParam, 0, \grainSize, 0.05);  // a gap between grains, so each start shows
-    server.sync; 0.2.wait;
+    command.(\setGrainParam, 0, \grainSize, 0.05);
     command.(\setGrainParam, 0, \bufScan, 1.0);
-    server.sync;
-    began = Main.elapsedTime;
-    while { (Main.elapsedTime - began) < seconds } { starts.add(h.readBusValue(bus)); 0.05.wait };
-    travel = (Main.elapsedTime - began) * engine.ringSeconds;
+    #count, elapsed, jumps, distance, worstError, longestGap = h.measureWindows(seconds, 1, group, { [bus] }, { arg onEnd;
+        onEnd.value(Synth(\strataCheckFreezeScan, [\in, readOut, \out, bus, \ringSeconds, ring, \seconds, seconds], group));
+    }, { bus.free })[0];
     command.(\setGrainParam, 0, \bufScan, 0.0);
     command.(\setGrainParam, 0, \grainSize, 0.1);
-    probe.free; bus.free;
     synth.set(\out, engine.voicePathBus(0, engine.grainSource[0]).index);
     check.(getControl.(synth, \out) == engine.voicePathBus(0, engine.grainSource[0]).index,
         "freeze: the grain synth's out is restored to its own path (voice 0)");
-    [starts.asArray.differentiate.drop(1), travel]
-}.value(3.0);
-ok = readings[0].select({ arg step; step.abs > 0.01 });
-check.((ok.select({ arg step; step > 2 }).size).inclusivelyBetween((readings[1] / engine.ringSeconds).floor,
-        (readings[1] / engine.ringSeconds).ceil)
-    and: { ok.reject({ arg step; step > 2 }).every({ arg step; step < 0 }) }
-    and: { ok.size > 20 },
-    "freeze: bufScan moves the read point back through a frozen ring and passes the seam once per 4 s of travel (% s of travel, % seam jumps, % steps back, % forward)".format(
-        readings[1].round(0.1), ok.count({ arg step; step > 2 }), ok.count({ arg step; step < 0 }),
-        ok.count({ arg step; (step > 0) and: { step <= 2 } })));
+    expected = elapsed * ring; // bufScan 1 is one ring per server second
+    check.((count >= 30) and: { elapsed >= 3 } and: { longestGap < 0.11 }
+        and: { jumps.inclusivelyBetween(elapsed.floor, elapsed.ceil) }
+        and: { (distance - expected).abs < 0.04 } and: { worstError < 0.015 },
+        "freeze: bufScan moves the read point back through a frozen ring and passes the seam once per 4 s of travel (% steps in % server seconds, % seam jumps, % s of travel, expected %, worst step error % s, longest grain interval % s)".format(
+            count.asInteger, elapsed.round(0.001), jumps.asInteger, distance.round(0.001), expected.round(0.001),
+            worstError.round(0.001), longestGap.round(0.001)));
+}.value;
 // unfreeze: the writer resumes and the grains read just behind the head again
 timecode.set(\voiceOn, 1);
 command.(\setGrainParam, 0, \freeze, 0.0);
