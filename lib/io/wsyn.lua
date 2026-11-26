@@ -44,14 +44,29 @@ return function(S)
     return type(voice) == "number" and voice % 1 == 0 and voice >= 1 and voice <= NUM_VOICES
   end
 
+  local applied = {}
+  local function apply_route(voice, value)
+    applied[voice] = value
+    S.lib.io_targets.route_changed(voice)
+  end
+
   function M.add_params()
     for voice = 1, NUM_VOICES do
+      applied[voice] = 0
       params:add{type = "binary", behavior = "toggle", id = out_id(voice), name = "v" .. voice .. " w/ syn",
-        default = 0, action = function() S.lib.io_targets.route_changed(voice) end}
+        default = 0, action = function(value) apply_route(voice, value) end}
     end
     params:add{type = "control", id = "wsyn_level", name = "w/ syn level",
       controlspec = controlspec.new(WSYN.level.min, WSYN.level.max, "lin", 0, WSYN.level.default, "V")}
   end
+
+  S.register_pset_hook({name = "io_wsyn", read = function(_, _, _, silent)
+    if not silent or not has_params() then return end
+    for voice = 1, NUM_VOICES do
+      local value = params:get(out_id(voice))
+      if value ~= applied[voice] then apply_route(voice, value) end
+    end
+  end})
 
   S.register_ii_device({
     name = WSYN.device,
