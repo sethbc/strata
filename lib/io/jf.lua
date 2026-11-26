@@ -48,19 +48,30 @@ return function(S)
     return params:get(route_id(voice)) == 1 and leads()
   end
 
+  local applied_routes = {}
+  local function apply_route(voice, value)
+    if applied_routes[voice] == value then return end
+    applied_routes[voice] = value
+    if S.lib.io_targets then S.lib.io_targets.route_changed(voice) end
+  end
+
   -- Called by the ii module's add_params (a group of the devices' summed
   -- param_count): the seven routes, then the level
   function M.add_params()
     for voice = 1, NUM_VOICES do
+      applied_routes[voice] = 0
       params:add{type = "binary", behavior = "toggle", id = route_id(voice), name = "jf out v" .. voice,
         default = 0,
-        action = function()
-          if S.lib.io_targets then S.lib.io_targets.route_changed(voice) end
-        end}
+        action = function(value) apply_route(voice, value) end}
     end
     params:add{type = "control", id = JF.level_id, name = "jf level",
       controlspec = controlspec.new(JF.level.min, JF.level.max, "lin", 0, JF.level.default, "V")}
   end
+
+  S.register_pset_hook({name = "io_jf", read = function()
+    if not params_added() then return end
+    for voice = 1, NUM_VOICES do apply_route(voice, params:get(route_id(voice))) end
+  end})
 
   S.register_ii_device({
     name = JF.device,

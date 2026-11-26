@@ -11,7 +11,7 @@ It is off by default: with the routes off Strata sends Just Friends nothing.
 
 ## The settings
 
-All eight are saved with a PSET; none is in a scene.
+All eight are saved with a PSET; none is in a scene. Recalling a changed route applies it to the next note. A Just Friends note already playing finishes its own decay.
 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
