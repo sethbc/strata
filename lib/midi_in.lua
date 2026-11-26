@@ -76,6 +76,7 @@ return function(S)
   local attached_device = nil
   local listening_port = nil
   local port_names = {}
+  local applied_channel_mode
 
   -- A port number as a vport index: rounded and kept to norns' ports, so a
   -- fraction (a PSET written before the midi_device param stepped whole
@@ -101,6 +102,7 @@ return function(S)
   end
 
   function midi_init()
+    applied_channel_mode = params:get("midi_channel_mode")
     attach_midi(params:get("midi_device"))
   end
 
@@ -260,6 +262,7 @@ return function(S)
   -- when the port or channel mode changes or the device goes away, since
   -- the bend returns and note offs will not arrive
   function reset_midi_input()
+    applied_channel_mode = params:get("midi_channel_mode")
     for i = 1, NUM_VOICES do
       if S.midi_state.bend[i] ~= 1 then
         S.midi_state.bend[i] = 1
@@ -271,6 +274,12 @@ return function(S)
     note_tap, note_tap_owner = nil, nil
     tell_tap_owner(told)
   end
+
+  -- A silent PSET read skips the channel action. A port change that already
+  -- reset the input has also applied the recalled mode.
+  S.register_pset_hook({name = "midi_input_routing", read = function(path_base, number, pset_path, silent)
+    if silent and params:get("midi_channel_mode") ~= applied_channel_mode then reset_midi_input() end
+  end})
 
   -- All notes off (CC 123) and all sound off (CC 120): release every held
   -- note and stop every voice a MIDI note started and left running (held or

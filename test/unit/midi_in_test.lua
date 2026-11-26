@@ -1437,6 +1437,54 @@ test("a silent PSET change of port, mode and zone resets the previous controller
   assert_near(master_bend_ratio(context, S, 2), full_up(2), 1e-9, "the new controller has the default range")
 end)
 
+for _, silent in ipairs({false, true}) do
+  local kind = silent and "silent" or "ordinary"
+  test(kind .. " PSET channel-mode change releases the old keys once and routes the next note (#1105)", function()
+    local context = load_strata(); finish_startup(context)
+    local S = local_value("S")
+    context.midi.plug(1, "keys")
+    params:set("midi_note_off", 2)
+    params:set("midi_channel_mode", 3)
+    set_master_range(context, 12)
+    params:write(1)
+    params:set("midi_channel_mode", 1)
+    note_on(context, 3, 60)
+    assert_equal(S.lib.notes.find(3, "midi", key_of(3, 60)), 1)
+    S.lib.notes.play(2, {owner = "seq", key = "chord", pitch = 67, velocity = 0.5, set_own = function() end, extra_only = true})
+    local other = S.lib.notes.find(2, "seq", "chord")
+    assert_true(other ~= nil)
+
+    -- An editor can re-arm its note tap when a reset tells it. Each reset is observable.
+    local resets = 0
+    local function tap(note)
+      if note == nil then
+        resets = resets + 1
+        S.lib.midi_in.set_note_tap("editor", tap)
+      end
+    end
+    S.lib.midi_in.set_note_tap("editor", tap)
+    context.clear_engine_calls()
+    params:read(1, silent)
+    assert_equal(S.lib.notes.find(3, "midi", key_of(3, 60)), nil, "old allocator ownership released")
+    assert_equal(resets, 1, "exactly one input reset")
+    assert_equal(#context.calls_named("voiceOff"), 1)
+    assert_equal(context.calls_named("voiceOff")[1].args[1], 2, "release stops voice 3")
+    assert_equal(S.lib.notes.find(2, "seq", "chord"), other, "the sequencer keeps its slot")
+    assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "the same controller keeps its range")
+
+    context.clear_engine_calls()
+    note_on(context, 3, 62)
+    assert_equal(context.calls_named("retrigger")[1].args[1], 0, "MPE selected plays voice 1")
+    note_off(context, 3, 60)
+    assert_equal(#context.calls_named("voiceOff"), 0, "the old note off does nothing")
+    params:read(1, silent)
+    assert_equal(resets, 1, "the repeated read leaves the input alone")
+    assert_equal(S.lib.notes.find(1, "midi", key_of(3, 62)), 1, "the new key survives the repeated read")
+    note_off(context, 3, 62)
+    assert_equal(#context.calls_named("voiceOff"), 1, "the new key stops its voice")
+  end)
+end
+
 test("a note-off mode change, a channel-mode change within MPE, a panic and a layout change made on the norns keep the controller's master bend range (#688)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
