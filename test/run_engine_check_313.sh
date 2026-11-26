@@ -363,7 +363,8 @@ classify() {
 # run_shards <run>: sets stems, the log stems of the run's shards (the
 # workflow's, in its order; for -c, those with a log, then any other shard
 # log the folder holds, by name), and missing, for -c, the workflow's shards
-# with no log, joined by commas. stems empty: a run in one container
+# with no log, joined by commas for display and counted once per shard.
+# stems empty: a run in one container
 # (run-<i>.log), never incomplete
 run_shards() {
   stems=
@@ -382,7 +383,13 @@ run_shards() {
   [ -n "$found" ] || return 0
   for shard in $shards; do
     stem=$1-$(file_name "$shard")
-    if [ -e "$log_dir/run-$stem.log" ]; then stems="$stems $stem"; else missing="$missing,$shard"; fi
+    if [ -e "$log_dir/run-$stem.log" ]; then
+      stems="$stems $stem"
+    else
+      missing="$missing,$shard"
+      count shard total
+      count shard missing
+    fi
   done
   for stem in $found; do
     case " $stems " in
@@ -447,10 +454,6 @@ while [ "$run" -le "$runs" ]; do
       others="$others$newline  and $label in $(echo "${stem#*-}" | tr _ ,) ($detail), $log_dir/run-$stem.log"
     done
     if [ -n "$missing" ]; then
-      for shard in $(echo "$missing" | tr , ' '); do
-        count shard total
-        count shard missing
-      done
       count run incomplete
       [ -z "$worst_stem" ] || others="$newline  and $worst$others"
       echo "run $run: incomplete (no log for $missing)$others"

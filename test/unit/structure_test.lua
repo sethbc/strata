@@ -3587,20 +3587,20 @@ test("the 3.13 script's -c reads a run's shards in the workflow's order, then an
   h.remove_tree(checkout)
 end)
 
-test("the 3.13 script's -c reports a run missing some of the workflow's shards as incomplete (#581)", function()
+test("the 3.13 script's -c reports a run missing some of the workflow's shards as incomplete, counting each grouped shard once (#581, #1083)", function()
   local shell_quote, checkout = h.shell_quote, data_root .. "sc313-incomplete"
-  fake_313_checkout(checkout, { "zeta", "alpha", "delta" }, "    exit 0")
+  fake_313_checkout(checkout, { "zeta", "alpha", "buffers,loops,types" }, "    exit 0")
   local root = checkout .. "/logs"
   local passed = "ENGINE CHECK PASSED\n"
   write_shard_fixtures(root, {
-    -- run 1 is whole; run 2 has alpha alone, and it passed; run 3 lacks delta and its zeta crashed
-    { "1-zeta", 0, passed }, { "1-alpha", 0, passed }, { "1-delta", 0, passed }, { "2-alpha", 0, passed },
+    -- run 1 is whole; run 2 has alpha alone, and it passed; run 3 lacks the grouped shard and its zeta crashed
+    { "1-zeta", 0, passed }, { "1-alpha", 0, passed }, { "1-buffers_loops_types", 0, passed }, { "2-alpha", 0, passed },
     { "3-zeta", 1, "ENGINE CHECK FAILED: sclang ended on signal 11 after 9 s; sclang stopped\n" }, { "3-alpha", 0, passed },
     -- run 4 is in the old single-process layout, never incomplete
     { "4", 0, passed },
   })
   local output = run_fake_313(checkout, "-c -n 4 -o " .. shell_quote(root))
-  for _, expected in ipairs({ "run 1: passed\n", "run 2: incomplete (no log for zeta,delta)\n", "run 3: incomplete (no log for delta)\n",
+  for _, expected in ipairs({ "run 1: passed\n", "run 2: incomplete (no log for zeta,buffers,loops,types)\n", "run 3: incomplete (no log for buffers,loops,types)\n",
       "  and crashed in zeta (sclang ended on signal 11 after 9 s), " .. root .. "/run-3-zeta.log", "run 4: passed\n",
       "passed 2 of 4; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 0 (#131); incomplete 2",
       "shards: passed 5 of 9; failed 0; capped 0 (#544); killed 0; collector failure 0 (#211); crashed 1 (#131); missing 3", "exit=1" }) do
