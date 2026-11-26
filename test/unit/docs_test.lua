@@ -336,10 +336,10 @@ test("the engine's event polls decode in Lua's handlers (#459)", function()
   -- bufferSaveResult: slot 6's first save written, its second failed
   load_buffer(6, "/tmp/c.wav"); context.polls.fire("bufferState", context.polls.buffer_state_value(6, 1, 4))
   assert_true(save_buffer(6))
-  context.polls.fire("bufferSaveResult", save_result_value(5, 1, false))
+  context.save_result(save_result_value(5, 1, false))
   assert_equal(S.lib.ui_flash.text("hints"), "saved buf 6", "bufferSaveResult: save 1 written")
   assert_true(save_buffer(6))
-  context.polls.fire("bufferSaveResult", save_result_value(5, 2, true))
+  context.save_result(save_result_value(5, 2, true))
   assert_equal(S.lib.ui_flash.text("header"), "buf 6 save failed", "bufferSaveResult: save 2 failed (the header's, #878)")
 end)
 

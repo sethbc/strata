@@ -694,6 +694,13 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     if not accepted[args[2]] then return string.format("param \"%s\" is not a control of %s", args[2], what) end
     return enumerated(args[2], args[3])
   end
+  local function save_region(args)
+    return slot(args) or float_range("start", args[3], 0, 1) or float_range("length", args[4], 0, 1)
+  end
+  local function receipt_token(token)
+    if #token ~= 24 or not token:match("^%w+$") then return "expected a 24-character token" end
+  end
+
   local checks = {
     voiceOn = voice, voiceOff = voice, retrigger = voice, setModSpeed = voice,
     setVoiceParam = function(args)
@@ -721,8 +728,11 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
     -- start: seconds into the file (the engine clips it to the file)
     loadBuffer = function(args) return slot(args) or at_least("start", args[3], 0) end,
     -- start and length: fractions of the slot's valid region
-    saveBuffer = function(args)
-      return slot(args) or float_range("start", args[3], 0, 1) or float_range("length", args[4], 0, 1)
+    bindSaveResults = function(args) return receipt_token(args[1]) end,
+    requestSaveResult = function(args) return slot(args) or at_least("save number", args[2], 1) end,
+    saveBuffer = save_region,
+    saveBufferRequest = function(args)
+      return save_region(args) or at_least("save number", args[5], 1) or receipt_token(args[6])
     end,
     -- a take never asks for more than a slot holds on the running tier;
     -- feedback and threshold 0-1, source 0 (input), 1 pre-, 2 post-master, 3..N voice 1..N,
@@ -3274,6 +3284,32 @@ function stubs.install(options)
     assert(argument_checks[command_name], "the engine stub has no argument check for engine." .. command_name)
   end
 
+  -- The simulated engine holds its own handle, like sclang. Tests can
+  -- publish a terminal entry and independently withhold its wake-up poll.
+  local save_file, records_start
+  local function bind_receipt(token)
+    local name = "/strata-save-" .. token
+    save_file = assert(io.open("/dev/shm" .. name, "r+b") or io.open("/tmp" .. name, "r+b"))
+    save_file:setvbuf("no")
+    local header = assert(save_file:read("*l"))
+    assert(header == "strata-save-v1 " .. token)
+    records_start = #header + 5
+    save_file:seek("set", records_start - 4)
+    assert(save_file:write("\0\0\0\1"))
+    context.polls.fire("bufferSaveResult", 0)
+  end
+
+  function context.save_result(value, lose_poll, bytes_written)
+    local slots = options.engine_spec.num_buffers
+    local code = math.floor(value / slots)
+    local number, index = math.floor(code / 2), value % slots
+    local word = string.char(math.floor(code / 16777216) % 256, math.floor(code / 65536) % 256,
+      math.floor(code / 256) % 256, code % 256)
+    save_file:seek("set", records_start + (index * 4 + (number - 1) % 4) * 8)
+    assert(save_file:write((word .. word):sub(1, bytes_written)))
+    if not lose_poll then context.polls.fire("bufferSaveResult", value) end
+  end
+
   local engine = { name = nil }
   setmetatable(engine, {
     __index = function(_, command_name)
@@ -3307,6 +3343,7 @@ function stubs.install(options)
         local problem = argument_checks[command_name](args)
         if problem then error("engine." .. command_name .. ": " .. problem, 2) end
         table.insert(context.engine_calls, { name = command_name, args = args })
+        if command_name == "bindSaveResults" then bind_receipt(args[1]) end
       end
     end,
   })

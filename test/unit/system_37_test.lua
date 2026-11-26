@@ -51,6 +51,9 @@ local NEW_COMMANDS = {"noteRegion", "syncScan", "setSlotGain", "analyzeBuffer", 
 -- one entry a line, each why beginning "<id>: "
 local RUN_VOICES = h.voice_count()
 local RUN_CALLS_ALLOWED = {
+  -- #1091: one private save-receipt binding per session
+  {kind = "drop", match = '^bindSaveResults%("' .. string.rep("%w", 24) .. '"%)$', count = 1,
+    why = "#1091: a fresh run binds one session receipt before any save"},
   -- 3.7: the commands a fresh start never sends (3.7 design §12)
   {kind = "drop", match = "^noteRegion%(", count = 0, why = "3.7: noteRegion is new in 3.7, and a fresh run sends none"},
   {kind = "drop", match = "^syncScan%(", count = 0, why = "3.7: syncScan is new in 3.7, and a fresh run sends none"},

@@ -23,11 +23,13 @@ local RUN = {
   other_sources = {{3, "buffer 1"}, {4, "input"}, {5, "voice 1"}},
 }
 
--- The differences allowed between the run and the fixture, as entries for
--- h.allowed_call_lines (docs/notes/test-harness/run-and-helpers.md). Empty:
--- a package that moves a start's message changes the sound, which the plan
--- forbids; 1a re-based the fixture's own lines instead of adding entries here
-local RUN_CALLS_ALLOWED = {}
+-- Account for the one startup file binding; every synthesis call must
+-- still match the 3.8.0 fixture in order and value.
+local RUN_CALLS_ALLOWED = {
+  -- #1091: one private save-receipt binding per session
+  {kind = "drop", match = '^bindSaveResults%("' .. string.rep("%w", 24) .. '"%)$', count = 1,
+    why = "#1091: a fresh run binds one session receipt before any save"},
+}
 
 -- The source param's value of a kind of RUN.other_sources
 local function source_value(C, kind)

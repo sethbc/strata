@@ -66,7 +66,7 @@ test("a slot that is not a whole number sends nothing and raises nothing; 3.0 is
     assert_equal(S.lib.buffers.status(3.0), "loading")
     state_report(context, 3, 1, 4)
     assert_true(save_buffer(3.0), "a save of slot 3")
-    assert_equal(context.calls_named("saveBuffer")[1].args[1], 2)
+    assert_equal(context.calls_named("saveBufferRequest")[1].args[1], 2)
     record_buffer(3.0)
     assert_equal(context.calls_named("recordBuffer")[1].args[1], 2)
     clear_buffer(3.0)
@@ -219,8 +219,9 @@ test("load_buffer sends start 0 and save_buffer the whole region", function()
   assert_equal(load.args[1], 2); assert_equal(load.args[2], "/x/a.wav"); assert_equal(load.args[3], 0)
   state_report(context, 3, 1, 4)  -- the engine reports the file's length
   assert_true(save_buffer(3), "a loaded slot saves")
-  local save = context.calls_named("saveBuffer")[1]
-  assert_equal(#save.args, 4, "slot, path, start, length")
+  local save = context.calls_named("saveBufferRequest")[1]
+  assert_equal(#save.args, 6, "slot, path, start, length, request, session")
+  assert_equal(save.args[5], 1); assert_equal(save.args[6], context.calls_named("bindSaveResults")[1].args[1])
   assert_equal(save.args[1], 2); assert_equal(save.args[3], 0); assert_equal(save.args[4], 1)
 end)
 
@@ -513,10 +514,10 @@ test("save_buffer writes a timestamped wav under audio/strata", function()
   -- the engine has not reported any audio yet: nothing to save (a failed load
   -- leaves loaded = true, so the guard is the poll's seconds)
   save_buffer(6)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "loaded flag alone does not save")
+  assert_equal(#context.calls_named("saveBufferRequest"), 0, "loaded flag alone does not save")
   state_report(context, 6, 1, 4)  -- slot index 5 (buffer 6) holds 4 s
   save_buffer(6)
-  local call = context.calls_named("saveBuffer")[1]
+  local call = context.calls_named("saveBufferRequest")[1]
   assert_equal(call.args[1], 5)
   local dir = _path.audio .. "strata/"
   assert_equal(call.args[2]:sub(1, #dir), dir, "saved under " .. dir)
@@ -527,8 +528,8 @@ test("save_buffer writes a timestamped wav under audio/strata", function()
   assert_true(table.concat(context.printed, "\n"):find(call.args[2], 1, true), "path printed")
   -- an empty slot has nothing to save
   context.clear_engine_calls(); save_buffer(1)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "empty slot not saved")
-  params:set("buf6_save", 1); assert_equal(#context.calls_named("saveBuffer"), 1, "save trigger")
+  assert_equal(#context.calls_named("saveBufferRequest"), 0, "empty slot not saved")
+  params:set("buf6_save", 1); assert_equal(#context.calls_named("saveBufferRequest"), 1, "save trigger")
 end)
 
 -- bufferSaveResult poll value for Lua slot `slot`'s save number
@@ -544,27 +545,192 @@ local function printed_since(context, count)
   return table.concat(lines, "\n")
 end
 
+test("lost successes and failures retain their own send-time settings (#1091)", function()
+  local c = load_strata(); finish_startup(c)
+  local S = local_value("S")
+  load_buffer(1, "/tmp/source.wav"); state_report(c, 1, 1, 4)
+  local copies, original = {}, S.lib.samples.store_file
+  S.lib.samples.store_file = function(path, record)
+    assert_true(not copies[path], "each success copies its settings once")
+    copies[path] = record.key
+    return original(path, record)
+  end
+  local paths = {}
+  for number, key in ipairs({50, 52, 55, 59}) do
+    S.lib.samples.set(1, "key", key)
+    assert_true((number == 3 and save_buffer_loop or save_buffer)(1))
+    paths[number] = S.buffers[1].pending_saves[number].path
+  end
+  assert_equal(save_buffer(1), false); assert_equal(save_buffer_loop(1), false)
+  clear_buffer(1)
+  for number = 1, 3 do assert(io.open(paths[number], "wb")):close() end
+  c.save_result(save_result_value(1, 4, true), true)
+  c.save_result(save_result_value(1, 2))
+  c.polls.fire("bufferSaveResult", save_result_value(1, 2))
+  c.save_result(save_result_value(1, 3))
+  c.save_result(save_result_value(1, 1), true)
+  assert_equal(copies[paths[2]], 52); assert_equal(copies[paths[1]], nil)
+  assert_equal(#c.calls_named("requestSaveResult"), 0)
+  c.clock.run_for(1.01)
+  assert_equal(copies[paths[1]], 50, "missed success copies the earlier settings after clear")
+  assert_equal(#S.buffers[1].pending_saves, 0, "later confirmed records settle even across a hole")
+  c.clock.run_for(1.01)
+  assert_equal(#S.buffers[1].pending_saves, 0, "the missed failure also settles")
+  assert_equal(copies[paths[3]], nil, "no loop metadata"); assert_equal(copies[paths[4]], nil, "no failure metadata")
+  load_buffer(1, "/tmp/new.wav"); state_report(c, 1, 2, 4)
+  S.lib.samples.set(1, "key", 62)
+  assert_true(save_buffer(1), "the player can retry independently")
+  local retry = S.buffers[1].pending_saves[1].path
+  c.polls.fire("bufferSaveResult", save_result_value(1, 1))
+  assert_equal(copies[retry], nil, "the old success cannot claim ring cell one after wrap")
+  c.save_result(save_result_value(1, 5)); assert_equal(copies[retry], 62)
+end)
+
+test("four accepted whole saves each copy their own settings across a missing oldest result (#1091)", function()
+  local c = load_strata(); finish_startup(c)
+  local S = local_value("S")
+  load_buffer(1, "/tmp/source.wav"); state_report(c, 1, 1, 4)
+  local paths, keys, copied = {}, {48, 50, 55, 62}, {}
+  S.lib.samples.store_file = function(path, record)
+    assert_equal(copied[path], nil, "one metadata copy per successful file")
+    copied[path] = record.key
+  end
+  for number = 1, 4 do
+    S.lib.samples.set(1, "key", keys[number])
+    assert_true(save_buffer(1))
+    local command = c.calls_named("saveBufferRequest")[number]
+    paths[number] = command.args[2]
+    assert_equal(command.args[5], number)
+    assert_equal(command.args[6], c.calls_named("bindSaveResults")[1].args[1])
+  end
+  assert_equal(save_buffer(1), false); assert_equal(save_buffer(1), false)
+  for _, number in ipairs({4, 2, 3}) do c.save_result(save_result_value(1, number), true) end
+  c.clock.run_for(1.01)
+  assert_equal(#S.buffers[1].pending_saves, 1)
+  assert_equal(S.buffers[1].pending_saves[1].number, 1, "the oldest writer can still be running")
+  for number = 2, 4 do assert_equal(copied[paths[number]], keys[number]) end
+  assert_equal(copied[paths[1]], nil)
+  assert_equal(#c.calls_named("requestSaveResult"), 1)
+  c.save_result(save_result_value(1, 1))
+  c.polls.fire("bufferSaveResult", save_result_value(1, 3))
+  assert_equal(copied[paths[1]], keys[1]); assert_equal(#S.buffers[1].pending_saves, 0)
+end)
+
+test("a hung save queries only its slot's oldest once per second; quick saves send no query (#1091)", function()
+  local c = load_strata(); finish_startup(c)
+  for slot = 1, 3 do
+    load_buffer(slot, "/tmp/source.wav"); state_report(c, slot, 1, 4)
+    assert_true(save_buffer(slot)); assert_true(save_buffer(slot))
+  end
+  for number = 1, 2 do c.save_result(save_result_value(3, number)) end
+  c.clock.run_for(0.9); assert_equal(#c.calls_named("requestSaveResult"), 0)
+  c.clock.run_for(0.2)
+  local queries = c.calls_named("requestSaveResult")
+  assert_equal(#queries, 2); assert_equal(queries[1].args[1], 0); assert_equal(queries[1].args[2], 1)
+  assert_equal(queries[2].args[1], 1); assert_equal(queries[2].args[2], 1)
+  c.clock.run_for(0.8); assert_equal(#c.calls_named("requestSaveResult"), 2)
+  c.save_result(save_result_value(2, 1, true)); c.save_result(save_result_value(2, 2))
+  c.clock.run_for(0.2); assert_equal(#c.calls_named("requestSaveResult"), 3)
+  assert_equal(c.calls_named("requestSaveResult")[3].args[1], 0)
+  cleanup(); assert_true(printed_since(c, 0):find("save unconfirmed at cleanup:", 1, true))
+  assert_equal(c.polls.polls.bufferSaveResult.callback, nil)
+  c.clock.run_for(3); assert_equal(#c.calls_named("requestSaveResult"), 3)
+end)
+
+test("a recovery clock that cannot start consumes no save number; a retired sender cannot bind (#1091)", function()
+  local c = load_strata(); finish_startup(c)
+  local S, old_sender = local_value("S"), save_buffer
+  load_buffer(1, "/tmp/one.wav"); state_report(c, 1, 1, 4)
+  local original = S.lib.clocks.run
+  S.lib.clocks.run = function() error("no clock available") end
+  local sent, why = save_buffer(1)
+  S.lib.clocks.run = original
+  assert_equal(sent, false); assert_equal(why, "save unavailable")
+  assert_equal(S.buffers[1].saves_sent, 0); assert_equal(#S.buffers[1].pending_saves, 0)
+  assert_true(save_buffer(1)); assert_equal(S.buffers[1].saves_sent, 1)
+  cleanup(); c.clock.run_for(1.01)
+  sent = old_sender(1)
+  assert_equal(sent, false); assert_equal(#c.calls_named("bindSaveResults"), 1)
+  assert_equal(#c.calls_named("saveBufferRequest"), 1)
+end)
+
+test("a missing startup receipt refuses the first save and a later bind retries safely (#1091)", function()
+  local bind
+  local c = load_strata({before_init = function()
+    bind = engine.bindSaveResults
+    engine.bindSaveResults = function() end -- matron dropped the initial bind
+  end})
+  finish_startup(c)
+  load_buffer(1, "/tmp/one.wav"); state_report(c, 1, 1, 4)
+  local sent, why = save_buffer(1)
+  assert_equal(sent, false); assert_equal(why, "save unavailable")
+  assert_equal(local_value("S").buffers[1].saves_sent, 0)
+  assert_equal(#c.calls_named("saveBufferRequest"), 0)
+  engine.bindSaveResults = bind
+  c.clock.run_for(1.01)
+  assert_true(save_buffer(1)); assert_equal(local_value("S").buffers[1].saves_sent, 1)
+  c.save_result(16)
+end)
+
+test("a partial current-session receipt cannot settle or copy settings (#1091)", function()
+  local c = load_strata(); finish_startup(c)
+  load_buffer(1, "/tmp/one.wav"); state_report(c, 1, 1, 4)
+  assert_true(save_buffer(1))
+  c.save_result(16, false, 4)
+  local buffer = local_value("S").buffers[1]
+  assert_equal(#buffer.pending_saves, 1, "only the first full-number copy arrived")
+  c.clock.run_for(1.01)
+  assert_equal(#c.calls_named("requestSaveResult"), 1, "replay requests a complete terminal entry")
+  c.save_result(16)
+  assert_equal(#buffer.pending_saves, 0)
+end)
+
+test("a previous session's raw number and held callback cannot settle the replacement save (#1091)", function()
+  local old = load_strata(); finish_startup(old)
+  local oldS = local_value("S")
+  load_buffer(1, "/tmp/old.wav"); state_report(old, 1, 1, 4)
+  oldS.lib.samples.set(1, "key", 50); assert_true(save_buffer(1))
+  local old_path = oldS.buffers[1].pending_saves[1].path
+  local callback = old.polls.polls.bufferSaveResult.callback
+  io.open(old_path, "wb"):close()
+  old.save_result(save_result_value(1, 1), true)
+  cleanup()
+  assert_true(printed_since(old, 0):find("save unconfirmed at cleanup: " .. old_path, 1, true))
+  assert_equal(#oldS.buffers[1].pending_saves, 0)
+  local c = load_strata(); finish_startup(c)
+  local S = local_value("S")
+  load_buffer(1, "/tmp/new.wav"); state_report(c, 1, 1, 4)
+  S.lib.samples.set(1, "key", 62); assert_true(save_buffer(1))
+  local new_path = S.buffers[1].pending_saves[1].path
+  local copies = {}
+  S.lib.samples.store_file = function(path, record) copies[path] = record.key end
+  callback(16); c.polls.fire("bufferSaveResult", 16)
+  assert_equal(#S.buffers[1].pending_saves, 1); assert_equal(copies[new_path], nil)
+  c.save_result(16)
+  assert_equal(copies[new_path], 62); assert_equal(copies[old_path], nil)
+end)
+
 test("a save says saved only once the engine reports the file written (#127)", function()
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   state_report(context, 2, 0, 4)   -- buffer 2 holds 4 s
   local printed = #context.printed
   assert_equal(save_buffer(2), true, "save_buffer says it sent the save")
-  local path = context.calls_named("saveBuffer")[1].args[2]
+  local path = context.calls_named("saveBufferRequest")[1].args[2]
   local text = printed_since(context, printed)
   assert_true(text:find("buffer 2 saving to " .. path, 1, true), "the console says the save is under way: " .. text)
   assert_true(not text:find("saved", 1, true), "and never that it is saved before the engine says so")
   -- the engine wrote it
   printed = #context.printed
-  context.polls.fire("bufferSaveResult", save_result_value(2, 1)); next_frame(context)
+  context.save_result(save_result_value(2, 1)); next_frame(context)
   assert_true(printed_since(context, printed):find("buffer 2 saved to " .. path, 1, true), "then that it is saved")
   assert_equal(buffer_hint(context), "saved buf 2", "and the BUFFER page confirms it")
   assert_screen_layout(context, "BUFFER page saved flash")
   -- the engine could not write the next one (a full disk, a folder it cannot make)
   context.clock.run_for(2)
   save_buffer(2)
-  local failed_path = context.calls_named("saveBuffer")[2].args[2]
+  local failed_path = context.calls_named("saveBufferRequest")[2].args[2]
   printed = #context.printed
-  context.polls.fire("bufferSaveResult", save_result_value(2, 2, true)); next_frame(context)
+  context.save_result(save_result_value(2, 2, true)); next_frame(context)
   text = printed_since(context, printed)
   assert_true(text:find("buffer 2: cannot save " .. failed_path, 1, true), "the console says it failed: " .. text)
   assert_true(not text:find("saved to", 1, true), "never that it saved")
@@ -575,7 +741,7 @@ test("a save says saved only once the engine reports the file written (#127)", f
   -- an empty slot sends nothing, so it takes no save number
   assert_equal(save_buffer(3), false, "an empty slot is not saved")
   state_report(context, 3, 0, 2); save_buffer(3)
-  context.polls.fire("bufferSaveResult", save_result_value(3, 1)); next_frame(context)
+  context.save_result(save_result_value(3, 1)); next_frame(context)
   assert_equal(buffer_hint(context), "saved buf 3", "the slot's first save sent is its save 1")
 end)
 
@@ -583,10 +749,10 @@ test("a late, duplicate or bad save report never corrects a newer save", functio
   local context = load_strata(); finish_startup(context); show_page("BUFFER")
   state_report(context, 5, 0, 3)   -- buffer 5 holds 3 s
   save_buffer(5); save_buffer(5)            -- save 2 sent before save 1's report
-  context.polls.fire("bufferSaveResult", save_result_value(5, 2)); next_frame(context)
+  context.save_result(save_result_value(5, 2)); next_frame(context)
   assert_equal(buffer_hint(context), "saved buf 5", "the newest save is confirmed")
   local printed = #context.printed
-  context.polls.fire("bufferSaveResult", save_result_value(5, 1, true)); next_frame(context)
+  context.save_result(save_result_value(5, 1, true)); next_frame(context)
   assert_equal(buffer_hint(context), "saved buf 5", "an older save's late failure leaves the newer save's flash")
   assert_equal(local_value("S").lib.ui_flash.text("header"), nil, "and raises no failure in the header (#878)")
   assert_true(printed_since(context, printed):find("buffer 5: cannot save", 1, true),
@@ -594,9 +760,9 @@ test("a late, duplicate or bad save report never corrects a newer save", functio
   -- the other order: the older save's late success never confirms a newer save still writing
   save_buffer(5); save_buffer(5)            -- saves 3 and 4
   context.clock.run_for(2); next_frame(context)
-  context.polls.fire("bufferSaveResult", save_result_value(5, 3)); next_frame(context)
+  context.save_result(save_result_value(5, 3)); next_frame(context)
   assert_equal(buffer_hint(context), buffer_record_hints(), "save 3's success says nothing of save 4")
-  context.polls.fire("bufferSaveResult", save_result_value(5, 4, true)); next_frame(context)
+  context.save_result(save_result_value(5, 4, true)); next_frame(context)
   assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 5 save failed", "save 4's own report shows")
   -- repeats, saves never sent, another slot's numbers and bad values do nothing
   context.clock.run_for(2); next_frame(context)
@@ -614,7 +780,7 @@ test("a late, duplicate or bad save report never corrects a newer save", functio
   -- a load, clear or recording in the slot leaves a save in flight alone:
   -- its report is about the file it writes
   save_buffer(5); clear_buffer(5)
-  context.polls.fire("bufferSaveResult", save_result_value(5, 5)); next_frame(context)
+  context.save_result(save_result_value(5, 5)); next_frame(context)
   assert_equal(buffer_hint(context), "saved buf 5", "the save sent before the clear is still confirmed")
 end)
 
@@ -622,7 +788,7 @@ test("explicit save writes a timestamped file; cleanup/init persist buffer paths
   local context = load_strata({ data_subdir = "buf" }); finish_startup(context)  -- init's start-up coroutine
   state_report(context, 2, 0, 4)  -- buffer 2 holds 4 s (save needs the engine's seconds)
   params:set("buf2_save", 1)
-  local call = context.calls_named("saveBuffer")[1]
+  local call = context.calls_named("saveBufferRequest")[1]
   assert_equal(call.args[1], 1); assert_true(call.args[2]:match("strata/%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-buf2%.wav$"))
   params:set("buf1_file", context.audio_dir .. "one.wav"); io.open(context.audio_dir .. "one.wav", "w"):close()
   params:set("buf4_record", 1); wake_buffer_clock(context, 4)
@@ -1300,7 +1466,7 @@ test("a restored 300 s file on a 60 s tier shows 60 s", function()
   assert_screen_layout(context, "BUFFER with a restored 60 s slot")
   context.clear_engine_calls()
   save_buffer(2)
-  assert_equal(#context.calls_named("saveBuffer"), 1, "the 60 s slot saves")
+  assert_equal(#context.calls_named("saveBufferRequest"), 1, "the 60 s slot saves")
 end)
 
 
@@ -2060,7 +2226,7 @@ test("the save param sends nothing while the slot records", function()
   assert_true(local_value("buffers")[1].recording, "slot 1 records")
   context.clear_engine_calls()
   params:set("buf1_save", 1)
-  assert_equal(#context.calls_named("saveBuffer"), 0, "nothing is sent while the slot records")
+  assert_equal(#context.calls_named("saveBufferRequest"), 0, "nothing is sent while the slot records")
   assert_equal(local_value("buffers")[1].saves_sent, 0, "and no save is counted")
 end)
 
@@ -2076,7 +2242,7 @@ test("save_buffer and save_buffer_loop say why they sent nothing", function()
     assert_equal(sent, false); assert_equal(reason, "empty", "an empty slot")
     sent, reason = save(1)
     assert_equal(sent, true); assert_equal(reason, nil, "a loaded slot is sent")
-    assert_equal(#context.calls_named("saveBuffer"), 1)
+    assert_equal(#context.calls_named("saveBufferRequest"), 1)
   end
   params:set("record_feedback", 50)
   record_buffer(1)
@@ -2084,7 +2250,7 @@ test("save_buffer and save_buffer_loop say why they sent nothing", function()
     context.clear_engine_calls()
     local sent, reason = save(1)
     assert_equal(sent, false); assert_equal(reason, "busy", "a recording slot")
-    assert_equal(#context.calls_named("saveBuffer"), 0)
+    assert_equal(#context.calls_named("saveBufferRequest"), 0)
   end
 end)
 
@@ -2103,7 +2269,7 @@ test("the busy edges: an armed take and a finishing take refuse, an ended dub sa
       context.clear_engine_calls()
       local sent, reason = save(slot)
       assert_equal(sent, false); assert_equal(reason, "busy")
-      assert_equal(#context.calls_named("saveBuffer"), 0)
+      assert_equal(#context.calls_named("saveBufferRequest"), 0)
     end
   end
   -- armed: waiting for the source's level, not recording yet
@@ -2129,7 +2295,7 @@ test("the busy edges: an armed take and a finishing take refuse, an ended dub sa
   for _, save in ipairs({save_buffer, save_buffer_loop}) do
     context.clear_engine_calls()
     assert_equal(save(1), true)
-    assert_equal(#context.calls_named("saveBuffer"), 1)
+    assert_equal(#context.calls_named("saveBufferRequest"), 1)
   end
 end)
 
@@ -2141,12 +2307,12 @@ test("save_buffer_loop saves the selected voice's loop region", function()
   S.selected_voice = 2
   context.clear_engine_calls()
   assert_true(save_buffer_loop(1))
-  local call = context.calls_named("saveBuffer")[1]
+  local call = context.calls_named("saveBufferRequest")[1]
   assert_equal(call.args[1], 0)
   assert_true(call.args[2]:match("/strata/%d%d%d%d%d%d%d%d%-%d%d%d%d%d%d%-buf1%-loop%.wav$") ~= nil, call.args[2])
   assert_near(call.args[3], 0.25, 1e-9); assert_near(call.args[4], 0.5, 1e-9)
   -- its result flashes the loop wording
-  context.polls.fire("bufferSaveResult", (1 * 2) * 8 + 0)
+  context.save_result((1 * 2) * 8 + 0)
   show_page("BUFFER")
   assert_equal(S.lib.ui_flash.text("hints"), "saved buf 1 loop")
 end)
@@ -2159,17 +2325,17 @@ test("save_buffer_loop falls back to the lowest voice on the slot, then the whol
   S.selected_voice = 1
   context.clear_engine_calls()
   assert_true(save_buffer_loop(2))
-  local call = context.calls_named("saveBuffer")[1]
+  local call = context.calls_named("saveBufferRequest")[1]
   assert_equal(call.args[1], 1); assert_near(call.args[3], 0.5, 1e-9); assert_near(call.args[4], 0.25, 1e-9)
   S.voices[4].source = S.constants.SOURCE_SYNTH; S.voices[6].source = S.constants.SOURCE_SYNTH
   context.clear_engine_calls()
   assert_true(save_buffer_loop(2))
-  call = context.calls_named("saveBuffer")[1]
+  call = context.calls_named("saveBufferRequest")[1]
   assert_equal(call.args[3], 0); assert_equal(call.args[4], 1, "no voice reads the slot: all of it")
   -- an empty slot and an invalid one save nothing
   context.clear_engine_calls()
   assert_equal(save_buffer_loop(3), false); assert_equal(save_buffer_loop(9), false)
-  assert_equal(#context.calls_named("saveBuffer"), 0)
+  assert_equal(#context.calls_named("saveBufferRequest"), 0)
 end)
 
 test("buffers.data saves version 3 with starts; a start that is damaged or not finite loads 0", function()
@@ -2679,24 +2845,24 @@ test("two saves of a slot in one second write two files (#522)", function()
     state_report(context, 2, 0, 4)   -- buffer 2 holds 4 s
     local dir = _path.audio .. "strata/"
     assert_true(save_buffer(2)); assert_true(save_buffer(2))
-    local saves = context.calls_named("saveBuffer")
+    local saves = context.calls_named("saveBufferRequest")
     assert_equal(saves[1].args[2], dir .. "20261110-120000-buf2.wav")
     assert_equal(saves[2].args[2], dir .. "20261110-120000-buf2-2.wav", "the second save in that second")
     -- a file already there (the clock set back) is never written over, nor a save still in flight
     io.open(dir .. "20261110-120000-buf2-3.wav", "w"):close()
     assert_true(save_buffer(2))
-    assert_equal(context.calls_named("saveBuffer")[3].args[2], dir .. "20261110-120000-buf2-4.wav")
+    assert_equal(context.calls_named("saveBufferRequest")[3].args[2], dir .. "20261110-120000-buf2-4.wav")
     -- The first write failed, freeing room for two loop saves.
-    context.polls.fire("bufferSaveResult", save_result_value(2, 1, true))
+    context.save_result(save_result_value(2, 1, true))
     -- the loop region's file too
     assert_true(save_buffer_loop(2)); assert_true(save_buffer_loop(2))
-    saves = context.calls_named("saveBuffer")
+    saves = context.calls_named("saveBufferRequest")
     assert_equal(saves[4].args[2], dir .. "20261110-120000-buf2-loop.wav")
     assert_equal(saves[5].args[2], dir .. "20261110-120000-buf2-loop-2.wav")
     -- another slot's names are its own
     state_report(context, 3, 0, 4)
     assert_true(save_buffer(3))
-    assert_equal(context.calls_named("saveBuffer")[6].args[2], dir .. "20261110-120000-buf3.wav")
+    assert_equal(context.calls_named("saveBufferRequest")[6].args[2], dir .. "20261110-120000-buf3.wav")
     os.remove(dir .. "20261110-120000-buf2-3.wav")
   end)
   os.date = real_date
@@ -2717,7 +2883,7 @@ test("six same-second save requests never send a filename twice (#1090)", functi
   end)
   os.date = real_date
   assert_true(ok, tostring(problem))
-  local calls = context.calls_named("saveBuffer")
+  local calls = context.calls_named("saveBufferRequest")
   local used = {}
   for _, call in ipairs(calls) do
     local path = call.args[2]
@@ -2735,19 +2901,19 @@ test("the oldest unresolved save limits its slot across out-of-order reports and
   for slot = 1, 8 do state_report(context, slot, 0, 4) end
   assert_true(save_buffer(2)); assert_true(save_buffer_loop(2))
   assert_true(save_buffer(2)); assert_true(save_buffer_loop(2))
-  context.polls.fire("bufferSaveResult", save_result_value(2, 4, true))
-  context.polls.fire("bufferSaveResult", save_result_value(2, 2))
-  context.polls.fire("bufferSaveResult", save_result_value(2, 2))
+  context.save_result(save_result_value(2, 4, true))
+  context.save_result(save_result_value(2, 2))
+  context.save_result(save_result_value(2, 2))
   clear_buffer(2); load_buffer(2, "/tmp/other.wav"); state_report(context, 2, 1, 3)
   assert_equal(save_buffer_loop(2), false, "the two holes do not free the oldest reservation")
   for slot = 1, 8 do
     if slot ~= 2 then assert_true(save_buffer(slot), "slot " .. slot .. " advances independently") end
   end
   assert_equal(local_value("buffers")[2].saves_sent, 4)
-  context.polls.fire("bufferSaveResult", save_result_value(2, 1, true))
+  context.save_result(save_result_value(2, 1, true))
   assert_true(save_buffer_loop(2)); assert_true(save_buffer(2))
   assert_equal(save_buffer(2), false, "number 3 still holds its reservation")
-  context.polls.fire("bufferSaveResult", save_result_value(2, 3))
+  context.save_result(save_result_value(2, 3))
   assert_true(save_buffer(2))
   assert_equal(local_value("buffers")[2].saves_sent, 7)
 end)
@@ -2762,13 +2928,13 @@ test("the BUFFER gesture and PARAMETERS save trigger show a full save queue (#10
   params:set("buf1_save", 1)
   local trigger = params:lookup_param("buf1_save")
   assert_equal(trigger.name, "buffer 1 save queue full", "PARAMETERS draws the trigger's name")
-  assert_equal(#context.calls_named("saveBuffer"), 4)
-  context.polls.fire("bufferSaveResult", save_result_value(1, 2))
+  assert_equal(#context.calls_named("saveBufferRequest"), 4)
+  context.save_result(save_result_value(1, 2))
   assert_equal(trigger.name, "buffer 1 save queue full", "the oldest report is still outstanding")
-  context.polls.fire("bufferSaveResult", save_result_value(1, 1, true))
+  context.save_result(save_result_value(1, 1, true))
   assert_equal(trigger.name, "buffer 1 save")
   params:set("buf1_save", 1)
-  assert_equal(#context.calls_named("saveBuffer"), 5)
+  assert_equal(#context.calls_named("saveBufferRequest"), 5)
   _menu.set_mode(false)
 end)
 
@@ -3423,7 +3589,7 @@ test("a given-back check that canceled a take and is rejected leaves nothing of 
   for index = before + 1, #context.engine_calls do window[#window + 1] = context.engine_calls[index] end
   context.clock.run_for(0.2)
   restore()
-  assert_equal(#context.calls_named("saveBuffer"), 0, "no save")
+  assert_equal(#context.calls_named("saveBufferRequest"), 0, "no save")
   for _, name in ipairs(opened) do
     local text = file_text(name) or ""
     assert_true(not text:find("long1", 1, true), name .. " never names long1.wav")
@@ -3544,7 +3710,7 @@ test("load failed, take not saved and a save's failure flash on every page", fun
     context.polls.fire("takeWriteFailed", take_write_failed_value(3, buffers[3].records_sent))
     shows("take 3 unsaved", where .. " take not saved")
     save_buffer(4)
-    context.polls.fire("bufferSaveResult", save_result_value(4, buffers[4].saves_sent, true))
+    context.save_result(save_result_value(4, buffers[4].saves_sent, true))
     shows("buf 4 save failed", where .. " save failed")
   end
 end)
@@ -3562,13 +3728,13 @@ test("a save's failure ends only its own saving flash", function()
   assert_equal(S.lib.ui_flash.text("hints"), "saving buf 1")
   assert_true(S.lib.files.random_into(2), "a random file into slot 2")
   assert_equal(S.lib.ui_flash.text("hints"), "buf 2: pad.wav")
-  context.polls.fire("bufferSaveResult", save_result_value(1, buffers[1].saves_sent, true)); next_frame(context)
+  context.save_result(save_result_value(1, buffers[1].saves_sent, true)); next_frame(context)
   assert_equal(S.lib.ui_flash.text("header"), "buf 1 save failed", "the failure in the header")
   assert_equal(S.lib.ui_flash.text("hints"), "buf 2: pad.wav", "slot 2's flash stays")
   -- its own saving flash still showing ends with it (a loop save too)
   key(1, 1); key(3, 1); context.set_time(util.time() + 0.7); key(3, 0); key(1, 0)
   assert_equal(S.lib.ui_flash.text("hints"), "saving buf 1 loop")
-  context.polls.fire("bufferSaveResult", save_result_value(1, buffers[1].saves_sent, true)); next_frame(context)
+  context.save_result(save_result_value(1, buffers[1].saves_sent, true)); next_frame(context)
   assert_equal(S.lib.ui_flash.text("hints"), nil, "its own saving flash ends")
 end)
 

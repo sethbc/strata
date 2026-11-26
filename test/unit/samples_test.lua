@@ -197,7 +197,7 @@ test("a whole save copies the settings to the saved file; a loop save does not",
     local number = S.buffers[slot].saves_sent
     -- the engine wrote the file (so the next save's name is another)
     if not failed then io.open(S.buffers[slot].pending_saves[1].path, "w"):close() end
-    context.polls.fire("bufferSaveResult", ((number * 2) + (failed and 1 or 0)) * 8 + slot - 1)
+    context.save_result(((number * 2) + (failed and 1 or 0)) * 8 + slot - 1)
   end
   assert_true(save_buffer(2))
   local whole = S.buffers[2].pending_saves[1].path

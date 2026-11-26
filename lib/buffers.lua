@@ -47,8 +47,8 @@ return function(S)
   -- engine counts them too and names one in its bufferLoadFailed report);
   -- pending_loads holds the newest of them, oldest first, each with the state
   -- it replaced, so a failed load can be undone (buffer_load_failed).
-  -- saves_sent counts the slot's saveBuffer commands (the engine counts them
-  -- too and names one in its bufferSaveResult report); pending_saves holds
+  -- saves_sent counts this session's tagged saveBufferRequest commands;
+  -- the engine echoes their exact numbers in its receipt. pending_saves holds
   -- all unresolved saves, oldest first, each with its path, until the engine
   -- reports how it ended (buffer_save_result).
   -- checking_from is the length shown before a load the engine checks in a
@@ -624,6 +624,98 @@ return function(S)
     trigger.name = "buffer " .. slot .. (save_queue_full(buffer) and " save queue full" or " save")
   end
 
+  -- One private, preallocated inode per Lua/engine lifetime (#1091).
+  -- Only Lua removes its mktemp name. Both sides retain their open handle.
+  local receipt = {}
+  local function remove_receipt_name()
+    if receipt.path then
+      local removed, why = os.remove(receipt.path)
+      if removed then receipt.path = nil else print("cannot unlink save receipt: " .. tostring(why)) end
+    end
+  end
+
+  local function receipt_ready()
+    if not receipt.file then return false end
+    if not receipt.ready then
+      if not receipt.file:seek("set", receipt.start - 4) then return false end
+      receipt.ready = receipt.file:read(4) == "\0\0\0\1"
+      if receipt.ready then remove_receipt_name() end
+    end
+    return receipt.ready
+  end
+
+  local function bind_save_receipt()
+    -- norns has /dev/shm (tmpfs). macOS, for the off-device checks, uses /tmp.
+    local opened, pipe = pcall(io.popen, "dir=/dev/shm; test -d $dir || dir=/tmp; mktemp $dir/strata-save-XXXXXXXXXXXXXXXXXXXXXXXX")
+    if not opened or not pipe then return end
+    local path = pipe:read("*l")
+    local created = pipe:close()
+    local token = path and path:match("/strata%-save%-(%w+)$")
+    if not created or not token or #token ~= 24 or
+      (path ~= "/dev/shm/strata-save-" .. token and path ~= "/tmp/strata-save-" .. token) then return end
+    receipt.path, receipt.token = path, token
+    local file = io.open(path, "r+b")
+    receipt.file = file
+    if not file then remove_receipt_name(); return end
+    local header = "strata-save-v1 " .. token .. "\n"
+    receipt.start = #header + 4
+    if file:setvbuf("no") and file:write(header, string.rep("\0", 4 + NUM_BUFFERS * 4 * 8)) and file:flush() then
+      local ok, why = pcall(function() engine.bindSaveResults(token) end)
+      if ok then return end
+      print("save result binding unavailable (restart norns): " .. tostring(why))
+    end
+    file:close()
+    receipt.file = nil
+    remove_receipt_name()
+  end
+
+  -- Retry a lost startup binding on an attempted save, at most once per
+  -- second. The same still-open inode and token survive every retry.
+  local function ensure_save_receipt()
+    if receipt_ready() then return true end
+    local now = util.time()
+    if not receipt.last_bind or now < receipt.last_bind or now - receipt.last_bind >= 1 then
+      receipt.last_bind = now
+      if receipt.file then
+        pcall(function() engine.bindSaveResults(receipt.token) end)
+      else
+        bind_save_receipt()
+      end
+    end
+    return receipt_ready()
+  end
+
+  local function saved_outcome(slot, number)
+    if not receipt_ready() then return nil end
+    local cell = (slot - 1) * 4 + (number - 1) % 4
+    if not receipt.file:seek("set", receipt.start + cell * 8) then return nil end
+    local bytes = receipt.file:read(8)
+    if not bytes or #bytes ~= 8 or bytes:sub(1, 4) ~= bytes:sub(5) then return nil end
+    local a, b, c, d = bytes:byte(1, 4)
+    local encoded = ((a * 256 + b) * 256 + c) * 256 + d
+    if math.floor(encoded / 2) == number then return encoded % 2 == 1 end
+    return nil
+  end
+
+  local sweep_save_results
+  local function watch_save_results()
+    if receipt.clock then return end
+    receipt.clock = S.lib.clocks.run(function(handle)
+      while handle.sleep(1) do
+        for slot, buffer in ipairs(S.buffers) do
+          sweep_save_results(slot)
+          local oldest = buffer.pending_saves[1]
+          if oldest then
+            local age = util.time() - oldest.sent_at
+            if age < 0 or age >= 1 then
+              engine.requestSaveResult(slot - 1, oldest.number)
+            end
+          end
+        end
+      end
+    end)
+  end
+
   -- Why a save of the slot cannot go: "invalid" (not a slot), "busy" (the slot
   -- records or awaits its take: an armed recording has `recording` set) or
   -- "empty" (the engine reports no length: a load shows at once, and the
@@ -673,8 +765,14 @@ return function(S)
   -- and the whole save's settings until this particular result arrives.
   local function send_save(slot, loop)
     slot = slot_index(slot)
+    if receipt.retired then return false, "save unavailable" end
     local refusal = save_refusal(slot)
     if refusal then return false, refusal end
+    if not ensure_save_receipt() then
+      header_flash("save unavailable")
+      print("buffer " .. slot .. " save unavailable: no engine receipt")
+      return false, "save unavailable"
+    end
     local start, length = 0, 1
     if loop then
       start, length = loop_region(slot)
@@ -683,11 +781,16 @@ return function(S)
     end
     util.make_dir(buffer_audio_dir)
     local path = buffer_save_path(slot, loop and "loop")
+    local clock_ok, why = pcall(watch_save_results)
+    if not clock_ok then
+      print("buffer " .. slot .. " save unavailable: " .. tostring(why))
+      return false, "save unavailable"
+    end
     local buffer = S.buffers[slot]
     buffer.saves_sent = buffer.saves_sent + 1
-    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop,
+    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop, sent_at = util.time(),
       settings = (not loop) and S.lib.samples.snapshot(slot) or nil})
-    engine.saveBuffer(slot - 1, path, start, length)
+    engine.saveBufferRequest(slot - 1, path, start, length, buffer.saves_sent, receipt.token)
     update_save_param(slot, buffer)
     request_redraw()
     print("buffer " .. slot .. (loop and " saving its loop to " or " saving to ") .. path)
@@ -697,37 +800,13 @@ return function(S)
   function save_buffer(slot) return send_save(slot) end
   function save_buffer_loop(slot) return send_save(slot, true) end
 
-  -- bufferSaveResult poll: how one of the slot's saves ended. value = (save
-  -- number * 2 + failed) * NUM_BUFFERS + slot index; the engine and
-  -- save_buffer count a slot's saves alike, from 1. failed is 1 when the
-  -- engine wrote nothing (the slot was empty by then, the folder could not be
-  -- made, the disk filled: a file already at the path stays), 0 when the
-  -- file is in place. A save abandoned for a newer write to the same path is
-  -- never reported; the newer one is. The console names the file either way;
-  -- the result flashes only for the slot's newest save, so a late report
-  -- never corrects a newer save (still writing, or reported already): a
-  -- failure in the header (every page), a file written in BUFFER's hint
-  -- row. A repeated report, or one for a save no longer tracked, finds
-  -- nothing. Loads, clears and recordings leave the tracked saves alone: a
-  -- report is about the file written, not what the slot holds now.
-  function buffer_save_result(value)
-    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
-      or value ~= math.floor(value) then return end
-    local slot = math.floor(value % NUM_BUFFERS) + 1
-    local save_and_failed = math.floor(value / NUM_BUFFERS)
-    local failed = save_and_failed % 2 == 1
-    local save_number = math.floor(save_and_failed / 2)
-    if not valid_buffer_slot(slot) then return end
-    local buffer = S.buffers[slot]
-    local found = nil
-    for index, save in ipairs(buffer.pending_saves) do
-      if save.number == save_number then
-        found = index
-        break
-      end
-    end
-    if not found then return end
-    local save = table.remove(buffer.pending_saves, found)
+  -- The legacy poll identifies a physical write. Direct callers can occupy
+  -- those numbers too. A matching entry in our session inode independently
+  -- proves this Lua request's outcome; a plain poll can only wake a scan.
+  local function settle_save(slot, buffer, index)
+    local failed = saved_outcome(slot, buffer.pending_saves[index].number)
+    if failed == nil then return end
+    local save = table.remove(buffer.pending_saves, index)
     update_save_param(slot, buffer)
     if failed then
       print("buffer " .. slot .. ": cannot save " .. save.path .. " (the engine wrote nothing; a file already there is kept)")
@@ -746,6 +825,28 @@ return function(S)
       buffer_page_flash("saved buf " .. slot .. (save.loop and " loop" or ""))
     end
     request_redraw()  -- the row's saving mark may end (M.saving, #905)
+    return true
+  end
+
+  sweep_save_results = function(slot)
+    local buffer = S.buffers[slot]
+    if not buffer.pending_saves[1] then return end
+    local index = 1
+    while buffer.pending_saves[index] do
+      if not settle_save(slot, buffer, index) then index = index + 1 end
+    end
+    for _, other in ipairs(S.buffers) do
+      if other.pending_saves[1] then return end
+    end
+    S.lib.clocks.stop(receipt.clock)
+    receipt.clock = nil
+  end
+
+  function buffer_save_result(value)
+    if value == 0 then receipt_ready(); return end  -- bind acknowledgement
+    if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
+      or value ~= math.floor(value) then return end
+    sweep_save_results(math.floor(value % NUM_BUFFERS) + 1)
   end
 
   -- takeWriteFailed poll (#312): the engine could not write the scratch
@@ -1201,6 +1302,8 @@ return function(S)
     else
       print("bufferSaveResult poll not found")
     end
+    receipt.last_bind = util.time()
+    bind_save_receipt()
     S.buffer_polls.take_write_failed = poll.set("takeWriteFailed", take_write_failed)
     if S.buffer_polls.take_write_failed then
       S.buffer_polls.take_write_failed:start()
@@ -1244,9 +1347,23 @@ return function(S)
     end
   end)
   S.register_cleanup(S.constants.CLEANUP_ORDER.buffer_polls, function()
+    receipt.retired = true
     if S.buffer_polls.state then S.buffer_polls.state:stop() end
     if S.buffer_polls.load_failed then S.buffer_polls.load_failed:stop() end
-    if S.buffer_polls.save_result then S.buffer_polls.save_result:stop() end
+    if S.buffer_polls.save_result then
+      S.buffer_polls.save_result.callback = nil
+      S.buffer_polls.save_result:stop()
+    end
+    S.lib.clocks.cancel(receipt.clock)
+    receipt.clock = nil
+    for slot, buffer in ipairs(S.buffers) do
+      for _, save in ipairs(buffer.pending_saves) do
+        print("buffer " .. slot .. " save unconfirmed at cleanup: " .. save.path)
+      end
+      buffer.pending_saves = {}
+    end
+    if receipt.file then receipt.file:close(); receipt.file = nil end
+    remove_receipt_name()
     if S.buffer_polls.take_write_failed then S.buffer_polls.take_write_failed:stop() end
     S.lib.record.stop_all()
   end)
@@ -1351,11 +1468,10 @@ return function(S)
 
   -- Whether a save of the slot awaits the engine's bufferSaveResult report
   -- (a tracked save, pending_saves; #905): BUFFER's row shows saving until
-  -- it comes. false without the poll, which no report could then end, and
-  -- for a slot out of range
+  -- it settles by poll or replay. An invalid slot has no pending save.
   function M.saving(slot)
     slot = slot_index(slot)
-    return slot ~= nil and S.buffer_polls.save_result ~= nil and #S.buffers[slot].pending_saves > 0
+    return slot ~= nil and #S.buffers[slot].pending_saves > 0
   end
 
   -- The hint row's flash for a save of the slot sent (`loop`: its loop

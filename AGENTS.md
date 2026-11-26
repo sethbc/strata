@@ -107,7 +107,7 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 
 ### Lua ↔ SuperCollider Communication
 
-**IMPORTANT**: this table is the engine command interface, exactly one row per `addCommand` (a test checks signature and argument count) in the format `` | `engine.<name>(<args>)` | `"<sig>"` | purpose | ``, changed in the engine's commit; no `engine.<name>(` in the maintained docs names a gone command. A row gives each argument's range and values; the area notes under docs/notes/engine/ say what it does.
+**Engine interface:** exactly one row per `addCommand`, with its signature, arguments and ranges. Update the row in the engine commit. The sync check also rejects removed commands in maintained docs.
 
 | Lua Command | SC Signature | Purpose |
 |-------------|--------------|---------|
@@ -136,6 +136,9 @@ Details, and how to register each kind of record: `docs/notes/lua/state-and-voic
 | `engine.clearBuffer(slot)` | `"i"` | Zero slot 0-7 after its voices fade (cancels a recording) |
 | `engine.stopRecord(slot)` | `"i"` | End slot 0-7's recording now, with its 5 ms fade, and keep what was captured; an armed one that has not started is canceled. No-op without one. `docs/notes/engine/record.md` |
 | `engine.saveBuffer(slot, path, start, length)` | `"isff"` | Write `[start, start + length)` of the slot's valid region (fractions; 0, 1 = all of it) as a stereo 16-bit WAV. The outcome is reported on `bufferSaveResult`. `docs/notes/engine/files.md` |
+| `engine.saveBufferRequest(slot, path, start, length, number, token)` | `"isffis"` | saveBuffer region, positive request number and bound token |
+| `engine.bindSaveResults(token)` | `"s"` | Bind the session's 24-character alphanumeric receipt token |
+| `engine.requestSaveResult(slot, number)` | `"ii"` | Replay slot 0-7's retained terminal save number (1 upwards) |
 | `engine.analyzeBuffer(slot)` | `"i"` | The transients of slot 0-7, reported on `bufferOnsets`. `docs/notes/engine/onsets.md` |
 | `engine.setScale(root, mask)` | `"ii"` | The scale every quantized grain lands on: root 0-11 (0 = C), mask 1-4095, a 12-bit pitch-class set from the root (4095 = chromatic, the default), applied in a tuning of twelve tones to an octave. Other values are ignored |
 | `engine.setTuning(count, period)` | `"if"` | Begin the tuning quantized grains land on: count 1-128 tones a period of 100-4800 cents. Its tones follow as `setTuningTone`; the last rebuilds the table |
@@ -264,7 +267,7 @@ Several pull requests are built at once, often by agents, each in files only its
 
 How to run each check, what it needs and how CI runs them: `docs/checks.md`. How the harness works: `docs/notes/test-harness.md`.
 
-**On norns:** copy the project to `~/dust/code/`, then restart norns from its menu (SYSTEM > RESTART): every engine change needs it. maiden's `;restart` restarts only matron, norns' Lua side, so it never picks up an engine change.
+**On norns:** copy to `~/dust/code/` and use SYSTEM > RESTART after engine changes. maiden’s `;restart` restarts only matron.
 
 **Off-device checks** (run from the repo root before committing; CI runs all three):
 - `lua test/run.lua` and `luajit test/run.lua`: the behavior tests against norns stubs, one file per module under test/unit/; `lua test/run.lua <filter>` runs the files whose name contains `<filter>`. Run your module's file while you work and the whole suite before pushing. The run includes the sync check, the docs checks, the changelog fragment check and the module safety nets (`docs/notes/test-harness/run-and-helpers.md`); the engine stub rejects any `engine.*` call the engine source would not take (`docs/notes/test-harness/engine-stub-and-sync.md`).

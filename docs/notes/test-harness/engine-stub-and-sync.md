@@ -4,7 +4,11 @@
 - Every parser of the engine source runs `stubs.strip_sc_comments` first, so commented-out code is never counted.
 - Call engine commands only as `engine.<name>(...)`. Any other use of the global `engine` fails the sync check, which cannot see what it calls.
 
+The sync check allows the retained external four-argument `saveBuffer` command. The script sends `saveBufferRequest` with its own session token and request number.
+
 ## Engine stub
+
+For save results, `context.save_result(value, lose_poll, bytes_written)` writes through the simulated engine's own handle to the current session receipt. Tests may drop the notification or shorten the write. `context.polls.fire("bufferSaveResult", value)` delivers a raw poll without publishing a receipt, including one held across reload. `NORNS_DIR=<norns> lua test/run.lua --dir test/fixtures/save-result-registry` drives the pinned norns registry through old and new production save handlers.
 
 It rejects any `engine.*` call whose name, argument count or types do not match the SC `addCommand` signatures. An `f` or `i` argument must also be finite: a NaN fails every `<` and `>` of the range checks below and an infinity passes an open one, so both are refused as types (`must be a finite number`, `must be an integer`) (#477).
 
