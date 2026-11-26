@@ -26,6 +26,8 @@ var ampDb = { arg ratio; ratio.max(1e-15).ampdb.round(0.1) };
 // the windows an analysis measures, and the values it gives each
 var numWindows = 8, fields = 7, windowField;
 var startCheckDelay, allocLine, runCases, guarded, withIgnoredLines;
+// BufDelayC at the rounded time, plus LocalIn's one feedback block
+var heldPeriod = { arg time; ((time * server.sampleRate).round + server.options.blockSize) / server.sampleRate };
 var checkHeldLoop, checkLoopBehavior, checkClearEdge, checkFreezeCommand, checkLiftAfterFreedFreeze, checkIgnoredValues;
 var checkClearCommand, checkFreshEngine;
 var times = [0.375, 0.30928];
@@ -170,9 +172,8 @@ withIgnoredLines = { arg lines, body;
 // audio as the next and the noise's own spread does not count
 checkHeldLoop = {
     var pingPongs = [0, 1, 0.5], cases = List.new, results;
-    var rate = server.sampleRate, block = server.options.blockSize;
     times.do({ arg time;
-        var period = ((time * rate).round + block) / rate, width = (1 / period).round.max(1) * period;
+        var period = heldPeriod.(time), width = (1 / period).round.max(1) * period;
         var windows = [[0.5, 1.0]] ++ 7.collect({ arg index; [2 + (index * width), 2 + ((index + 1) * width)] })
             .select({ arg window; window[1] <= 9 });
         pingPongs.do({ arg pingPong;
@@ -207,7 +208,8 @@ checkHeldLoop = {
 // decays at the kept feedback, and a clear mutes and empties, in one run
 // of nine nodes (time 0.375 s, feedback 0.4)
 checkLoopBehavior = {
-    var delay = [\time, 0.375, \feedback, 0.4], noise = [\noise, 0.5], steady, held, results, values;
+    var time = 0.375, delay = [\time, time, \feedback, 0.4], noise = [\noise, 0.5], steady, held, decay, results, values;
+    var width = 2 * heldPeriod.(time), endHeld = 2.99;
     var cases = [
         // 0, 1: a 1 kHz sine from 1.5 s on, frozen at 1 s and not
         (delay: delay, input: [\sine, 0.5, \sineFrom, 1.5], steps: (frozen: [0, 1, 1, 1, 1e9]), windows: [[1.6, 4.0]]),
@@ -221,9 +223,10 @@ checkLoopBehavior = {
         (delay: delay, input: noise, steps: (frozen: [0, 1, 0, 1, 5], time: [0.375, 0.2, 0.2, 2, 1e9]), ref: 3,
             windows: [[1.5, 4.99], [5.6, 7.0]]),
         (delay: delay, inputFrom: 2, steps: (frozen: [0, 1, 0, 1, 5]), windows: [[1.5, 4.99]]),
-        // 4: noise until 2 s, frozen from 1 to 3 s
+        // 4: noise until 2 s, frozen from 1 to 3 s. The two hold windows each hear
+        // two whole periods. The last two windows measure the decay as before.
         (delay: delay, input: noise ++ [\noiseTo, 2], steps: (frozen: [0, 1, 0, 1, 3]),
-            windows: [[2.0, 2.99], [5.0, 5.5], [1.5, 2.0]]),
+            windows: [[endHeld - (2 * width), endHeld - width], [endHeld - width, endHeld], [2.0, endHeld], [5.0, 5.5]]),
         // 5: steady noise, cleared at 2 s
         (delay: delay, input: noise, steps: (t_clear: [0, 1, 1, 2, 1e9]),
             windows: [[1.0, 1.99], [2.01, 2.375], [2.395, 2.7]]),
@@ -243,11 +246,11 @@ checkLoopBehavior = {
         "delay: a time change waits for the release: setDelay's 0.2 s while frozen changes nothing until the release (largest difference from a node left at 0.375 s, frozen %, after the release %)".format(
             windowField.(results[2], 0, 5), windowField.(results[2], 1, 5).round(0.001)));
     values = results[4];
-    held = powerDb.((windowField.(values, 0, 0) / 0.99) / (windowField.(values, 2, 0) / 0.5).max(1e-30));
-    check.((windowField.(values, 0, 0) > 100) and: { held.abs <= 1 }
-        and: { ((windowField.(values, 1, 0) / 0.5) / (windowField.(values, 0, 0) / 0.99)) < 1e-4 },
-        "delay: a release decays at the kept feedback 0.4: held until it (% dB from 2 to 2.99 s against 1.5 to 2 s), under -40 dB 2 s after it (% dB of the frozen level)".format(
-            held, powerDb.((windowField.(values, 1, 0) / 0.5) / (windowField.(values, 0, 0) / 0.99).max(1e-30))));
+    held = 10 * (windowField.(values, 1, 0) / windowField.(values, 0, 0).max(1e-30)).max(1e-30).log10;
+    decay = (windowField.(values, 3, 0) / 0.5) / (windowField.(values, 2, 0) / (endHeld - 2)).max(1e-30);
+    check.((windowField.(values, 0, 0) > 100) and: { held.abs <= 0.05 } and: { decay < 1e-4 },
+        "delay: a release decays at the kept feedback 0.4: held within 0.05 dB over two pairs of whole periods before release (% dB), under -40 dB 2 s after it (% dB of the frozen level)".format(
+            held.round(0.00001), powerDb.(decay)));
     values = results[5];
     steady = windowField.(values, 0, 4);
     check.((steady > 0.1) and: { windowField.(values, 1, 4) < (steady * 0.001) } and: { windowField.(values, 2, 4) > (steady * 0.1) },
