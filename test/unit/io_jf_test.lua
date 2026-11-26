@@ -136,6 +136,53 @@ test("the route's change ends the voice's target notes", function()
   assert_equal(table.concat(told, " "), "2 2", "route_changed(2) on each change")
 end)
 
+for _, silent in ipairs({false, true}) do
+  local mode = silent and "silent" or "ordinary"
+  test("a PSET read (" .. mode .. ") releases only voices whose Just Friends route changed", function()
+    local context, S, state = started(true)
+    params:set("v1_out_wsyn", 1) -- voice 1 has a held target even with JF off
+    params:set("v2_out_jf", 1)
+    local off = h.data_root .. "jf_route_off.pset"
+    local on = h.data_root .. "jf_route_on.pset"
+    params:write(off)
+    params:set("v1_out_jf", 1)
+    params:write(on)
+
+    local function midi(kind, channel, note)
+      context.midi.send(1, {type = kind, ch = channel, note = note, vel = kind == "note_on" and 100 or 0})
+    end
+    local function held(voice)
+      local _, record = next(S.lib.io_targets.sounding(voice))
+      return record and table.concat(record.targets, " ") or ""
+    end
+    midi("note_on", 1, 60)
+    midi("note_on", 2, 64)
+    assert_equal(held(1), "jf wsyn", "voice 1's held note reached both targets")
+    assert_equal(held(2), "jf", "voice 2 holds its own note")
+    state.calls = {}
+    params:read(off, silent)
+    assert_equal(held(1), "", "turning JF off releases the old route at recall")
+    assert_equal(held(2), "jf", "the unaffected voice stays held")
+    midi("note_off", 1, 60)
+    assert_equal(#state.calls, 0, "recall and the old note's release send no one-shot offs")
+
+    midi("note_on", 1, 62)
+    assert_equal(held(1), "wsyn", "new notes follow the disabled JF route")
+    params:read(off, silent)
+    assert_equal(held(1), "wsyn", "a duplicate read preserves the held note")
+    state.calls = {}
+    params:read(on, silent)
+    assert_equal(held(1), "", "enabling JF releases the old route at recall")
+    midi("note_off", 1, 62)
+    assert_equal(#state.calls, 0, "enabling JF does not replay or cut a one-shot")
+    midi("note_on", 1, 65)
+    assert_equal(held(1), "jf wsyn", "new notes go to the enabled JF route")
+    params:read(on, silent)
+    assert_equal(held(1), "jf wsyn", "recalling the same enabled route preserves the held note")
+    assert_equal(held(2), "jf", "voice 2 stays held across all reads")
+  end)
+end
+
 test("its eight params are PSET-only and its rows show on the voice section", function()
   local _, S = started(true)
   local ids = {"jf_level"}
