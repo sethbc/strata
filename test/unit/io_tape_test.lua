@@ -156,6 +156,98 @@ test("a 3.5 PSET read while the tape is on turns it off and puts the mixer back"
   assert_near(context.audio.levels.eng_cut, util.dbamp(params:get("cut_input_eng")), 1e-9, "the mixer is back")
 end)
 
+test("a silent PSET read stops a running tape and starts a saved loop from rest", function()
+  local context, S = started()
+  local off, on = context.data_dir .. "tape_off.pset", context.data_dir .. "tape_on.pset"
+  params:set("cut_input_adc", -6)
+  params:write(off)
+  params:set("tapeloop_rec", 0)
+  params:set("tapeloop_length", 8)
+  params:set("tapeloop_rate", -1)
+  params:set("tapeloop", 1)
+  params:write(on)
+
+  params:read(off, true)
+  assert_equal(params:get("tapeloop"), 0)
+  assert_equal(S.lib.io_tape.is_on(), false, "saved off stops the transport")
+  for v = 1, 2 do assert_equal(value(context, "enable", v), 0) end
+  assert_near(context.audio.levels.adc_cut, util.dbamp(-6), 1e-9)
+
+  params:read(on, true)
+  assert_equal(params:get("tapeloop"), 1)
+  assert_equal(S.lib.io_tape.is_on(), true, "saved on starts the transport")
+  for v = 1, 2 do
+    assert_equal(value(context, "enable", v), 1)
+    assert_equal(value(context, "loop_end", v), 8)
+    assert_equal(value(context, "rate", v), -1)
+    assert_equal(value(context, "level_input_cut", v, v), 0)
+    assert_equal(value(context, "rec_level", v), 1)
+  end
+  assert_equal(context.audio.levels.eng_cut, 1)
+  assert_equal(context.audio.levels.adc_cut, 0)
+end)
+
+test("a silent PSET start sets the loaded sound before enabling either tape voice", function()
+  local context, S = started()
+  local path = context.data_dir .. "tape_start.pset"
+  params:set("tapeloop_rate", -1)
+  params:set("tapeloop_level", 0.3)
+  params:set("tapeloop_feedback", 1)
+  params:set("tapeloop_wear", 1)
+  params:set("tapeloop", 1)
+  params:write(path)
+  params:set("tapeloop", 0)
+  params:set("tapeloop_rate", 1)
+  params:set("tapeloop_level", 0.7)
+  params:set("tapeloop_feedback", 0)
+  params:set("tapeloop_wear", 0)
+  S.lib.engine_sync.set_extra_offset("test", "tapeloop_rate", 0.5)
+
+  clear_calls(context)
+  params:read(path, true)
+  local expected = {level_cut_cut = 1 / 1.2, pre_filter_fc = 800, rate = -0.5, level = 0.3}
+  for v = 1, 2 do
+    local applied = {}
+    local enabled = index_of(context, "enable", v)
+    assert_true(enabled ~= nil, "voice " .. v .. " starts")
+    for index = 1, enabled - 1 do
+      local call = context.softcut.calls[index]
+      if call[2] == v then applied[call[1]] = call[#call] end
+    end
+    for name, setting in pairs(expected) do
+      assert_equal(applied[name], setting, name .. " at enable of voice " .. v)
+    end
+  end
+end)
+
+test("a silent PSET read updates a running loop in place", function()
+  local context = started()
+  local path = context.data_dir .. "running_tape.pset"
+  params:set("tapeloop", 1)
+  params:set("tapeloop_rec", 0)
+  params:set("tapeloop_length", 8)
+  params:set("tapeloop_rate", -1)
+  params:write(path)
+  params:set("tapeloop_rec", 1)
+  params:set("tapeloop_length", 2)
+  params:set("tapeloop_rate", 1)
+  local before = #context.softcut.calls
+  params:read(path, true)
+  for v = 1, 2 do
+    assert_equal(value(context, "level_input_cut", v, v), 0, "saved record switch closes the input")
+    assert_equal(value(context, "rec_level", v), 1)
+    assert_equal(value(context, "loop_end", v), 8)
+    assert_equal(value(context, "rate", v), -1)
+  end
+  for i = before + 1, #context.softcut.calls do
+    local name = context.softcut.calls[i][1]
+    assert_true(name ~= "position" and name ~= "enable", "the playhead stays in place")
+  end
+  clear_calls(context)
+  params:read(path, true)
+  assert_equal(#context.softcut.calls, 0, "reading the same settings leaves the voices alone")
+end)
+
 test("a PSET read while the tape runs leaves norns' input and tape out of the loop", function()
   -- norns' cut_input_* params are in a PSET (lua/core/audio.lua:875-897, saved), and their
   -- actions set the mixer: one that differs puts the input back into the loop unless re-applied
