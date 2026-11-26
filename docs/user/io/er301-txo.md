@@ -12,6 +12,8 @@ Two voices on one port or output share it: the newest note of either sounds. Bot
 
 A voice with a port sends the note's pitch to that port's `SC.CV` unit (volts, one octave a volt, note 60 at 0 V, clamped to -10 to 10 V) and raises the port's `SC.TR` unit. Patch the ER-301's ii bus to crow's, and put an `SC.CV` and an `SC.TR` unit on the same port number in the chain you play. Teletype's notes say the ER-301's ii connection needs a small hardware modification and a cable with two pins swapped; crow's documents do not repeat it, so check your unit before you rely on it.
 
+Loading a PSET that changes or turns off a voice’s ER-301 port releases its held notes on the old port. A shared port stays high while another voice still holds a note there. New notes follow the recalled setting.
+
 ## TELEXo
 
 | Setting | Values | Default |
