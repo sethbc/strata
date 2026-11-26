@@ -336,6 +336,60 @@ test("a gate output moved off a sounding voice goes low (through the real target
   end
 end)
 
+-- A held MIDI key drives the jack through the allocator and the targets core.
+for _, silent in ipairs({false, true}) do
+  local read_mode = silent and "silent" or "ordinary"
+  for _, replacement in ipairs({"off", "v4 gate"}) do
+    test(read_mode .. " PSET moves a sounding crow gate to " .. replacement, function()
+      local context, S = started()
+      context.crow.plug()
+      params:set("midi_note_off", 2)
+      params:set("crow_out3_source", option("crow_out3_source", "v2 gate"))
+      local source = "crow_out2_source"
+      params:set(source, option(source, replacement))
+      local path = h.data_root .. "crow_gate_recall.pset"
+      params:write(path)
+      params:set(source, option(source, "v3 gate"))
+      local function key(voice, down)
+        context.midi.send(1, {type = down and "note_on" or "note_off", note = 60, vel = down and 100 or 0, ch = voice})
+      end
+      local function voltage() return last_line_for(context, "output[2].volts") end
+      key(2, true)
+      key(3, true)
+      assert_equal(voltage(), "output[2].volts = 5", "voice 3 raised the gate")
+      params:read(path, silent)
+      assert_equal(voltage(), "output[2].volts = 0", "the old gate at recall")
+      assert_equal(next(S.lib.io_targets.sounding(3)), nil, "voice 3 relinquished its note")
+      context.clock.run_for(0.2)
+      key(4, true)
+      key(3, false)
+      if replacement == "v4 gate" then
+        assert_equal(voltage(), "output[2].volts = 5", "the old key-up leaves voice 4's gate high")
+        params:read(path, silent)
+        assert_equal(voltage(), "output[2].volts = 5", "reading the same route leaves the gate high")
+      end
+      assert_equal(last_line_for(context, "output[3].volts"), "output[3].volts = 5", "voice 2 kept its gate")
+      key(2, false)
+      assert_equal(last_line_for(context, "output[3].volts"), "output[3].volts = 0", "its key still lowers it")
+      key(4, false)
+      assert_equal(voltage(), "output[2].volts = 0", "the jack after key-up")
+    end)
+  end
+end
+
+test("a silent crow gate recall leaves norns' clock output alone", function()
+  local context = started()
+  context.crow.plug()
+  params:set("clock_crow_out", 3)
+  local path = h.data_root .. "crow_clock_gate.pset"
+  params:write(path)
+  params:set("crow_out2_source", option("crow_out2_source", "v3 gate"))
+  context.crow.clear()
+  params:read(path, true)
+  context.clock.run_for(0.2)
+  assert_equal(any_line_with(context, "output[2]"), nil)
+end)
+
 test("two full-length steps on a gate output: the low goes out before the next step's high", function()
   -- seq gate off (the default): a step's gate is the whole step, so the targets core ends it
   -- TARGETS.step_gap_seconds early and the jack shows a low an envelope can see
