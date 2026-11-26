@@ -40,7 +40,7 @@
 #       layout; a run with shard logs is read as sharded, against the
 #       workflow's list: its shards in the list's order, then any shard log
 #       the list no longer names, by file name; a run lacking a listed
-#       shard's log is incomplete) and starts nothing
+#       shard's log or its sole run-<i>.log is incomplete) and starts nothing
 #   path/to/norns defaults to $NORNS_DIR, else ~/src/norns.
 #   STRATA_ENGINE_CHECK_AREAS, set and not empty, runs those areas in one
 #   container per run, as before #581. It, ENGINE_CHECK_TIMEOUT (which
@@ -73,7 +73,7 @@
 # shows. A sharded run that did not pass takes the class of its worst shard
 # (the first in that order, after passed; of two alike, the first in the
 # run's order), and the summary names that shard, then any other shard that
-# did not pass; a run -c finds incomplete says which shards have no log.
+# did not pass; a run -c finds incomplete says which logs are missing.
 # The summary counts runs by class (and the incomplete ones), then for
 # sharded runs their shards by class (and the missing ones: a run's other
 # shards show only there) and names the slowest shard; the exit status is 0
@@ -364,7 +364,7 @@ classify() {
 # workflow's, in its order; for -c, those with a log, then any other shard
 # log the folder holds, by name), and missing, for -c, the workflow's shards
 # with no log, joined by commas. stems empty: a run in one container
-# (run-<i>.log), never incomplete
+# (run-<i>.log)
 run_shards() {
   stems=
   missing=
@@ -408,8 +408,11 @@ newline='
 run=1
 while [ "$run" -le "$runs" ]; do
   run_shards "$run"
-  if [ -z "$stems" ]; then
-    log=$log_dir/run-$run.log
+  log=$log_dir/run-$run.log
+  if [ -z "$stems" ] && [ ! -f "$log" ]; then
+    count run incomplete
+    echo "run $run: incomplete (missing $log)"
+  elif [ -z "$stems" ]; then
     classify "$log" "$log_dir/run-$run.status"
     count run "$class"
     if [ "$class" = passed ]; then echo "run $run: passed"; else echo "run $run: $label ($detail), $log"; fi
