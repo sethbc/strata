@@ -3586,6 +3586,22 @@ local function write_shard_fixtures(folder, fixtures)
   end
 end
 
+test("the 3.13 script's -n and -j require positive decimal counts (#1084)", function()
+  local root = data_root .. "sc313-counts"
+  write_shard_fixtures(root, {{1, 0, "ENGINE CHECK PASSED\n"}})
+  local classify = "-c -o " .. h.shell_quote(root) .. " "
+  local passed = run_313_script(root, classify .. "-n 01 -j 08")
+  assert_true(passed:find("run 1: passed", 1, true) and passed:find("exit=0\n", 1, true),
+    "positive counts may have leading zeros: " .. passed)
+  for _, option in ipairs({"-n", "-j"}) do
+    for _, count in ipairs({"0", "00", "000", "0x1", "1x", ""}) do
+      local output = run_313_script(root, classify .. option .. " " .. h.shell_quote(count))
+      assert_true(output:find("exit=2\n", 1, true) ~= nil, option .. " should reject '" .. count .. "': " .. output)
+    end
+  end
+  h.remove_tree(root)
+end)
+
 test("the 3.13 script's -c reads a run's shards in the workflow's order, then any it no longer lists by name (#581)", function()
   local shell_quote, checkout = h.shell_quote, data_root .. "sc313-order"
   -- the workflow's order is not the file names' order

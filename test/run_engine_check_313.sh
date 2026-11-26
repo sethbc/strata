@@ -168,9 +168,13 @@ read_shards() {
 file_name() { echo "$1" | tr , _; }
 
 for count in "$runs" "$parallel"; do
+  # Decimal digits only, with at least one nonzero digit.
   case $count in
-    ''|*[!0-9]*|0) echo "-n and -j take a whole number of at least 1, got \"$count\"" >&2; exit 2 ;;
+    *[!0-9]*) ;;
+    *[1-9]*) continue ;;
   esac
+  echo "-n and -j take a whole number of at least 1, got \"$count\"" >&2
+  exit 2
 done
 
 if [ -n "$list_only" ]; then
