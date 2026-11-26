@@ -952,6 +952,12 @@ return function(S)
     return nil
   end
 
+  -- The sequencer loads later. Register here so its read follows the scenes'
+  -- side file and the engine and voice hooks still run last.
+  S.register_pset_hook({name = "seq_chain", read = function(_, _, _, silent)
+    if silent then S.lib.sequencer.reconcile_chain() end
+  end})
+
   -- After a silent PSET read the engine follows every param too (#965,
   -- decided 2026-11-23): each engine sender whose params the read changed
   -- is sent once, through the param's own sender. SILENT_READ.same_send:

@@ -2184,6 +2184,14 @@ return function(S)
     chain.next_beat = (on == 1 and S.pattern_playing) and next_bar_beat() or nil
   end
 
+  -- A silent PSET read skips the switch's action. Keep the current link
+  -- and its timing when the chain is already in the loaded state (#1100).
+  function M.reconcile_chain()
+    local on = params:get("seq_chain")
+    local should_link = S.pattern_playing and on == 1
+    if should_link ~= (chain.next_beat ~= nil) then chain_switched(on) end
+  end
+
   -- strata_seq (design 8.8): the chain, the quantizer's params
   -- (S.lib.quantize.PARAM_COUNT of them), the division reset and following
   -- the transport. PSETs store them; scenes don't
