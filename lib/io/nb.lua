@@ -243,10 +243,12 @@ return function(S)
     if player then call_own(player, key, "stop_all") end
   end)
 
-  -- A PSET load (duty 8): the keys are settled by now (the keyed module's
-  -- hook runs first); each chosen player's own stop_all
+  -- The keyed hook settles the selectors first. A silent read skipped their
+  -- actions, so apply the effective keys before stopping the chosen players.
   S.register_pset_hook({name = "io_nb", read = function()
-    if state.added then stop_chosen() end
+    if not state.added then return end
+    for voice = 1, NUM_VOICES do choose(voice, S.lib.io_keyed.key(selector(voice))) end
+    stop_chosen()
   end})
 
   -- The counts (#935): each player's count of the voices that use it is

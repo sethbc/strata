@@ -417,6 +417,53 @@ test("a PSET keeps a player by name through a changed list", function()
   assert_equal(again.lib.io_keyed.key("v2_out_nb"), "alpha", "a later load with it present selects it")
 end)
 
+-- The saved name can be absent from the installed players. In that case
+-- the PSET keeps the name and the voice takes the same route as "none".
+for _, silent in ipairs({false, true}) do
+  for _, saved in ipairs({"none", "beta", "missing", "alpha"}) do
+    local mode = silent and "silent" or "ordinary"
+    test(mode .. " PSET read routes fresh MIDI notes from alpha to " .. saved, function()
+      local context, S, players = started({{"alpha", ALL}, {"beta", ALL}, {"other", ALL}})
+      choose(2, "other")
+      choose(1, saved)
+      local path = write_pset(context, "routes")
+      choose(1, "alpha")
+      local function key(kind, voice, pitch)
+        midi_event(midi.to_data({type = kind, ch = voice, note = pitch, vel = 90}))
+      end
+      key("note_on", 1, 60)
+      key("note_on", 2, 55)
+      assert_equal(count(players.alpha, "note_on"), 1, "held on alpha")
+      assert_equal(count(players.other, "note_on"), 1, "held on voice 2")
+      params:read(path, silent)
+      if saved ~= "alpha" then
+        assert_equal(count(players.alpha, "note_off"), 1, "old player released on read")
+        assert_equal(next(S.lib.io_targets.sounding(1)), nil, "old route cleared")
+        assert_equal(count(players.alpha, "stop_all"), 0, "old player left the route")
+      end
+      key("note_off", 1, 60)
+      key("note_on", 1, 64)
+      assert_equal(count(players.alpha, "note_on"), saved == "alpha" and 2 or 1, "fresh note to alpha")
+      assert_equal(count(players.beta, "note_on"), saved == "beta" and 1 or 0, "fresh note to beta")
+      assert_equal(count(players.alpha, "note_off"), 1, "held note ended once")
+      assert_equal(params:get("v1_out_nb_key"), saved, "saved name kept")
+      assert_equal(nb_player_refcounts.alpha, saved == "alpha" and 1 or nil)
+      assert_equal(nb_player_refcounts.beta, saved == "beta" and 1 or nil)
+      assert_equal(nb_player_refcounts.other, 1, "voice 2 keeps its player")
+      assert_equal(count(players.other, "stop_all"), 1, "voice 2's player stops on read")
+      key("note_off", 1, 64)
+      key("note_off", 2, 55)
+      local selected = saved == "alpha" and players.alpha or saved == "beta" and players.beta
+      if selected then
+        local activations = count(selected, "active")
+        params:read(path, silent)
+        assert_equal(count(selected, "active"), activations, "same route stays active")
+        assert_equal(count(selected, "stop_all"), 2, "selected player stops once per read")
+      end
+    end)
+  end
+end
+
 test("a PSET read moving a voice between players counts each once", function()
   -- the keyed action runs at each key set, a read included: no double count, no activation lost
   local context, _, players = started({ { "alpha", ALL }, { "zeta", ALL } })
