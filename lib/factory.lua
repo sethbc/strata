@@ -215,7 +215,7 @@ return function(S)
 
   -- Copy source to destination in copy_chunk_bytes chunks (a clock.sleep(0)
   -- between chunks), through destination .. ".part" renamed into place; the
-  -- open (io.open looked up at each call), every write, the flush and the
+  -- open (io.open looked up at each call), each read and write, the flush and the
   -- close are checked. true, or false and why (the .part removed)
   local function copy_file(source, destination)
     local input, open_problem = io.open(source, "rb")
@@ -228,15 +228,18 @@ return function(S)
     end
     local failure
     while true do
-      local chunk = input:read(FACTORY.copy_chunk_bytes)
+      local chunk, read_problem = input:read(FACTORY.copy_chunk_bytes)
+      if read_problem then
+        failure = read_problem
+        break
+      end
       if not chunk or chunk == "" then break end
       local written, write_problem = output:write(chunk)
       if not written then
         failure = write_problem or "the write failed"
         break
       end
-      if #chunk < FACTORY.copy_chunk_bytes then break end
-      clock.sleep(0)
+      if #chunk == FACTORY.copy_chunk_bytes then clock.sleep(0) end
     end
     input:close()
     if not failure then
