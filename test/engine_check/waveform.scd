@@ -30,13 +30,14 @@ var readPeaksFile = { arg path;
     }
 };
 
-// A stereo 16-bit file: optionally `prefix` frames of loudValues, then one
+// A 16-bit file: optionally `prefix` frames of loudValues, then one
 // constant chunk of binFrames per bin (valuesFor.(bin): one value per channel)
-var writePerBinFile = { arg path, sampleRate, binFrames, valuesFor, prefix = 0, loudValues = #[0.95, -0.95], format = "WAV";
-    var file = SoundFile.new.headerFormat_(format).sampleFormat_("int16").numChannels_(2).sampleRate_(sampleRate);
+var writePerBinFile = { arg path, sampleRate, binFrames, valuesFor, prefix = 0, loudValues = #[0.95, -0.95], format = "WAV", lastFrame;
+    var file = SoundFile.new.headerFormat_(format).sampleFormat_("int16").numChannels_(loudValues.size).sampleRate_(sampleRate);
     file.openWrite(path);
     if (prefix > 0) { h.writeConstantFrames(file, prefix, loudValues) };
     points.do({ arg bin; h.writeConstantFrames(file, binFrames, valuesFor.(bin)) });
+    if (lastFrame.notNil) { h.writeConstantFrames(file, 1, lastFrame) };
     file.close;
 };
 
@@ -101,6 +102,26 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     command.(\clearBuffer, slot); server.sync;
     File.delete(path);
 }.value;
+
+// The same stereo pair in two files, one with an additional louder channel.
+// Compare the actual slot buffers and the overview consumed by Normalize.
+[[0.125, -0.125], [0.125, -0.125, 0.875]].do({ arg channels;
+    var path = scratchRoot +/+ "waveform-played.wav", slot = 0, frames = 4800 + channels.size;
+    var left, right, fields;
+    h.writeTestFile(path, rate, frames, channels);
+    command.(\loadBuffer, slot, path, 0);
+    h.awaitLoad(slot);
+    left = h.bufferSample(engine.buffersL[slot], frames - 1);
+    right = h.bufferSample(engine.buffersR[slot], frames - 1);
+    fields = readPeaksFile.(engine.peaksPath(slot));
+    check.((left == 0.125) and: { right == -0.125 },
+        "waveform: % channels install the first pair (% / %)".format(channels.size, left, right));
+    check.(fields.notNil and: { fields[\peaks] == Array.fill(points, "0.125") },
+        "waveform: all % bins of a % channel file measure the played pair (first peak %)".format(
+            points, channels.size, fields !? { fields[\peaks][0] }));
+    command.(\clearBuffer, slot); server.sync;
+    File.delete(path);
+});
 
 // A replace take's peaks: a check synth fills the peak buffer (bin i holds i / 64)
 {
@@ -652,11 +673,13 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
 // A file shorter than 64 frames
 {
     var path = scratchRoot +/+ "waveform-tiny.wav", slot = 4, peaks;
-    h.writeTestFile(path, rate, 10, [0.5, -0.5]);
+    h.writeTestFile(path, rate, 10, [-0.5]);
     command.(\loadBuffer, slot, path, 0);
     waitFor.({ engine.bufferFrames[slot] == 10 });
     0.1.wait; server.sync;
     peaks = storedPeaks.(engine, slot);
+    check.((h.bufferSample(engine.buffersL[slot], 9) == -0.5) and: { h.bufferSample(engine.buffersR[slot], 9) == -0.5 },
+        "waveform: a mono file supplies both played channels");
     check.((engine.bufferFrames[slot] == 10)
         and: { peaks.every({ arg each; (each == 0) or: { (each - 0.5).abs < 0.001 } }) }
         and: { peaks.count({ arg each; each > 0 }) == 10 },
@@ -669,8 +692,13 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
 // A high engine of its own: a long file's peaks, then the soak
 highEngine = startHighEngine.value;
 {
-    var path = scratchRoot +/+ "waveform-long.wav", binFrames = 15000, prefix = (1.5 * rate).floor.asInteger, slot = 1, frames = binFrames * points;
-    writePerBinFile.(path, rate, binFrames, binValues, prefix);
+    var path = scratchRoot +/+ "waveform-long.wav", binFrames = engine.loadCheckFrames, prefix = (1.5 * rate).floor.asInteger;
+    var slot = 1, frames = (binFrames * points) + 1;
+    // The final bin gains one extra frame in a second decode chunk. Its right
+    // channel alone contains the expected maximum. Skip the loud prefix.
+    writePerBinFile.(path, rate, binFrames, { arg bin;
+        (if (bin == (points - 1)) { [0, 0] } { binValues.(bin) }) ++ [0.9375, -1]
+    }, prefix, [1, -1, 1, 1], "WAV", [0, binLevel.(points - 1).neg, 1, 1]);
     h.commandTo(highEngine, \loadBuffer, slot, path, 1.5);
     waitFor.({ highEngine.bufferFrames[slot] == frames }, 20);
     0.2.wait; server.sync;
