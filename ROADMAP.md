@@ -124,7 +124,7 @@ Added 2026-11-08. Now that 3.9 has shipped (it waited for 3.6, until 3.7 and 3.8
 2. **3.5 note assignment:** both modes, selected voice as the default (3.5, MIDI and MPE).
 3. **3.6 hardware:** crow, Just Friends, W/, ER-301, TELEXo, Teletype, Launchpad, TouchOSC, Disting NT, OXI One, OXI E16, Faderpunk and Faderbank (including the Faderbank 16nx; added 2026-11-11, #555). The E16 takes the place the Midi Fighter Twister had in the brainstorm (no Twister layout is planned).
 4. **Pi 4 RAM:** 8 GB, so the high tier offers buffers up to 300 s (the 3.2 section's "Longer buffers", since removed).
-5. **After the last feature release** (2026-11-08; 3.6 then, 3.8 since 2026-11-11): a full code review of the whole project as a pre-4.0 release, then 4.0 (see pre-4.0 and 4.0 above). Every finding, whatever its priority, gets its own issue and its own fix; none is deferred or accepted.
+5. **After the last feature release** (2026-11-08; 3.6 then, 3.8 since 2026-11-11, 3.9 since 2026-11-18): a full code review of the whole project as a pre-4.0 release, then 4.0 (see pre-4.0 and 4.0 above). Every finding, whatever its priority, gets its own issue and its own fix; none is deferred or accepted.
 
 ## Cross-release decisions (2026-11-08)
 
