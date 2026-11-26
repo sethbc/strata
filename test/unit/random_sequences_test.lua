@@ -536,6 +536,42 @@ test("drift's chance decides with one draw against the drift", function()
   assert_near(sequences.values(1)[left], before[left], 1e-12, "and keeps the value")
 end)
 
+for _, mode in ipairs({"ordinary", "silent"}) do
+  test(mode .. " PSET shrink keeps a random sequence on step 1 after expansion (#1102)", function()
+    local context, S, sequences = loaded()
+    local path = context.data_dir .. "strata-01.pset"
+    params:set("rseq1_length", 2)
+    params:set("rseq1_clock", clock_index(S, "1 bar"))
+    sequences.set_value(1, 1, 0.75)
+    params:write(path)
+
+    params:set("rseq1_length", 16)
+    params:set("rseq1_clock", clock_index(S, "voice 2"))
+    for _ = 1, (11 - sequences.position(1)) % 16 do S.lib.engine_sync.retrigger(2, 1, "step") end
+    params:set("rseq1_clock", clock_index(S, "1/4"))
+    clock.set_beat(8.5); lfo_step(context)
+    assert_equal(sequences.position(1), 11, "the quarter-note clock is on step 11")
+    sequences.set_value(1, 1, -0.5)
+
+    params:read(path, mode == "silent")
+    params:set("rseq1_length", 16)
+    assert_equal(sequences.position(1), 1, "expanding before a tick keeps the recalled step")
+    assert_equal(sequences.value(1), 0.75, "step 1 plays the loaded side-file value")
+    lfo_step(context)
+    assert_equal(sequences.position(1), 1, "the new bar clock primes without a step")
+    clock.set_beat(12); lfo_step(context)
+    assert_equal(sequences.position(1), 2, "the next bar advances from step 1")
+
+    assert(os.remove(context.data_dir .. "strata-01.sequences.data"))
+    clock.set_beat(16)
+    params:read(path, mode == "silent")
+    assert_equal(sequences.position(1), 2, "the current step fits the shorter length")
+    assert_equal(sequences.value(1), 0, "a missing side file supplies the default values")
+    lfo_step(context)
+    assert_equal(sequences.position(1), 1, "the same clock keeps its pending bar boundary")
+  end)
+end
+
 -- Review 1g, Minor 5: a silent length set (a PSET read with silent) skips
 -- the length's action; the position past the new length reads as 1
 test("a position past a length set silently reads and steps as from 1", function()
