@@ -22,7 +22,7 @@ This is version 3.9.0. [CHANGELOG.md](CHANGELOG.md) says what each release chang
 - Sixteen named scenes in two banks, with smooth recall and a scene sequencer; actions that can wait for the beat or bar
 - Mute and solo for every voice
 - A ten-page screen UI that reaches every parameter, the patterns, the scenes and the modulation without a grid or arc
-- A pattern sequencer (on the SEQ page and the grid) with a length, division and swing per voice, a step mode per voice (pulse, accent or move), lanes with their own lengths, four patterns per voice, a loop and a roll, probability, ratchets, step locks, gates, Euclidean fill and scene chaining, MIDI input and monome arc support
+- A pattern sequencer (on the SEQ page and the grid) with a length, division and swing per voice, a step mode per voice (pulse, gate, accent or move), lanes with their own lengths, four patterns per voice, a loop and a roll, probability, ratchets, step locks, gates, Euclidean fill and scene chaining, MIDI input and monome arc support
 
 ## Requirements
 
