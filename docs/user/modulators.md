@@ -34,7 +34,7 @@ To use a sequence, set a matrix routing's source to it (`RS1` to `RS4`) and choo
 
 ### What is saved
 
-The settings (length, drift, clock) are parameters, in the PARAMETERS menu's **random sequences** group, saved with each PSET. The values are saved with each PSET too (in a file beside it, `<pset>.sequences.data`), in every scene (a recall sets them at the end of its fade) and between sessions. The very first time Strata starts with random sequences, their values are drawn at random and kept; a scene or a PSET saved before them sets every value to 0.
+The settings (length, drift, clock) are parameters, in the PARAMETERS menu's **random sequences** group, saved with each PSET. If a PSET changes a sequence’s clock to a tempo division, the sequence holds its step on the first clock reading and advances at the next division boundary. Recalling the same division keeps its timing. The values are saved with each PSET too (in a file beside it, `<pset>.sequences.data`), in every scene (a recall sets them at the end of its fade) and between sessions. The very first time Strata starts with random sequences, their values are drawn at random and kept; a scene or a PSET saved before them sets every value to 0.
 
 Between sessions, the values are written half a second after each value you edit, each `new`, a scene recall and a PSET load, and again when you leave Strata cleanly (SLEEP, or loading another script). What drift changes is written only then: if the power is cut, the drift since the last write is lost.
 
