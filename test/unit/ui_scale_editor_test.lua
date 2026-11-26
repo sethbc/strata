@@ -162,6 +162,26 @@ test("a note while the step editor covers the scale editor toggles no scale clas
   assert_equal(params:get("scale_mask"), 4095 - 64, "uncovered: the editor takes the note again")
 end)
 
+test("MIDI plays while the norns menu covers SCALE and edits again when it closes", function()
+  local context, S = loaded()
+  params:set("scale", option_index("scale", "Chromatic"))
+  local note_on = { type = "note_on", note = 66, vel = 100, ch = 1 }
+  local held_key = 128 + 66  -- channel 1, F#
+  _menu.set_mode(true)
+  context.midi.send(1, note_on)
+  assert_equal(params:get("scale_mask"), 4095, "the menu leaves F# in the mask")
+  assert_equal(params:string("scale"), "Chromatic")
+  assert_true(S.midi_state.held[1][held_key], "voice 1 plays F#")
+  context.midi.send(1, { type = "note_off", note = 66, vel = 0, ch = 1 })
+  assert_true(not S.midi_state.held[1][held_key], "voice 1 releases F#")
+
+  _menu.set_mode(false)
+  context.midi.send(1, note_on)
+  assert_equal(params:get("scale_mask"), 4031, "the visible editor removes F#")
+  assert_equal(params:string("scale"), "custom")
+  assert_true(not S.midi_state.held[1][held_key], "the editor consumes the note")
+end)
+
 -- 3.9 (#900): the tap is set once, at open; no draw sets it (a reset tells
 -- the editor, which takes it back then)
 test("the scale editor sets its note tap at open and at no draw", function()

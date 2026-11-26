@@ -6,7 +6,7 @@
 -- the tunings folder's files). E2 the row, E3 the value (on notes the class
 -- under the cursor, on tuning a dim pending choice), K3 toggles a class or
 -- applies the pending tuning, K2 closes. A MIDI note toggles its class
--- while it is open and on top (the MIDI module's note tap, its owner). In
+-- while it is visible (the MIDI module's note tap, its owner). In
 -- a tuning that is not twelve notes to an octave the scale and notes rows
 -- show -- and change nothing. Fields of this module's table: open, close,
 -- is_open, note, SCALE_EDITOR; cleanup closes it. See docs/notes/lua/ui/scale-editor.md.
@@ -78,8 +78,8 @@ return function(S)
   -- The note tap (its owner SCALE_EDITOR.tap_owner, 3.9's #900): while the
   -- editor is open, on top and the scale applies, a note on toggles its
   -- class (its distance from degree 0's key, in semitones, modulo twelve)
-  -- and is taken (true), so it plays nothing. While another owner covers it
-  -- (SEQ's step editor) it takes no note, which plays as with no tap.
+  -- and is taken (true), so it plays nothing. While the norns menu or SEQ's
+  -- step editor covers it, the note goes through to the performance input.
   -- nil is the MIDI module telling the owner it cleared the tap (a reset):
   -- the open editor takes it back at once
   local owner
@@ -91,7 +91,7 @@ return function(S)
       return false
     end
     if not editor.open or type(note) ~= "number" or not scale_rows() then return false end
-    if S.lib.ui_modal.top() ~= owner then return false end
+    if S.lib.ui_modal.top() ~= owner or norns.menu.status() then return false end
     local class = (note - tuning().TUNING.root_key - variation().root()) % SCALE_EDITOR.classes
     toggle_class(class)
     return true
