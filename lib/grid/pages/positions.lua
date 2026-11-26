@@ -4,12 +4,9 @@
 -- loop, a slice row its slice) through S.lib.positions.grid_key. Side 2:
 -- every voice's marks on its line (bookmarks 1-4, ST store, HD hold, WH
 -- whole, through S.lib.positions.strip_key) and the slots' record (line 1)
--- and clear (line 2) keys on columns 9-16. Each press is held in the role
--- POSITIONS_PAGE.role (pane.press_as) and passes its pane and its still
--- (pane.pressed_as in that role), so a held key ends at every way its
--- release is lost: its own pane's page, side or half change, the 64's
--- chooser opening, the grid leaving (#865). Written in pane coordinates
--- (lib/grid/pane.lua), so it is the same on every layout
+-- and clear (line 2) keys on columns 9-16. Each cell or mark passes its
+-- pane and, on press, pane.still(x, y) for that physical press. Written in
+-- pane coordinates (lib/grid/pane.lua), so it is the same on every layout
 
 return function(S)
   local M = {}
@@ -21,29 +18,17 @@ return function(S)
 
   -- Side 2's columns (pane coordinates): the bookmarks on 1..NUM_BOOKMARKS,
   -- then the voice's keys, and the slots from slot_column + 1 (slot n at
-  -- slot_column + n); the record keys on line 1, the clear keys on line 2;
-  -- role: the grid core's key role a positions press is held in
+  -- slot_column + n); the record keys on line 1, the clear keys on line 2
   local POSITIONS_PAGE = {
     marks = {[6] = "store", [7] = "hold", [8] = "whole"},
     slot_column = 8,
     record_line = 1,
     clear_line = 2,
-    role = "positions",
   }
   M.POSITIONS_PAGE = POSITIONS_PAGE
 
-  -- A press's still (S.lib.positions' records): the key is held in the
-  -- page's role, which the core clears at every way the key ends. A press
-  -- notes the role first; a release passes none. Since the role is set
-  -- before S.lib.positions checks its records, a re-press of a key whose
-  -- release was lost (under the 64's chooser) before the next tick makes
-  -- the old record's still true again: the new press then overwrites it
-  -- (the same key, cell, store or hold, the slice's same note key), which
-  -- leaves nothing behind
   local function still_of(pane, x, y, z)
-    if z ~= 1 then return nil end
-    pane.press_as(x, y, POSITIONS_PAGE.role)
-    return function() return pane.pressed_as(x, y, POSITIONS_PAGE.role) == true end
+    if z == 1 then return pane.still(x, y) end
   end
 
   -- Side 2's mark of column x: a bookmark number, "store", "hold",

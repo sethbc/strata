@@ -219,6 +219,29 @@ test("the marks recall, store, hold and restore the whole loop", function()
   end, {side = 2, only = 1})
 end)
 
+for _, cell in ipairs({8, 7}) do
+  test("a jump to cell " .. cell .. " after leaving HD releases the old scan hold (#1092)", function()
+    local context = load_strata(); finish_startup(context)
+    local S = buffer_voices(context)
+    local pane = grid_pane(context, "128h")
+    local positions_key = strip_x(S, "upper", "page " .. S.constants.GRID_PAGES.positions)
+    local voices_key = strip_x(S, "upper", "page " .. S.constants.GRID_PAGES.voices)
+    pane.tap(positions_key, 8)
+    pane.tap(positions_key, 8)  -- marks
+    pane.press(MARK_X.hold, 1, 1)
+    assert_equal(S.lib.positions.scan_held(1), true, "HD holds the scan")
+    pane.tap(voices_key, 8)
+    pane.press(MARK_X.hold, 1, 0)
+    pane.tap(positions_key, 8)  -- cells, before the next playhead tick
+    pane.press(cell, 1, 1)
+    assert_near(params:get("v1_buf_pos"), (cell - 1) / 16, 1e-9, "the new press jumps")
+    context.clock.run_for(0.5)
+    assert_equal(S.lib.positions.scan_held(1), false, "the scan runs while the jump key is down")
+    assert_equal(scan_hold_sent(context), 0, "the engine received the release")
+    pane.press(cell, 1, 0)
+  end)
+end
+
 test("a synth voice's marks are dark and store nothing (#445)", function()
   each_arrangement(function(_, S, pane, arrangement)
     params:set("v1_source", 1)
@@ -564,9 +587,8 @@ end)
 
 -- #865: while the 64's chooser shows, a pane key's release goes to the
 -- chooser and never reaches the page, and NV coming up with no pick keeps
--- the view. The chooser opening ends the pane's keys' roles, so each
--- positions record (its `still`, the role its page pressed it in) ends at
--- the next key or tick
+-- the view. Opening the chooser invalidates the pane's presses, so each
+-- positions record ends at the next key or tick
 local function under_the_chooser(context, left, x, y)
   left.press(x, y, 1)                    -- the positions key held
   left.press(1, 8, 1)                    -- NV held
@@ -618,7 +640,7 @@ test("a slice key released under the chooser stops", function()
 end)
 
 -- The real pane's still at a page change (a direct call's is a stand-in,
--- test/unit/positions_test.lua): the core clears the key's role, so the
+-- test/unit/positions_test.lua): the core invalidates the press, so the
 -- held slice ends at the next tick and its late release ends nothing more
 test("a held slice key ends when its pane shows another page, and its late release ends nothing more", function()
   each_arrangement(function(context, S, pane, arrangement)

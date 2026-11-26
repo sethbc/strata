@@ -367,14 +367,10 @@ return function(S)
   -- made, to find it again when the port's state is gone
   local records = {}
 
-  -- A press's `still` (3.9, #865): the grid page's test that its key is
-  -- still down in the role it was pressed in. The grid core clears a key's
-  -- role at its release, a new press, its pane's page, side or half
-  -- change, the 64's chooser opening (whose keys' releases reach no page)
-  -- and the port's forget, so a record whose still is false has lost its
-  -- release and ends at the next key or tick. A direct call gives none:
-  -- its record ends only at its release or when its port goes (so does
-  -- one given anything but a function)
+  -- The grid page passes pane.still for this physical press. A release,
+  -- another press, a pane change, the chooser opening or the grid leaving
+  -- ends it. The next key or tick clears stale records. A direct call
+  -- without a predicate keeps its record until release or port removal.
   local function held_always() return true end
   local function held_still(still) return type(still) == "function" and still or held_always end
 
@@ -466,9 +462,6 @@ return function(S)
     entry.token = token
     local held = record_of(port).slices
     held[voice_idx] = held[voice_idx] or {}
-    -- an entry already here (a re-press whose old release was lost, its
-    -- still true again through the new press's role) is overwritten: the
-    -- same slice under the same note key, ended by this press's release
     held[voice_idx][cell] = entry
   end
 
