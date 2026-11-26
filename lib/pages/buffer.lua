@@ -1108,6 +1108,11 @@ return function(S)
       LAYOUT.load_long_names(context); S.buffer_page.slot = NUM_BUFFERS; save_cursor_slot(false)
       context.polls.fire("bufferSaveResult", LAYOUT.save_result_value(NUM_BUFFERS, true))
     end},
+    {name = "save queue full flash", setup = function(context)
+      LAYOUT.load_long_names(context)
+      for i = 1, S.lib.buffers.BUFFER_SETTLE.tracked_saves do save_buffer(1) end
+      save_cursor_slot(false)
+    end},
     {name = "busy flash", setup = function() record_buffer(1); save_cursor_slot(false) end},
     {name = "empty flash", setup = function() save_cursor_slot(false) end},
     {name = "load failed flash", setup = function() header_flash("buf 8 load failed") end},

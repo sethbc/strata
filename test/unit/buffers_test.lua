@@ -2686,6 +2686,8 @@ test("two saves of a slot in one second write two files (#522)", function()
     io.open(dir .. "20261110-120000-buf2-3.wav", "w"):close()
     assert_true(save_buffer(2))
     assert_equal(context.calls_named("saveBuffer")[3].args[2], dir .. "20261110-120000-buf2-4.wav")
+    -- The first write failed, freeing room for two loop saves.
+    context.polls.fire("bufferSaveResult", save_result_value(2, 1, true))
     -- the loop region's file too
     assert_true(save_buffer_loop(2)); assert_true(save_buffer_loop(2))
     saves = context.calls_named("saveBuffer")
@@ -2699,6 +2701,75 @@ test("two saves of a slot in one second write two files (#522)", function()
   end)
   os.date = real_date
   assert_true(ok, tostring(problem))
+end)
+
+test("six same-second save requests never send a filename twice (#1090)", function()
+  local context = load_strata(); finish_startup(context)
+  state_report(context, 2, 0, 4)
+  local real_date = os.date
+  os.date = function(format, ...)
+    if format == "%Y%m%d-%H%M%S" then return "20261110-120000" end
+    return real_date(format, ...)
+  end
+  local sent, why = {}, {}
+  local ok, problem = pcall(function()
+    for i = 1, 6 do sent[i], why[i] = save_buffer(2) end
+  end)
+  os.date = real_date
+  assert_true(ok, tostring(problem))
+  local calls = context.calls_named("saveBuffer")
+  local used = {}
+  for _, call in ipairs(calls) do
+    local path = call.args[2]
+    assert_true(not used[path], "two unfinished saves sent to " .. path)
+    used[path] = true
+  end
+  assert_equal(#calls, 4)
+  for i = 1, 4 do assert_true(sent[i]) end
+  for i = 5, 6 do assert_equal(sent[i], false); assert_equal(why[i], "save queue full") end
+  assert_equal(local_value("buffers")[2].saves_sent, 4)
+end)
+
+test("the oldest unresolved save limits its slot across out-of-order reports and new audio (#1090)", function()
+  local context = load_strata(); finish_startup(context)
+  for slot = 1, 8 do state_report(context, slot, 0, 4) end
+  assert_true(save_buffer(2)); assert_true(save_buffer_loop(2))
+  assert_true(save_buffer(2)); assert_true(save_buffer_loop(2))
+  context.polls.fire("bufferSaveResult", save_result_value(2, 4, true))
+  context.polls.fire("bufferSaveResult", save_result_value(2, 2))
+  context.polls.fire("bufferSaveResult", save_result_value(2, 2))
+  clear_buffer(2); load_buffer(2, "/tmp/other.wav"); state_report(context, 2, 1, 3)
+  assert_equal(save_buffer_loop(2), false, "the two holes do not free the oldest reservation")
+  for slot = 1, 8 do
+    if slot ~= 2 then assert_true(save_buffer(slot), "slot " .. slot .. " advances independently") end
+  end
+  assert_equal(local_value("buffers")[2].saves_sent, 4)
+  context.polls.fire("bufferSaveResult", save_result_value(2, 1, true))
+  assert_true(save_buffer_loop(2)); assert_true(save_buffer(2))
+  assert_equal(save_buffer(2), false, "number 3 still holds its reservation")
+  context.polls.fire("bufferSaveResult", save_result_value(2, 3))
+  assert_true(save_buffer(2))
+  assert_equal(local_value("buffers")[2].saves_sent, 7)
+end)
+
+test("the BUFFER gesture and PARAMETERS save trigger show a full save queue (#1090)", function()
+  local context = load_strata(); finish_startup(context); show_page("BUFFER")
+  state_report(context, 1, 0, 4)
+  for i = 1, 4 do assert_true(save_buffer(1)) end
+  key(1, 1); h.tap(3); key(1, 0); next_frame(context)
+  assert_true(h.screen_shows(context, "save queue full"), "BUFFER displays the refusal whole")
+  _menu.set_mode(true)
+  params:set("buf1_save", 1)
+  local trigger = params:lookup_param("buf1_save")
+  assert_equal(trigger.name, "buffer 1 save queue full", "PARAMETERS draws the trigger's name")
+  assert_equal(#context.calls_named("saveBuffer"), 4)
+  context.polls.fire("bufferSaveResult", save_result_value(1, 2))
+  assert_equal(trigger.name, "buffer 1 save queue full", "the oldest report is still outstanding")
+  context.polls.fire("bufferSaveResult", save_result_value(1, 1, true))
+  assert_equal(trigger.name, "buffer 1 save")
+  params:set("buf1_save", 1)
+  assert_equal(#context.calls_named("saveBuffer"), 5)
+  _menu.set_mode(false)
 end)
 
 -- #566: buffers.data is written 0.1 s after its last change, never inside

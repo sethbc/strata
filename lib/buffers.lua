@@ -49,7 +49,7 @@ return function(S)
   -- it replaced, so a failed load can be undone (buffer_load_failed).
   -- saves_sent counts the slot's saveBuffer commands (the engine counts them
   -- too and names one in its bufferSaveResult report); pending_saves holds
-  -- the newest of them, oldest first, each with its path, until the engine
+  -- all unresolved saves, oldest first, each with its path, until the engine
   -- reports how it ended (buffer_save_result).
   -- checking_from is the length shown before a load the engine checks in a
   -- routine first (a long file on a high tier), while it checks (nil
@@ -90,11 +90,8 @@ return function(S)
   -- last known seconds. tracked_loads: a slot's newest loads a bufferLoadFailed
   -- report can still undo (a report arrives within a fade wait and a read, so
   -- more than one is only ever pending for loads sent back to back).
-  -- tracked_saves: a slot's newest saves whose bufferSaveResult report is
-  -- still awaited. On the high tier a 300 s save takes seconds, so saves can
-  -- overlap; keeping only the newest 4 is still safe: the flash depends only
-  -- on saves_sent, and dropping an older entry only loses that save's console
-  -- line.
+  -- tracked_saves: the span of save numbers that can be outstanding in one
+  -- slot. Each keeps its path reserved until its own result arrives (#1090).
   -- check_notice_seconds: when no report has ended a long file's check this
   -- long after its load was sent, the console and BUFFER say the engine is
   -- still checking; nothing else changes (#317). A 300 s load (check and
@@ -614,25 +611,24 @@ return function(S)
     return path
   end
 
-  -- Count a save of the slot, track it for its bufferSaveResult report and
-  -- send it: the one place a saveBuffer leaves, so the two entry points
-  -- number their saves alike. A whole save keeps a copy of the slot's
-  -- settings as they are at the send (3.7), for the saved file
-  local function send_save(slot, path, start, length, loop)
-    local buffer = S.buffers[slot]
-    buffer.saves_sent = buffer.saves_sent + 1
-    if #buffer.pending_saves >= BUFFER_SETTLE.tracked_saves then table.remove(buffer.pending_saves, 1) end
-    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop or nil,
-      settings = (not loop) and S.lib.samples.snapshot(slot) or nil})
-    engine.saveBuffer(slot - 1, path, start, length)
-    request_redraw()  -- the row shows saving (M.saving, #905)
+  -- The next save must fit in the four consecutive numbers from the oldest
+  -- outstanding one. A later result can leave a hole inside that span.
+  local function save_queue_full(buffer)
+    local oldest = buffer.pending_saves[1]
+    return oldest and buffer.saves_sent + 1 - oldest.number >= BUFFER_SETTLE.tracked_saves
+  end
+
+  -- PARAMETERS draws the trigger's name itself while its menu is open.
+  local function update_save_param(slot, buffer)
+    local trigger = params:lookup_param("buf" .. slot .. "_save")
+    trigger.name = "buffer " .. slot .. (save_queue_full(buffer) and " save queue full" or " save")
   end
 
   -- Why a save of the slot cannot go: "invalid" (not a slot), "busy" (the slot
   -- records or awaits its take: an armed recording has `recording` set) or
   -- "empty" (the engine reports no length: a load shows at once, and the
   -- engine's report settles whether it holds audio; a replace take reads 0 s).
-  -- nil when it can.
+  -- "save queue full" while the oldest outstanding save holds the window.
   local function save_refusal(slot)
     if not valid_buffer_slot(slot) then return "invalid" end
     local buffer = S.buffers[slot]
@@ -644,23 +640,12 @@ return function(S)
       print("buffer " .. slot .. " is empty, nothing to save")
       return "empty"
     end
+    if save_queue_full(buffer) then
+      print("buffer " .. slot .. " save queue full")
+      header_flash("save queue full")
+      return "save queue full"
+    end
     return nil
-  end
-
-  -- Send a save of the slot: true when it was sent, else false and why (see
-  -- save_refusal). The engine reports how it ended (bufferSaveResult,
-  -- buffer_save_result), so nothing here says it saved: the file is written a
-  -- moment later, or not at all (a full disk). Whoever asks (the save param,
-  -- the page), no save goes while the slot records.
-  function save_buffer(slot)
-    slot = slot_index(slot)
-    local refusal = save_refusal(slot)
-    if refusal then return false, refusal end
-    util.make_dir(buffer_audio_dir)
-    local path = buffer_save_path(slot)
-    send_save(slot, path, 0, 1, false)
-    print("buffer " .. slot .. " saving to " .. path)
-    return true
   end
 
   -- The loop (start, length: fractions of the slot) a save of the slot's loop
@@ -684,22 +669,33 @@ return function(S)
     return values[LOOP.start_key] or 0, values[LOOP.length_key] or 1
   end
 
-  -- Timestamped stereo WAV of the slot's loop region in audio/strata/: true
-  -- when the save was sent (its result flashes "saved buf <n> loop"), else
-  -- false and why, as save_buffer says
-  function save_buffer_loop(slot)
+  -- Admit before choosing a name, numbering or sending. Keep the filename
+  -- and the whole save's settings until this particular result arrives.
+  local function send_save(slot, loop)
     slot = slot_index(slot)
     local refusal = save_refusal(slot)
     if refusal then return false, refusal end
-    local start, length = loop_region(slot)
-    start = util.clamp(start, 0, 1)
-    length = util.clamp(length, 0, 1 - start)
+    local start, length = 0, 1
+    if loop then
+      start, length = loop_region(slot)
+      start = util.clamp(start, 0, 1)
+      length = util.clamp(length, 0, 1 - start)
+    end
     util.make_dir(buffer_audio_dir)
-    local path = buffer_save_path(slot, "loop")
-    send_save(slot, path, start, length, true)
-    print("buffer " .. slot .. " saving its loop to " .. path)
+    local path = buffer_save_path(slot, loop and "loop")
+    local buffer = S.buffers[slot]
+    buffer.saves_sent = buffer.saves_sent + 1
+    table.insert(buffer.pending_saves, {number = buffer.saves_sent, path = path, loop = loop,
+      settings = (not loop) and S.lib.samples.snapshot(slot) or nil})
+    engine.saveBuffer(slot - 1, path, start, length)
+    update_save_param(slot, buffer)
+    request_redraw()
+    print("buffer " .. slot .. (loop and " saving its loop to " or " saving to ") .. path)
     return true
   end
+
+  function save_buffer(slot) return send_save(slot) end
+  function save_buffer_loop(slot) return send_save(slot, true) end
 
   -- bufferSaveResult poll: how one of the slot's saves ended. value = (save
   -- number * 2 + failed) * NUM_BUFFERS + slot index; the engine and
@@ -732,6 +728,7 @@ return function(S)
     end
     if not found then return end
     local save = table.remove(buffer.pending_saves, found)
+    update_save_param(slot, buffer)
     if failed then
       print("buffer " .. slot .. ": cannot save " .. save.path .. " (the engine wrote nothing; a file already there is kept)")
     else
