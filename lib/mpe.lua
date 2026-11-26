@@ -28,6 +28,20 @@ return function(S)
   -- per zone, the master channel's bend range in semitones
   local state = {channel = {}, master_range = {}}
 
+  -- The last layout the input used. A port or mode reset already releases
+  -- its keys, so observing the final params there also covers a combined read.
+  local applied_layout = {}
+  local function layout_differs()
+    for id, previous in pairs(applied_layout) do
+      if params:get(id) ~= previous then return true end
+    end
+    return false
+  end
+
+  local function remember_layout()
+    for id in pairs(applied_layout) do applied_layout[id] = params:get(id) end
+  end
+
   -- Both zones' master bend ranges back to the default. A controller sets
   -- its range once (RPN 0 on the master channel) and does not send it again,
   -- so only a new MPE configuration for the zone, or another controller (a
@@ -38,6 +52,7 @@ return function(S)
 
   -- Forget every channel's values and selected RPN; the master ranges stay
   function M.reset()
+    remember_layout()
     state.channel = {}
     for channel = 1, MPE.channels do
       state.channel[channel] = {bend = MPE.bend_center, slide = 0}
@@ -219,10 +234,42 @@ return function(S)
 
   -- Each hook runs contained: one that raises is reported and skipped
   local function layout_changed()
+    remember_layout()
     for index, hook in ipairs(layout_hooks) do
       S.lib.ui_frame.contained_call(layout_errors, index, "mpe layout hook", hook)
     end
   end
+
+  -- An ordinary read lets the later field clamp the earlier one. Fields
+  -- missing from an old file take their defaults after its explicit lines.
+  local function clamp_earlier(first, first_limit, second, second_limit)
+    local order = S.lib.params_setup.read_order
+    if (order(first) or math.huge) < (order(second) or math.huge) then
+      params:set(first, first_limit, true)
+    else
+      params:set(second, second_limit, true)
+    end
+  end
+
+  S.register_pset_hook({name = "mpe_layout", read = function(path_base, number, pset_path, silent)
+    if not silent then return end
+    -- If a port/mode change already released the keys, its reset saw the
+    -- raw PSET values. They still need their pairwise limits.
+    local needs_release = layout_differs()
+    local lower, upper = params:get("mpe_lower_members"), params:get("mpe_upper_members")
+    if lower > 0 and upper > 0 and lower + upper > MPE.max_total_members then
+      clamp_earlier("mpe_lower_members", math.max(0, MPE.max_total_members - upper),
+        "mpe_upper_members", math.max(0, MPE.max_total_members - lower))
+    end
+    for voice = 1, NUM_VOICES do
+      local prefix = "v" .. voice .. "_zone"
+      local low, high = prefix .. "_low", prefix .. "_high"
+      if params:get(low) > params:get(high) then
+        clamp_earlier(low, params:get(high), high, params:get(low))
+      end
+    end
+    if needs_release and layout_differs() then layout_changed() else remember_layout() end
+  end})
 
   -- The member counts never overlap: while both are above 0, setting one
   -- lowers the other so their sum is at most 14 (that set runs its own
@@ -241,6 +288,8 @@ return function(S)
       max = MPE.max_members, default = MPE.max_members, action = function() keep_apart("mpe_lower_members", "mpe_upper_members") end}
     params:add{type = "number", id = "mpe_upper_members", name = "mpe upper members", min = 0,
       max = MPE.max_members, default = 0, action = function() keep_apart("mpe_upper_members", "mpe_lower_members") end}
+    applied_layout.mpe_lower_members = params:get("mpe_lower_members")
+    applied_layout.mpe_upper_members = params:get("mpe_upper_members")
     params:add{type = "number", id = "mpe_bend_range", name = "mpe bend range", min = 1, max = 96, default = 48}
   end
 
@@ -265,6 +314,9 @@ return function(S)
           if high < params:get(prefix .. "_low") then params:set(prefix .. "_low", high) end
           layout_changed()
         end}
+      for _, id in ipairs({prefix, prefix .. "_low", prefix .. "_high"}) do
+        applied_layout[id] = params:get(id)
+      end
     end
   end
 

@@ -305,6 +305,105 @@ test("layout-change hooks run once per changed layout param, each contained", fu
   assert_true(printed[1]:find("layout", 1, true) ~= nil)
 end)
 
+local function key(context, kind, channel, note)
+  context.midi.send(1, {type = kind, ch = channel, note = note, vel = 100})
+end
+
+for _, silent in ipairs({false, true}) do
+  test((silent and "silent" or "ordinary") .. " PSET moves a held MPE member to its new zone (#1107)", function()
+    local context, S, mpe = setup(4)
+    params:set("midi_note_off", 2)
+    params:set("mpe_upper_members", 8)  -- lower ends at 7, upper begins at 8
+    local path = context.data_dir .. "split.pset"
+    params:write(path)
+    params:set("mpe_lower_members", 7)  -- channel 8 now plays lower
+    key(context, "note_on", 8, 60)
+    assert_equal(S.lib.notes.held(1), 1)
+    for _, cc_value in ipairs({{101, 0}, {100, 0}, {6, 12}}) do
+      context.midi.send(1, {type = "cc", ch = 16, cc = cc_value[1], val = cc_value[2]})
+    end
+    S.lib.midi_in.set_note_tap("learn", function() end)
+    context.clear_engine_calls()
+    params:read(path, silent)
+    assert_equal(S.lib.notes.held(1), 0, "former lower member released")
+    assert_equal(next(S.midi_state.held[1]), nil, "former key cleared")
+    assert_equal(#context.calls_named("voiceOff"), 1, "the held voice stops once")
+    assert_equal(S.lib.midi_in.note_tap_owner(), "learn", "layout edits keep the learn tap")
+    S.lib.midi_in.clear_note_tap("learn")
+    key(context, "note_on", 8, 64)
+    assert_equal(S.lib.notes.held(2), 1, "next note plays upper")
+    key(context, "note_off", 8, 60)
+    assert_equal(S.lib.notes.held(2), 1, "stale off leaves new key held")
+    context.midi.send(1, {type = "pitchbend", ch = 16, val = 16383})
+    assert_near(mpe.values(8).bend, full_up(12), 1e-9, "upper master kept its negotiated range")
+    context.clear_engine_calls()
+    params:read(path, true)
+    assert_equal(#context.calls_named("voiceOff"), 0)
+    assert_equal(S.lib.notes.held(2), 1, "duplicate read keeps the new key")
+    assert_near(mpe.values(8).bend, full_up(12), 1e-9, "duplicate read keeps expression")
+  end)
+end
+
+test("a silent read migrates a missing split range and releases its old owner (#1107)", function()
+  local context, S = setup(4)
+  params:set("midi_note_off", 2)
+  params:set("v1_zone_low", 65)
+  local path = context.data_dir .. "old-zones.pset"
+  params:write(path)
+  h.write_text(path, (h.file_text(path):gsub('"v1_zone_low": [^\n]+\n', "")))
+  key(context, "note_on", 2, 70)
+  params:read(path, true)
+  assert_equal(params:get("v1_zone_low"), 0)
+  assert_equal(S.lib.notes.held(1), 0, "range migration releases held key")
+  key(context, "note_on", 2, 50)
+  assert_equal(S.lib.notes.held(1), 1, "a key newly inside the range plays")
+end)
+
+test("silent reads resolve conflicting member counts and note ranges in the ordinary read order (#1107)", function()
+  local context, S, mpe = setup(4)
+  local path = context.data_dir .. "order.pset"
+  local lower, upper = '"mpe_lower_members": 9\n', '"mpe_upper_members": 9\n'
+  local low, high = '"v1_zone_low": 70\n', '"v1_zone_high": 50\n'
+  for _, case in ipairs({
+    {lower .. upper .. lower .. low .. high .. low, 5, 9, 50, "upper"},
+    {upper .. lower .. high .. low, 9, 5, 70, "lower"},
+    {upper .. high .. low, 15, 0, 70, "lower"},  -- missing lower defaults last
+    {"", 15, 0, nil, "lower"},                   -- before MPE params
+  }) do
+    h.write_text(path, '"midi_channel_mode": 4\n' .. case[1])
+    for _, silent in ipairs({false, true}) do
+      params:set("mpe_lower_members", 7); params:set("mpe_upper_members", 7)
+      params:set("v1_zone_low", 0); params:set("v1_zone_high", 127)
+      params:read(path, silent)
+      assert_equal(params:get("mpe_lower_members"), case[2], "lower members")
+      assert_equal(params:get("mpe_upper_members"), case[3], "upper members")
+      assert_equal(mpe.zone(9), case[5], "the routing of channel 9")
+      assert_equal(params:get("v1_zone_low"), case[4] or 0, "low end")
+      assert_equal(params:get("v1_zone_high"), case[4] or 127, "high end")
+      local note = case[4] or 60
+      key(context, "note_on", 2, note)
+      assert_equal(S.lib.notes.held(1), 1, "the voice plays at its boundary")
+      params:read(path, true)
+      assert_equal(S.lib.notes.held(1), 1, "duplicate conflicting values resolve to the same layout")
+      key(context, "note_off", 2, note)
+      assert_equal(S.lib.params_setup.read_order("midi_channel_mode"), nil, "order is scoped to the read")
+    end
+  end
+end)
+
+test("a silent change to the zones keeps a plain-mode key (#1107)", function()
+  local context, S = setup(1)
+  params:set("midi_note_off", 2)
+  local path = context.data_dir .. "plain-zones.pset"
+  params:write(path)
+  params:set("mpe_lower_members", 6)
+  key(context, "note_on", 1, 60)
+  params:read(path, true)
+  assert_equal(S.lib.notes.held(1), 1)
+  key(context, "note_off", 1, 60)
+  assert_true(not S.voices[1].active)
+end)
+
 test("reset forgets every channel's values", function()
   local _, _, mpe = setup()
   mpe.control({type = "pitchbend", ch = 2, val = 16383}); mpe.control({type = "channel_pressure", ch = 2, val = 9})
