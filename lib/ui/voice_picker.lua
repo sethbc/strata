@@ -29,12 +29,13 @@ return function(S)
   M.VOICE_PICKER = VOICE_PICKER
 
   -- open; the voice it loads into; the cursor (a row index) and the view's
-  -- tail, kept while it is closed; the slot ALT+K3 last went down on (nil
+  -- tail, kept while it is closed; the filled slot ALT+K2 went down on,
+  -- forgotten when E2 leaves it; the slot ALT+K3 last went down on (nil
   -- for a plain K3), read only while K3's press is the picker's
   -- (S.lib.ui_modal.held_seconds answers): its release opens the name
   -- entry. The press times are the modal's (#866), which a covering owner,
   -- the norns menu and a name entry forget
-  local picker = {open = false, voice = 1, cursor = 1, tail = 0, k3_slot = nil}
+  local picker = {open = false, voice = 1, cursor = 1, tail = 0, k2_slot = nil, k3_slot = nil}
 
   local owner
 
@@ -117,7 +118,7 @@ return function(S)
     local row = current_row()
     local filled = row.slot and presets().preset(row.slot) ~= nil
     if k2_held() then
-      if not filled then return "K2:cancel" end
+      if not filled or row.slot ~= picker.k2_slot then return "K2:cancel" end
       return k2_held_long() and "K2:clear" or "K2:hold"
     end
     if alt_held then
@@ -132,8 +133,10 @@ return function(S)
 
   local function enc_handler(n, d)
     if not picker.open or n ~= 2 then return end  -- E3 does nothing
+    local previous = picker.cursor
     picker.cursor, picker.tail = field_list.move_scroll(rows_for(picker.voice), picker.cursor, picker.tail, d,
       VOICE_PICKER.visible)
+    if picker.cursor ~= previous then picker.k2_slot = nil end
     request_redraw()
   end
 
@@ -195,10 +198,16 @@ return function(S)
     if not picker.open then return end
     if n == 2 then
       if z == 1 then
-        if not S.alt_held then M.close() end
-      elseif k2_held() then
-        local row = current_row()
-        if k2_held_long() and row.slot then presets().clear(row.slot) end
+        if S.alt_held then
+          local slot = current_row().slot
+          picker.k2_slot = slot and presets().preset(slot) and slot
+        else
+          M.close()
+        end
+      else
+        local slot = picker.k2_slot
+        picker.k2_slot = nil
+        if slot and k2_held_long() then presets().clear(slot) end
       end
     elseif n == 3 then
       if z == 1 then
@@ -222,14 +231,14 @@ return function(S)
   function M.open(voice_idx)
     if picker.open then return end
     if type(voice_idx) ~= "number" or voice_idx % 1 ~= 0 or voice_idx < 1 or voice_idx > NUM_VOICES then return end
-    picker.open, picker.voice, picker.k3_slot = true, voice_idx, nil
+    picker.open, picker.voice, picker.k2_slot, picker.k3_slot = true, voice_idx, nil, nil
     S.lib.ui_modal.push(owner)
   end
 
   -- Close it (K2); closed, nothing. The cursor stays for the next open
   function M.close()
     if not picker.open then return end
-    picker.open, picker.k3_slot = false, nil
+    picker.open, picker.k2_slot, picker.k3_slot = false, nil, nil
     S.lib.ui_modal.pop(owner)
   end
 
@@ -252,7 +261,7 @@ return function(S)
     if picker.cursor < 1 or picker.cursor > count or picker.cursor % 1 ~= 0 then
       return "the cursor is on " .. tostring(picker.cursor) .. " of " .. count
     end
-    if not picker.open and picker.k3_slot ~= nil then
+    if not picker.open and (picker.k2_slot ~= nil or picker.k3_slot ~= nil) then
       return "a key is held on the closed picker"
     end
   end)
