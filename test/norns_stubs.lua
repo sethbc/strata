@@ -1457,6 +1457,11 @@ local function make_params(util, controlspec)
       param.raw = raw
       if not silent then bang(param) end
     end
+    local map = norns.pmap.data[param.id]
+    if map then
+      map.value = util.round(util.linlin(map.out_lo, map.out_hi, map.in_lo, map.in_hi, param.raw))
+      if map.echo then midi.vports[map.dev]:cc(map.cc, map.value, map.ch) end
+    end
   end
 
   -- core/paramset.lua: params:delta is the param object's own delta

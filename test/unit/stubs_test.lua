@@ -335,6 +335,31 @@ test("stub params: lookup holds indices, add returns nothing, a wrapping control
   params:set_raw("probe_wrap", 1.25); assert_near(params:get_raw("probe_wrap"), 0.25, 1e-9, "set_raw wraps too")
 end)
 
+test("control sets update the map and echo its scaled CC even on a silent or unchanged set (#1063)", function()
+  local context = load_strata()
+  local device = context.midi.plug(3, "controller")
+  params:add_control("probe_echo", "echo", controlspec.new(0, 100, "lin", 0, 0))
+  local actions = 0
+  params:set_action("probe_echo", function() actions = actions + 1 end)
+  norns.pmap.new("probe_echo")
+  norns.pmap.assign("probe_echo", 3, 5, 19)
+  local map = norns.pmap.data.probe_echo
+  map.in_lo, map.in_hi, map.out_lo, map.out_hi = 20, 90, 0.25, 0.75
+  params:set("probe_echo", 50)
+  assert_equal(map.value, 55, "the map follows the raw value with echo off")
+  assert_equal(actions, 1)
+  assert_equal(#device.sent, 0)
+  map.echo = true
+  params:set_raw(params.lookup.probe_echo, 0.625, true)
+  assert_equal(map.value, 73, "the map rounds 72.5")
+  params:set("probe_echo", 62.5)
+  assert_equal(actions, 1, "silent and unchanged sets run no action")
+  assert_equal(#device.sent, 2)
+  for _, message in ipairs(device.sent) do
+    assert_equal(table.concat(message, ","), "180,19,73", "channel 5 CC 19 on port 3")
+  end
+end)
+
 test("stub params:write and params:read follow lua/core/paramset.lua", function()
   local context = load_strata()
   local pset_path = context.data_dir .. "stub.pset"
