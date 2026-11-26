@@ -60,8 +60,8 @@ return function(S)
   for voice_idx = 1, NUM_VOICES do CLOCK_NAMES[#DIVISIONS.names + voice_idx] = "voice " .. voice_idx end
 
   -- Per sequence: values (RSEQ.values numbers), position (1..length) and
-  -- count (the division's count of its last step, floor(beats / its
-  -- beats); nil until the first reading on its clock)
+  -- count (the last floor(beats / division beats), nil until the first
+  -- reading on a clock). count_clock names the division that counted it.
   local sequences = {}
   for n = 1, RSEQ.count do
     local values = {}
@@ -168,12 +168,15 @@ return function(S)
   S.lib.lfos.on_step(function()
     local beats
     for n = 1, RSEQ.count do
-      if not clock_voice(n) then
+      local option = clock_option(n)
+      local division = DIVISIONS.beats[option]
+      if division then
         beats = beats or clock.get_beats()
         local sequence = sequences[n]
-        local count = math.floor(beats / DIVISIONS.beats[clock_option(n)])
+        local count = math.floor(beats / division)
         if sequence.count ~= nil and count ~= sequence.count then step(n) end
         sequence.count = count
+        sequence.count_clock = option
       end
     end
   end)
@@ -311,7 +314,14 @@ return function(S)
 
   -- The PSET's side file: written with every PSET save, read after every
   -- PSET load (the live file follows), deleted with the PSET
-  S.register_pset_hook(files.pset_hook(nil, function() save_live() end))
+  S.register_pset_hook(files.pset_hook(nil, function(silent)
+    if silent then
+      for n, sequence in ipairs(sequences) do
+        if sequence.count_clock ~= clock_option(n) then sequence.count = nil end
+      end
+    end
+    save_live()
+  end))
 
   -- The live file: loaded at init, saved as the values change and at
   -- cleanup once it was read, missing or set aside. A first start's draw

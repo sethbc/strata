@@ -73,6 +73,55 @@ test("a sequence steps on its division and repeats", function()
   assert_equal(sequences.position(1), moved(held, 1, 4), "the next bar steps")
 end)
 
+for _, mode in ipairs({"ordinary", "silent"}) do
+  test(mode .. " PSET read changes a random sequence's division without a step (#1101)", function()
+    local context, S, sequences = loaded()
+    local path = context.data_dir .. "strata-01.pset"
+    params:set("rseq1_clock", clock_index(S, "1 bar"))
+    params:set("rseq1_drift", 100)
+    sequences.set_value(1, 3, 1)
+    params:write(path)
+
+    params:set("rseq1_clock", clock_index(S, "voice 2"))
+    for _ = 1, (3 - sequences.position(1)) % 8 do S.lib.engine_sync.retrigger(2, 1, "step") end
+    params:set("rseq1_clock", clock_index(S, "1/4"))
+    clock.set_beat(8.5); lfo_step(context)
+    assert_equal(sequences.position(1), 3, "quarter notes at step 3 on beat 8.5")
+    params:read(path, mode == "silent")
+    lfo_step(context)
+    assert_equal(sequences.position(1), 3, "the first bar count keeps the step")
+    assert_equal(sequences.value(1), 1, "drift kept the recalled value")
+
+    clock.set_beat(12)
+    params:read(path, mode == "silent")
+    lfo_step(context)
+    assert_equal(sequences.position(1), 4, "the same clock keeps its bar boundary")
+    assert_true(sequences.values(1)[3] < 1, "drift renewed the value left on the boundary")
+    lfo_step(context)
+    assert_equal(sequences.position(1), 4, "one step for the bar")
+  end)
+end
+
+test("silent random sequence clock recalls through a voice forget the previous division (#1101)", function()
+  local context, S, sequences = loaded()
+  local voice_path = context.data_dir .. "strata-01.pset"
+  local division_path = context.data_dir .. "strata-02.pset"
+  params:set("rseq1_clock", clock_index(S, "voice 2"))
+  params:write(voice_path)
+  params:set("rseq1_clock", clock_index(S, "1/4"))
+  params:write(division_path)
+  clock.set_beat(8.5); lfo_step(context)
+  local start = sequences.position(1)
+
+  params:read(voice_path, true)
+  S.lib.engine_sync.retrigger(2, 1, "step")
+  assert_equal(sequences.position(1), moved(start, 1, 8), "one step for the voice hit")
+  clock.set_beat(9.5)
+  params:read(division_path, true)
+  lfo_step(context)
+  assert_equal(sequences.position(1), moved(start, 1, 8), "the returned division starts fresh")
+end)
+
 test("a sequence clocked by a voice steps at each of its hits and at no other voice's", function()
   local context, S, sequences = loaded()
   params:set("rseq2_clock", clock_index(S, "voice 2"))
