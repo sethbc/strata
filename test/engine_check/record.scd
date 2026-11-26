@@ -148,7 +148,7 @@ var voiceBufFrames = { arg voice; h.getControl(engine.synths[engine.grainKey(voi
 var numBuffersReset = {
     h.stopAllVoices;
     engine.numBuffers.do({ arg slot; h.command(\clearBuffer, slot) });
-    server.sync;
+    h.teardownSync("reset recording slots");
 };
 // One check of a test: an exception fails it, not the whole area
 var test = { arg name, body;
@@ -2091,5 +2091,5 @@ engine.recordStatePoll.stop;
 engine.takeWriteFailedPoll.stop;
 h.stopAllVoices;
 engine.numBuffers.do({ arg slot; h.command(\clearBuffer, slot) });
-server.sync;
+h.teardownSync("clear recording slots after area");
 }

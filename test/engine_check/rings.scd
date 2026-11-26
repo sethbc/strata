@@ -566,7 +566,7 @@ check.((otherWriters.size == (other.numVoices + 1)) and: { otherWriters.every(_.
     and: { h.synthNames(other.context.xg).count({ arg name; name == \strataRingWrite }) == (other.numVoices + 1) },
     "rings: a second engine starts its own writers");
 h.freeEngine(other);
-server.sync; 0.2.wait;
+h.teardownSync("free ring engine"); 0.2.wait;
 check.(h.synthNames(other.context.xg).includes(\strataRingWrite).not
     and: { other.ringWriterKeys.every({ arg key; other.synths[key].isNil }) }
     and: { (otherRings[\voiceL] ++ otherRings[\voiceR] ++ otherRings[\copyL] ++ otherRings[\copyR]

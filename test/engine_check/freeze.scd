@@ -1207,7 +1207,7 @@ check.(ok and: { readings[0] == 0 } and: { readings[1] == 0 } and: { writerNodes
         ok, readings[0], readings[1]));
 h.stopAllVoices(other);
 h.freeEngine(other);
-server.sync; 0.2.wait;
+h.teardownSync("free high engine"); 0.2.wait;
 check.((kept.size == (2 * other.numVoices)) and: { kept.every({ arg buffer; buffer.bufnum.isNil }) }
     and: { h.synthNames(other.context.xg).includes(\strataRingWriteSpectral).not },
     "freeze: free frees the high tier's FFT buffers (% of % freed)".format(
@@ -1366,7 +1366,7 @@ check.((kept.size == (2 * other.numVoices)) and: { kept.every({ arg buffer; buff
         fails = List.new(8);
         failWatcher = OSCFunc({ arg msg; fails.add(msg.copyRange(1, 2)) }, '/fail', server.addr);
         h.freeEngine(other);
-        1.5.wait; server.sync;
+        1.5.wait; h.teardownSync("free engine during a copy");
         failWatcher.free;
         check.(readings.every({ arg value; value == true }) and: { other.areaState[\freeze][\copied][2].not } and: { fails.isEmpty },
             "freeze: free with an input copy waiting for its fade runs none of it (copied, waiting, not copied: %; copied after the free %; server failures %)".format(

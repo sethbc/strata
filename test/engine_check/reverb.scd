@@ -587,7 +587,7 @@ checkCommands = {
         "reverb: the lines are sixteen buffers of fdnLineFrames whose bufnums a bypass and a lift keep (frames %, bufnums %, the first node's lineBuf %, after the lift %)".format(
             lineFrames, bufnums, firstLineBuf, freed));
     h.freeEngine(high);
-    server.sync;
+    h.teardownSync("free high engine");
 };
 
 guarded.("the graph", checkGraph);

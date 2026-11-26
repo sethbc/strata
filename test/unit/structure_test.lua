@@ -3795,6 +3795,21 @@ local function read_repo_text(path)
   return text
 end
 
+test("engine area teardown barriers use the bounded sync (#1119)", function()
+  local files = assert(io.popen("git -C " .. h.shell_quote(repo_root) .. " ls-files 'test/engine_check/*.scd'"))
+  local unbounded = {}
+  for path in files:lines() do
+    local code = read_repo_text(path):gsub("//[^\n]*", ""):gsub("%d[%d.]*%.wait%s*;", "")
+    code = code:gsub("h%.stopAllVoices%s*%b()", "h.stopAllVoices")
+    if code:find("h%.freeEngine%s*%b()%s*;%s*server%.sync%f[%W]")
+      or code:find("h%.stopAllVoices%s*;%s*server%.sync%f[%W]") then
+      table.insert(unbounded, path)
+    end
+  end
+  assert_true(files:close(), "could not list the engine check areas")
+  assert_equal(#unbounded, 0, "unbounded teardown sync in " .. table.concat(unbounded, ", "))
+end)
+
 test("the workflow reads only, keeps no credentials and pins by full commit (#490, #533)", function()
   local workflow = read_repo_text(".github/workflows/test.yml")
   assert_true(workflow:find("\npermissions:\n  contents: read\n") ~= nil, "a top-level permissions: contents: read")

@@ -411,7 +411,7 @@ checkFreshEngine = {
     values = [fresh.synths[\delay] !? { arg synth; getControl.(synth, \frozen) },
         fresh.areaState[\effects][\controls][\delay][\frozen]];
     h.freeEngine(fresh);
-    server.sync;
+    h.teardownSync("free fresh engine");
     check.(values == [0, 0], "delay: a fresh engine's delay starts unfrozen, the node and the kept value (%)".format(values));
 };
 

@@ -1742,7 +1742,7 @@ checkStartStop = {
     server.sync; 0.1.wait;
     running = group !? { h.synthNames(group) } ? [];
     h.freeEngine(other);
-    server.sync; 0.1.wait;
+    h.teardownSync("free modulation engine"); 0.1.wait;
     left = h.synthNames(other.context.xg);
     check.((group.notNil and: { first == group.nodeID }) and: { nodes.size == 1 } and: { nodes[0][\def] == \strataFastOffsets }
         and: { busIndex.notNil } and: { nodes[0][\controls][\out] == busIndex }

@@ -851,10 +851,10 @@ check.(ok and: { other.synths[other.copyWriterKeys[3]].isNil } and: { spectralNo
 stepProbe.free;
 h.stopAllVoices(other);
 h.freeEngine(other);
-server.sync;
+h.teardownSync("free high engine");
 
 probeGroup.free;
 [quietBus, nowBus, readOut, stepBus].do(_.free);
 rectEnv.free;
-server.sync;
+h.teardownSync("free output ring probes");
 }

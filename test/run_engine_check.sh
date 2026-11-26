@@ -349,7 +349,7 @@ fi
 
 # keep the interesting lines: class-library errors, the check results and
 # each area's time
-grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch )|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error|Parse error|syntax error|not understood" "$output" || true
+grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch |teardown )|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error|Parse error|syntax error|not understood" "$output" || true
 
 # scsynth prints "alloc failed" when a UGen cannot get real-time memory (it
 # then outputs zeros) and "Too many grains!" when a GrainIn or GrainBuf would
