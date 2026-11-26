@@ -349,8 +349,7 @@ fi
 
 # keep the interesting lines: class-library errors, the check results and
 # each area's time
-fatal_output='^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error'
-grep -E "^(ok |FAIL|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch )|$fatal_output|Parse error|syntax error|not understood" "$output" || true
+grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch )|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error|Parse error|syntax error|not understood" "$output" || true
 
 # scsynth prints "alloc failed" when a UGen cannot get real-time memory (it
 # then outputs zeros) and "Too many grains!" when a GrainIn or GrainBuf would
@@ -358,9 +357,10 @@ grep -E "^(ok |FAIL|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch )|$fatal_outp
 # invariant broken" when its synth bookkeeping finds a state it should never
 # reach. A collector count error fails the check even when sclang survives
 # and posts a pass marker (#1082). So does a scsynth still
-# running after its stop (exit 3: a full run starts no shard after it)
+# running after its stop (exit 3: a full run starts no shard after it).
+# lifecycle.scd checks real warnings against the quoted expression below.
 if grep -q "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] && [ -z "$server_left" ] \
-  && ! grep -qE "$fatal_output" "$output"; then
+  && ! grep -qE "^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error" "$output"; then
   exit 0
 fi
 echo "--- full sclang output ---"
