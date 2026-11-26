@@ -606,19 +606,23 @@ return function(S)
   owner = {name = "SLICE", close = function() M.close() end, draw = draw, hints = hints, enc = enc, key = key, animates = animates}
   M.owner = owner
 
-  -- While the key row is picked, a MIDI note sets the key to its number:
+  local function key_focused()
+    return editor.open and editor.view == "rows" and EDITOR.rows[editor.row] == "key"
+      and S.lib.ui_modal.top() == owner and not norns.menu.status()
+  end
+
+  -- While the key row is visible and picked, a MIDI note sets the key to its number:
   -- every note a voice receives (the note hooks' heard, lib/midi_in.lua),
   -- a note outside a slicing voice's slices too (design §3.7). The hook
   -- only notes it, and the next clock step sets it (a hook sends nothing)
   S.register_note_hook({name = "slice editor", heard = function(_, note)
-    if not editor.open or editor.view ~= "rows" or EDITOR.rows[editor.row] ~= "key" then return end
-    pending_key = note
+    if key_focused() then pending_key = note end
   end})
   S.lib.lfos.on_step(function()
     if pending_key == nil then return end
     local note = pending_key
     pending_key = nil
-    if editor.open and settings(editor.slot) then
+    if key_focused() and settings(editor.slot) then
       S.lib.samples.set(editor.slot, "key", note)
       request_redraw()
     end
