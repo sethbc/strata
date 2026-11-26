@@ -705,9 +705,8 @@ checkLongSave.value;
     if (File.exists(path)) { File.delete(path) };
 }.value;
 
-// An error in starting the rename (renameIntoPlace throwing: here a mover
-// whose pending count is unreadable) leaves no rename scheduled, so the
-// write itself reports failed, once, deletes its .part and leaves no
+// An unreadable mover pending count ends the rename before handoff. The
+// write reports failure once, deletes its .part and leaves no
 // rename marked under way for the path (a later write would wait on it).
 {
     var dir = scratchRoot +/+ "files-mover-throw/", other, mover, path = (dir +/+ "throw.wav").standardizePath, noBoard = scratchRoot +/+ "no-board-model";

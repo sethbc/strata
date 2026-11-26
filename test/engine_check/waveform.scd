@@ -256,6 +256,146 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     command.(\clearBuffer, slot); server.sync;
 }.value;
 
+// Two registered loads with the same duration: a later length report alone
+// cannot distinguish their audio or show which overview survived on disk.
+{
+    var dir = scratchRoot +/+ "peaks-publication", bin = dir +/+ "bin", original = "PATH".getenv;
+    var quiet = dir +/+ "quiet.wav", loud = dir +/+ "loud.wav", frames = 24000, period = engine.bufferStatePoll.period;
+    var flushPolls = {
+        var reached = Condition(false);
+        OSCFunc({ reached.test = true; reached.signal }, '/strataCheckPeaksPollsDrained').oneShot;
+        NetAddr.localAddr.sendMsg('/strataCheckPeaksPollsDrained');
+        h.awaitReply(reached)
+    };
+    File.mkdir(bin);
+    File.copy(h.testDir +/+ "engine_check/fixtures/hold-wav-mv.sh", bin +/+ "mv");
+    ("chmod 700 " ++ (bin +/+ "mv").shellQuote).systemCmd;
+    h.writeTestFile(quiet, rate, frames, [0.25, 0.25]);
+    h.writeTestFile(loud, rate, frames, [0.75, 0.75]);
+    "PATH".setenv(bin ++ ":" ++ original);
+    [false, true].do({ arg reload;
+        var folder = dir +/+ ("held-peaks-" ++ reload.asString), old, target, path, mover, oldWritten, latest, first;
+        var reports = List.new(8), pollIndex = CronePollRegistry.getPollFromName(\bufferState).index, watch;
+        var build = {
+            var e = h.startEngine((settingsDir: folder, modelPath: dir +/+ "no-board"));
+            e.bufferStatePoll.setTime(3600); e.bufferStatePoll.start;
+            e
+        };
+        target = build.value; old = target; path = target.peaksPath(0); mover = target.areaState[\waveform][\mover];
+        watch = OSCFunc({ arg msg;
+            if (msg[1] == pollIndex and: { stateSlot.(msg[2]) == 0 } and: { (msg[2] % 1000) > 0.1 }) {
+                reports.add(msg[2]);
+            }
+        }, '/poll/value');
+        h.commandTo(target, \loadBuffer, 0, quiet, 0);
+        first = target.bufferLoads[0];
+        check.(waitFor.({ (path ++ ".barrier/in.*").pathMatch.notEmpty }), "waveform: first .250 load reached the controlled OS rename");
+        (target.peaksMoverBacklog - 1).do({ arg n;
+            var destination = folder +/+ ("filler" ++ n), part = destination ++ ".part";
+            File.use(part, "w", { arg f; f.write("queued") });
+            target.renameIntoPlace(part, destination, {});
+        });
+        check.(mover[\pending] == target.peaksMoverBacklog and: { waitFor.({ (path ++ ".barrier/in.*").pathMatch.size == 2 }) },
+            "waveform: the full FIFO and timed-out fallback both hold the old peaks source");
+        oldWritten = old.areaState[\waveform][\written][0];
+        if (reload) { old.bufferStatePoll.stop; h.freeEngine(old); target = build.value };
+        h.commandTo(target, \loadBuffer, 0, loud, 0); h.awaitLoad(0, target);
+        latest = target.bufferLoads[0];
+        check.(readPeaksFile.(path)[\peaks].every({ arg v; v == "0.750" }) and: { target.peaksUnchanged(0, frames) },
+            "waveform: the newer equal-length load publishes .750 to disk and the cache before releasing the old carriers");
+        File.use(path ++ ".release", "w", { arg f; f.write("release") });
+        check.(waitFor.({ (path ++ ".barrier/out.*").pathMatch.size == 2 and: { mover[\pending] == 0 } }),
+            "waveform: both old carriers exit and the queued renames drain before inspecting the result (reload %)".format(reload));
+        0.1.wait; flushPolls.value;
+        check.(readPeaksFile.(path)[\peaks].every({ arg v; v == "0.750" })
+            and: { target.peaksUnchanged(0, frames) } and: { (h.bufferSample(target.buffersL[0], 8192) - 0.75).abs < 0.001 }
+            and: { target.bufferFrames[0] == frames } and: { reports.size == 1 }
+            and: { (reports.first - target.bufferStateValue(0)).abs < 0.01 } and: { (folder +/+ "*.part").pathMatch.isEmpty }
+            and: { reload.not or: { old.areaState[\waveform][\written][0] == oldWritten } },
+            "waveform: after both old renames, .750 audio, file, cache and exactly one load action agree (reload %, old %, new %, reports %)".format(
+                reload, first, latest, reports));
+        watch.free; target.bufferStatePoll.stop; h.freeEngine(target);
+    });
+    // The arming's explicit current guard follows a stop; the end-of-take
+    // action and later background refresh can still belong to that slot.
+    {
+        var folder = dir +/+ "held-peaks-actions", e = h.startEngine((settingsDir: folder, modelPath: dir +/+ "no-board"));
+        var path = e.peaksPath(0), calls = List.new(2), mover = e.areaState[\waveform][\mover];
+        var remember = { arg kind; calls.add([kind, readPeaksFile.(path) !? { arg f; f[\peaks].first }]) };
+        e.storeSlotPeaks(0, FloatArray.fill(points, 0.25));
+        e.writeRecordPeaks(0, frames, { remember.(\armed) }, { true });
+        check.(waitFor.({ (path ++ ".barrier/in.*").pathMatch.notEmpty }),
+            "waveform: the arming rename has reached its barrier before the end and refresh");
+        e.writeRecordPeaks(0, frames, { remember.(\ended) });
+        e.storeSlotPeaks(0, FloatArray.fill(points, 0.75));
+        e.writeRecordPeaks(0, frames, nil);
+        check.(waitFor.({ e.peaksUnchanged(0, frames) }),
+            "waveform: the refresh publishes before the older arming carrier is released");
+        File.use(path ++ ".release", "w", { arg f; f.write("release") });
+        check.(waitFor.({ (path ++ ".barrier/out.*").pathMatch.notEmpty and: { mover[\pending] == 0 } }),
+            "waveform: the arming carrier exits and all refresh requests drain");
+        flushPolls.value;
+        check.(calls.asArray == [[\armed, "0.750"], [\ended, "0.750"]] and: { e.peaksUnchanged(0, frames) },
+            "waveform: the latest refresh completes the still-current arming and take end once after its file is in place (actions %)".format(calls));
+        h.freeEngine(e);
+    }.value;
+    {
+        var folder = dir +/+ "launch-error", e = h.startEngine((settingsDir: folder, modelPath: dir +/+ "no-board"));
+        var part = folder +/+ "launch.part", dst = (folder +/+ "buf1.peaks").asSymbol, results = List.new(2);
+        var mover = e.areaState[\waveform][\mover], calls = 0;
+        e.areaState[\waveform][\mover] = (alive: true, pending: nil);
+        try { e.writeSlotPeaks(0, frames, { calls = calls + 1 }) };
+        e.areaState[\waveform][\mover] = mover;
+        check.(calls == 1 and: { e.pathRenames.isEmpty } and: { (folder +/+ "*.part").pathMatch.isEmpty },
+            "waveform: an unreadable mover before handoff releases the claim and the current audio action");
+        e.stopPeaksMover;
+        File.use(part, "w", { arg f; f.write("peaks") });
+        dst.addUniqueMethod(\shellQuote, { Error("injected fallback launch failure").throw });
+        protect {
+            try { e.renameIntoPlace(part, dst, { arg written; results.add(written) }, true) };
+        } { dst.removeUniqueMethods };
+        check.(results.asArray == [false] and: { File.exists(part).not },
+            "waveform: a direct fallback that cannot launch releases its part and reports failure once");
+        h.freeEngine(e);
+    }.value;
+    // A public WAV save can name the same output through a directory alias.
+    // Hold it during interleaving, before there is a handed-off record to revoke.
+    {
+        var folder = dir +/+ "preparation", alias = dir +/+ "preparation-alias";
+        var e = h.startEngine((settingsDir: folder, modelPath: dir +/+ "no-board")), path = e.peaksPath(0);
+        var generation, part, n, save, header, opened = false, resume = Condition(false);
+        ("ln -s " ++ folder.shellQuote ++ " " ++ alias.shellQuote).systemCmd;
+        h.commandTo(e, \loadBuffer, 0, quiet, 0); h.awaitLoad(0, e);
+        e.interleaveFaultHook = { arg name, at;
+            if (at == \open) { opened = true; h.awaitReply(resume, 10) };
+        };
+        e.bufferSaveResultPoll.start;
+        n = h.pollValues(\bufferSaveResult).size;
+        h.commandTo(e, \saveBuffer, 0, alias +/+ path.basename, 0, 1);
+        save = e.bufferSaves[0];
+        path = File.realpath(folder) +/+ path.basename;
+        generation = e.writeGenerations[path];
+        part = path ++ "." ++ e.wavPartToken(generation) ++ ".part";
+        check.(generation.notNil and: { waitFor.({ opened and: { File.exists(part) } and: { e.pathRenames[path].isNil } }) },
+            "waveform: the aliased WAV save has opened its part and still has no rename carrier");
+        h.commandTo(e, \loadBuffer, 0, loud, 0); h.awaitLoad(0, e);
+        check.(e.peaksUnchanged(0, frames) and: { readPeaksFile.(path)[\peaks].first == "0.750" },
+            "waveform: the later load has installed and cached its .750 overview before the WAV preparation resumes");
+        resume.test = true; resume.signal; e.interleaveFaultHook = nil;
+        check.(waitFor.({ e.writeGenerations[path].isNil and: { e.pathRenames[path].isNil } and: { File.exists(part).not } }, 8),
+            "waveform: the old preparation and every carrier have settled");
+        flushPolls.value;
+        header = File.use(path, "r", { arg f; f.getLine(64) });
+        check.(header.beginsWith("strata-peaks 1") and: { readPeaksFile.(path)[\peaks].every({ arg v; v == "0.750" }) }
+            and: { e.peaksUnchanged(0, frames) } and: { (h.bufferSample(e.buffersL[0], 8192) - 0.75).abs < 0.001 }
+            and: { h.pollValues(\bufferSaveResult).drop(n).includes(e.bufferSaveResultValue(0, save, false)).not },
+            "waveform: the pre-handoff WAV cannot replace the confirmed peaks with RIFF bytes or report a stale save");
+        h.freeEngine(e);
+    }.value;
+    "PATH".setenv(original);
+    engine.bufferStatePoll.setTime(period); engine.bufferStatePoll.start;
+}.value;
+
 // A clear writes no file and zeroes the peaks; a failed load changes nothing
 {
     var slot = 7, peaksPath = engine.peaksPath(slot), path = scratchRoot +/+ "waveform-clear.wav", before, after, values;

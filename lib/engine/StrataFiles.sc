@@ -143,8 +143,8 @@
         if (outcome == \blocked) { ^false };
         if (record.notNil) {
             this.pathRenames.removeAt(path);
-            if (outcome == \gone and: { areaState[\files][\retired] != true }) {
-                record[\finish].value(true);
+            if (areaState[\files][\retired] != true) {
+                if (outcome == \gone) { record[\finish].value(true) } { record[\superseded].value };
             };
         };
         ^File.delete(receipt)
@@ -177,6 +177,38 @@
             };
             if (areaState[\files][\retired] != true) { record[\finish].value(written) };
         };
+    }
+
+    // An analysis sidecar has no yielding preparation. Its part uses the
+    // same serial as WAVs, including a save aimed at the sidecar itself.
+    // A superseded pass has its own completion rule; free suppresses both.
+    publishAnalysisPart { arg path, prepare, finish, superseded;
+        var part, generation, token, record, preparing;
+        if (areaState[\files][\retired] == true) { ^this };
+        writeCount = writeCount + 1;
+        generation = writeCount;
+        token = this.wavPartToken(generation);
+        record = try {
+            if (File.type(path.dirname) == \not_found) { File.mkdir(path.dirname) };
+            path = File.realpath(path.dirname) +/+ path.basename;
+            part = path ++ "." ++ token ++ ".part";
+            if (prepare.value(part) and: { PathName(path).isFolder.not }) {
+                this.claimWavPublication(path, token, finish)
+            }
+        } { nil };
+        if (record.isNil) {
+            if (part.notNil) { try { File.delete(part) } };
+            finish.value(false);
+            ^this
+        };
+        // A WAV may still be interleaving for this same destination. Losing
+        // its generation stops it before it can acquire a carrier.
+        preparing = writeGenerations[path];
+        if (preparing.notNil and: { preparing < generation }) { writeGenerations.removeAt(path) };
+        record[\superseded] = superseded;
+        this.renameIntoPlace(part, path, { arg moved;
+            this.areaCall(\finishWavPublication, path, record, moved)
+        }, true);
     }
 
     retireWavWrites {

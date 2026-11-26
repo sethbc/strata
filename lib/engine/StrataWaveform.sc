@@ -27,6 +27,7 @@
         // per slot: what the peaks file this engine last wrote holds
         // (peaksContent: frames, rate, the values as written), nil before one
         state[\written] = Array.newClear(numBuffers);
+        state[\pendingActions] = Array.newClear(numBuffers);
         state[\generation] = 0;
         this.startPeaksMover;
     }
@@ -71,21 +72,34 @@
     // (peaksUnchanged).
     writeSlotPeaks { arg index, frames, action, current, rate;
         var state = areaState[\waveform], change = slotChanges[index], path = this.peaksPath(index).standardizePath;
-        var generation, partPath, content = this.peaksContent(index, frames, rate);
+        var generation, content = this.peaksContent(index, frames, rate);
+        var valid = current ?? { { slotChanges[index] == change } };
+        // At most two actions can still be owed for one slot: a playable
+        // arming (its current guard follows a stop), and a load or take end.
+        // A refresh supplies neither and carries both forward. A later load
+        // or take replaces the slot action; each old arming checks its guard.
+        var pending = (state[\pendingActions][index] ? ()).copy;
         var finish = { arg written;
-            if (written.not) { postln("strata: cannot write " ++ path) };
-            state[\written][index] = if (written) { content };
-            if (current.notNil) { if (current.value) { action.value } } {
-                if (slotChanges[index] == change) { action.value }
+            if (state[\pendingActions][index] === pending) {
+                state[\pendingActions][index] = nil;
+                if (valid.value) {
+                    if (written.not) { postln("strata: cannot write " ++ path) };
+                    state[\written][index] = if (written) { content };
+                };
+                pending[\arming].value;
+                pending[\slot].value;
             };
         };
+        if (action.notNil) {
+            pending[if (current.notNil) { \arming } { \slot }] = { if (valid.value) { action.value } };
+        };
+        state[\pendingActions][index] = pending;
+        state[\written][index] = nil;
         state[\generation] = state[\generation] + 1;
         generation = state[\generation];
-        partPath = path ++ "." ++ instanceTag ++ "-" ++ generation ++ ".part";
-        if (this.writePeaksFile(index, content, generation, partPath).not) { ^finish.(false) };
-        // mv -f would move the file into a folder at the path, and succeed
-        if (PathName(path).isFolder) { File.delete(partPath); ^finish.(false) };
-        this.renameIntoPlace(partPath, path, finish);
+        this.publishAnalysisPart(path, { arg part;
+            this.writePeaksFile(index, content, generation, part)
+        }, finish, { finish.(false) });
     }
 
     // The mover (#210, #217): one shell for the engine's life that renames
@@ -247,9 +261,11 @@
             if (wav) { wavMoverPending = wavMoverPending - 1 };
             fifoDone = true;
         };
-        var usable = mover.notNil and: { mover[\alive] } and: { mover[\pending] < this.peaksMoverBacklog }
-            and: { wav.not or: { wavMoverPending < this.wavWorkLimit } }
-            and: { [partPath, path, ackPath].every({ arg each; each.includes($\n).not }) };
+        var usable = try {
+            mover.notNil and: { mover[\alive] } and: { mover[\pending] < this.peaksMoverBacklog }
+                and: { wav.not or: { wavMoverPending < this.wavWorkLimit } }
+                and: { [partPath, path, ackPath].every({ arg each; each.includes($\n).not }) }
+        } { nil };
         var bySubprocess = {
             if (finished.not) {
                 if (wav.not or: { this.reserveWavFallback }) {
@@ -271,13 +287,16 @@
                                 };
                             } { complete.(written) };
                         })
-                    } { arg error;
+                    } {
                         if (wav) { this.releaseWavFallback };
                         if (enqueued and: { fifoDone.not }) {
                             // No fallback started. The queued mover still owns
                             // its part, its credit and the eventual result.
                             failedFallback = true;
-                        } { error.throw };
+                        } {
+                            if (fifoWritten.not) { try { File.delete(partPath) } };
+                            complete.(fifoWritten);
+                        };
                     };
                 } {
                     if (enqueued.not or: { fifoDone }) {
@@ -287,6 +306,12 @@
                     };
                 };
             };
+        };
+        if (usable.isNil) {
+            // No handoff took place and the mover's state could not be read.
+            try { File.delete(partPath) };
+            complete.(false);
+            ^this
         };
         if (usable and: {
             try { mover[\file].write(partPath ++ "\n" ++ path ++ "\n" ++ ackPath ++ "\n"); mover[\file].flush; true } { false }
