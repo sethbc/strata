@@ -600,6 +600,55 @@ test("a silent PSET moves one envelope voice off a shared output and sets up onl
   assert_equal(last_line(context, "ii.txo.env_"), nil, "an unchanged read sends no envelope setup or times")
 end)
 
+-- #1158: the routes stay fixed. An ordinary recall applies both times;
+-- a silent recall repairs only changed commands, once per shared output.
+for _, scenario in ipairs({"ordinary", "both", "attack", "decay", "queue full"}) do
+  test("a PSET restores TXo times on an unchanged envelope: " .. scenario, function()
+    local context, S = leading_real()
+    for voice = 1, 2 do
+      params:set("v" .. voice .. "_out_txo", 3)
+      params:set("v" .. voice .. "_out_txo_cv", ENVELOPE)
+    end
+    params:set("v3_out_txo", 4) -- pitch only
+    params:set("txo_attack", 123); params:set("txo_decay", 456)
+    local path = context.data_dir .. "envelope-times.pset"
+    params:write(path)
+    if scenario ~= "decay" then params:set("txo_attack", 32) end
+    if scenario ~= "attack" then params:set("txo_decay", 789) end
+    context.clock.run_for(0.3)
+    assert_equal(last_line(context, "ii.txo.env_att(3, "),
+      scenario == "decay" and "ii.txo.env_att(3, 123)" or "ii.txo.env_att(3, 32)")
+    assert_equal(last_line(context, "ii.txo.env_dec(3, "),
+      scenario == "attack" and "ii.txo.env_dec(3, 456)" or "ii.txo.env_dec(3, 789)")
+    context.crow.clear()
+    if scenario == "queue full" then
+      for k = 1, 48 do S.lib.io_ii.send("filler", "full", k) end
+      assert_equal(S.lib.io_ii.queued(), 48)
+    end
+    params:read(path, scenario ~= "ordinary")
+    context.clock.run_for(0.8)
+    assert_equal(params:get("txo_attack"), 123); assert_equal(params:get("txo_decay"), 456)
+    local updates = {}
+    for _, line in ipairs(context.crow.sent) do
+      if line:match("^ii%.txo%.env_") then
+        assert_true(not line:find("(4, ", 1, true), "the pitch output gets no envelope update")
+        updates[#updates + 1] = line
+      end
+    end
+    if scenario ~= "decay" then assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 123)") end
+    if scenario ~= "attack" then assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 456)") end
+    if scenario == "attack" or scenario == "decay" then
+      assert_equal(#updates, 1, "the one changed time only")
+    elseif scenario == "both" then
+      assert_equal(#updates, 2, "each changed time once for the shared output")
+    end
+    context.crow.clear()
+    params:read(path, true)
+    context.clock.run_for(0.2)
+    assert_equal(last_line(context, "ii.txo.env_"), nil, "a matching recall sends nothing")
+  end)
+end
+
 for _, interruption in ipairs({"none", "full", "unplug", "leave", "leave budget"}) do
   test("output 3 leaves envelope mode after " .. interruption, function()
     local context, S = leading_real()
