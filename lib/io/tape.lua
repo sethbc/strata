@@ -35,6 +35,7 @@ return function(S)
   M.TAPE = TAPE
 
   local engaged = false
+  local live_length, live_input_level
 
   local function each_voice(fn)
     for _, voice in ipairs(TAPE.voices) do fn(voice) end
@@ -59,27 +60,47 @@ return function(S)
     each_voice(function(v) softcut.pre_filter_fc(v, cutoff_for(value)) end)
   end
 
+  local function set_length(length)
+    if engaged and length ~= live_length then
+      each_voice(function(v) softcut.loop_end(v, length) end)
+      live_length = length
+    end
+  end
+
+  local function set_input_level(level)
+    if engaged and level ~= live_input_level then
+      each_voice(function(v) softcut.level_input_cut(v, v, level) end)
+      live_input_level = level
+    end
+  end
+
+  local function hold_mixer()
+    audio.level_eng_cut(1)
+    audio.level_adc_cut(0)
+    audio.level_tape_cut(0)
+  end
+
   -- The tape on (checks.md §8's order, verbatim), then the mixer: the loop
   -- holds Strata's output and nothing else
   local function start()
     if engaged then return end
     engaged = true
-    local length = params:get("tapeloop_length")
+    live_length = params:get("tapeloop_length")
     local rate, level = current("tapeloop_rate"), current("tapeloop_level")
     local feedback, wear = current("tapeloop_feedback"), current("tapeloop_wear")
-    local input_level = params:get("tapeloop_rec")
+    live_input_level = params:get("tapeloop_rec")
     each_voice(function(v)
       softcut.buffer(v, v)
       softcut.pan(v, v == 1 and -1 or 1)
       softcut.loop(v, 1)
       softcut.loop_start(v, 0)
-      softcut.loop_end(v, length)
+      softcut.loop_end(v, live_length)
       softcut.fade_time(v, TAPE.fade_seconds)
       softcut.position(v, 0)
       softcut.rate_slew_time(v, TAPE.rate_slew_seconds)
       softcut.rate(v, rate)
       softcut.level(v, level)
-      softcut.level_input_cut(v, v, input_level)
+      softcut.level_input_cut(v, v, live_input_level)
       softcut.pre_level(v, 0)
       softcut.level_cut_cut(v, v, feedback / TAPE.write_gain)
       softcut.rec_level(v, 1)  -- the filtered feedback is written even with the input closed
@@ -93,9 +114,7 @@ return function(S)
       softcut.play(v, 1)
       softcut.enable(v, 1)
     end)
-    audio.level_eng_cut(1)
-    audio.level_adc_cut(0)
-    audio.level_tape_cut(0)
+    hold_mixer()
   end
 
   -- The tape off, and cleanup's step: both voices disabled, the mixer's
@@ -125,14 +144,10 @@ return function(S)
         if x == 1 then start() else M.stop() end
       end}
     params:add{type = "binary", behavior = "toggle", id = "tapeloop_rec", name = "tape record", default = 1,
-      action = function(x)
-        if engaged then each_voice(function(v) softcut.level_input_cut(v, v, x) end) end
-      end}
+      action = set_input_level}
     params:add{type = "control", id = "tapeloop_length", name = "tape length",
       controlspec = controlspec.new(TAPE.length.min, TAPE.length.max, "exp", 0, TAPE.length.default, "s"),
-      action = function(x)
-        if engaged then each_voice(function(v) softcut.loop_end(v, x) end) end
-      end}
+      action = set_length}
     params:add{type = "control", id = "tapeloop_rate", name = "tape speed",
       controlspec = controlspec.new(TAPE.rate.min, TAPE.rate.max, "lin", 0, TAPE.rate.default, "x"),
       action = function(x) send_param_to_engine("tapeloop_rate", x) end}
@@ -179,16 +194,25 @@ return function(S)
     },
   })
 
-  -- norns' cut_input_* params are in every PSET and their actions set the
-  -- mixer: after a read that leaves the tape running, the loop's three
-  -- levels are set again (a read that turned it off has put norns' back)
-  local function hold_mixer()
-    if not engaged then return end
-    audio.level_eng_cut(1)
-    audio.level_adc_cut(0)
-    audio.level_tape_cut(0)
-  end
-  S.register_pset_hook({name = "io_tape", read = function() hold_mixer() end})
+  -- After the read, the transport and its two direct controls must match
+  -- the PSET even when param actions were silent. The engine_params hook
+  -- reconciles the four modulated senders. While running, restore the
+  -- loop's mixer routing after norns' own cut_input_* actions.
+  S.register_pset_hook({name = "io_tape", read = function()
+    if params:get("tapeloop") == 0 then
+      M.stop()
+    elseif not engaged then
+      -- The engine_params hook runs later. Refresh the cached values while
+      -- the senders are still gated so start enables each voice with the
+      -- loaded feedback, wear, level and speed, including their offsets.
+      for _, id in ipairs(TAPE.macro_targets) do send_param_to_engine(id, params:get(id)) end
+      start()
+    else
+      set_length(params:get("tapeloop_length"))
+      set_input_level(params:get("tapeloop_rec"))
+      hold_mixer()
+    end
+  end})
 
   -- init's start step: a tape already on (a restored param) is started;
   -- with the default, nothing
