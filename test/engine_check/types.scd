@@ -671,7 +671,7 @@ server.sync;
         frozenSwitch.(other, 1, "spectral");
         frozenSwitch.(other, 0, "hold");
         waitingSwitches.(other);
-    }.protect({ h.freeEngine(other); server.sync });
+    }.protect({ h.freeEngine(other); h.teardownSync("free voice type engine") });
 }.value;
 
 // A type package's own checks: test/engine_check/types/<key>.scd, sorted,

@@ -709,7 +709,7 @@ checkFresh = {
     server.sync;
     freshValues = readEngine.(fresh);
     h.freeEngine(fresh);
-    server.sync;
+    h.teardownSync("free fresh engine");
     File.mkdir(root);
     write.(root +/+ "performance.data", "performance high\nbuffer_seconds 16\n");
     write.(root +/+ "model", "Raspberry Pi 4 Model B Rev 1.4");
@@ -727,7 +727,7 @@ checkFresh = {
     lifted = high.synths[\reverb] !? { arg synth; [getControl.(synth, \shimmer), getControl.(synth, \shimmerRatio),
         getControl.(synth, \shiftL), getControl.(synth, \shiftR)] };
     h.freeEngine(high);
-    server.sync;
+    h.teardownSync("free high engine");
     check.((freshValues == [[[0, 2], [0, 2]], [[0, 2], [0, 2]]]) and: { highValues == freshValues },
         "shimmer: a fresh engine starts at shimmer 0 and ratio 2 on the delay and the reverb, the nodes and the kept values (standard %, high %)".format(
             freshValues, highValues));

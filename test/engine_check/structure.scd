@@ -116,7 +116,7 @@ var checkFreeContained = {
         ++ areas.select({ arg area; area[\order] > 75 }));
     try { h.freeEngine(target) } { arg error; raised = error };
     h.freeEngine(target);  // (the commands back to h.engine, should free have raised)
-    server.sync;
+    h.teardownSync("free engine after an area hook");
     left = engineLeft.(target, delayLine);
     check.(raised.isNil and: { delayLine.size == 2 } and: { left == [0, 0, 0] },
         "structure: free frees every node, bus and buffer though an area's stop and free raise (#499; raised: %, left nodes, buses, buffers: %)".format(
@@ -278,7 +278,7 @@ var checkAllocRolledBack = {
         and: { names.every({ arg name, index; CronePollRegistry.getPollFromName(name) === held[index] }) },
         "structure: alloc that raises leaves the polls another engine holds under its names (% of the engine's %)".format(names, declaredPolls.value.asArray));
     h.freeEngine(built);  // (the commands back to h.engine)
-    server.sync;
+    h.teardownSync("free engine after partial alloc");
     failed[\group].free;
 };
 
@@ -312,7 +312,7 @@ var checkRollbackPolls = {
     slotOne = reports.detect({ arg value; ((value / fresh.bufferStateStride).floor.asInteger % (fresh.numBuffers + 1)) == 0 });
     h.freeEngine(failed[\engine]);
     h.freeEngine(fresh);
-    server.sync;
+    h.teardownSync("free rollback engines");
     failed[\group].free;
     // h.engine's polls back: the very objects, at their indices, running as before
     h.putBackPolls(held.collect({ arg poll, index; [poll, running[index]] }));
@@ -552,7 +552,7 @@ other = h.startEngine;
 server.sync; 0.2.wait;
 otherLine = other.delayLine;  // (free forgets it: freeDelayLine, #807)
 freeDuringPendingFades.(other, h.stereoPath);
-server.sync;
+h.teardownSync("free engine during pending fades");
 check.(synthNames.(other.context.xg).size == 0, "free removes every engine node");
 check.((other.areaState[\grains][\windowBank] ? []).notEmpty
     and: { other.areaState[\grains][\windowBank].every({ arg buffer; buffer.bufnum.isNil }) }, "free frees the window bank");
@@ -589,6 +589,48 @@ check.(engineLeft.(engine).every(_ > 0) and: { engineLeft.(other, otherLine) == 
     kept.do(_.free); server.sync;
     check.(counted == [0, 0, 2], "structure: engineLeft counts a delay's line free left allocated (#807; counted %)".format(counted));
 }.value;
+
+// Drop the first sync reply, then every reply to each kind of barrier. An
+// 8 s safety release lets even an unbounded implementation return.
+[['/synced', true], ['/synced', false], ['/g_queryTree.reply', false]].do({ arg test;
+    var path = test[0], allowRetry = test[1], dispatcher = OSCFunc.defaultDispatcher;
+    var first, seen = 0, timer, raised, elapsed, start, released = false;
+    var keeper = OSCFunc({}, '/strataCheckTeardown', server.addr);
+    var filter = { arg msg, time, addr, port;
+        if ((addr == server.addr) and: { msg[0] == path }
+            and: { first.isNil or: { msg == first } }) {
+            seen = seen + 1;
+            if (first.isNil) {
+                first = msg;
+                timer = Routine({ released = true; dispatcher.value(msg, time, addr, port) });
+                SystemClock.schedAbs(Main.elapsedTime + 8, timer);
+            } {
+                if (allowRetry) { dispatcher.value(msg, time, addr, port) };
+            };
+        } { dispatcher.value(msg, time, addr, port) }
+    };
+    thisProcess.replaceOSCRecvFunc(dispatcher, filter);
+    protect {
+        start = Main.elapsedTime;
+        try { h.stopAllVoices } { arg error; raised = error.errorString };
+        elapsed = Main.elapsedTime - start;
+    } {
+        thisProcess.replaceOSCRecvFunc(filter, dispatcher);
+        timer !? { timer.stop };
+        keeper.free;
+    };
+    if (allowRetry) {
+        check.((seen == 2) and: { released.not } and: { raised.isNil },
+            "structure: a stop whose first /synced was dropped completes on the same sync ID's second reply (% replies, %)"
+                .format(seen, raised));
+    } {
+        check.((seen == if (path == '/synced') { 2 } { 1 }) and: { released.not } and: { raised.notNil }
+            and: { raised.contains("structure teardown: stop voices") } and: { raised.contains(path.asString) },
+            "structure: teardown identifies withheld % replies before the safety release (% replies in % s, %)"
+                .format(path, seen, elapsed.round(0.01), raised));
+    };
+});
+h.stopAllVoices;
 
 checkVoiceHit.value;
 checkFreeContained.value;

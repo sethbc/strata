@@ -807,7 +807,7 @@ check.(silentIndex != context.amp_in_b[0].index and: { silentIndex != 0 },
         "voices: a new engine's silent bus reads 0 on a bus index that held 1 (index %, on a freed bus: %, reads %)".format(
             other.silentBus.index, dirty, value));
     h.freeEngine(other);
-    server.sync;
+    h.teardownSync("free voice test engine");
     ranges.do({ arg range; server.sendMsg('/c_fill', range[0], range[1], 0) });
     server.sync;
 }.value;

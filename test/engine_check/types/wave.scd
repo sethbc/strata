@@ -117,7 +117,7 @@ if (engine.respondsTo(\addWaveDef)) { engine.areaCall(\addWaveDef); server.sync 
             bufnums[0], own, mine));
     before = serverFrames.(bufnums);
     h.freeEngine(target);
-    server.sync;
+    h.teardownSync("free wavetable engine");
     after = serverFrames.(bufnums);
     freed = (other ? []).every({ arg buffer; buffer.bufnum.isNil });
     check.(other.notNil and: { bufnums.size == engine.waveBankSize } and: { before.every(_ == engine.waveTableFrames) }

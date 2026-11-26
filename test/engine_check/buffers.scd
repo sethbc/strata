@@ -1017,7 +1017,7 @@ var checkLongSlots = {
     freedChunks = decodeChunks.(other);
     h.commandTo(other, \loadBuffer, 6, path60, 0);
     h.freeEngine(other);
-    1.0.wait; server.sync;
+    1.0.wait; h.teardownSync("free engine during a load");
     freedChunks = decodeChunks.(other) - freedChunks;
     check.(other.bufferFrames[6] == 0, "buffers: an engine freed during a long file's check applies nothing");
     check.(freedChunks.inclusivelyBetween(1, 2),

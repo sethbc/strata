@@ -434,7 +434,7 @@ checkFreshDefaults = {
         scale: fresh.scaleRootAndMask
     );
     h.freeEngine(fresh);
-    server.sync;
+    h.teardownSync("free fresh engine");
     check.(values[\filters].every({ arg each; near.(each, [5000, 0.5, 0, 0]) }),
         "effects: a fresh engine's three master filters start at 5000 Hz, res 0.5, lowpass and mix 0, the Lua defaults (got %)".format(
             values[\filters]));
@@ -1353,7 +1353,7 @@ checkFdn = {
         server.sync;
     }.value;
     h.freeEngine(high);
-    server.sync;
+    h.teardownSync("free high engine");
     check.([\delaySend, \reverbSend, \delaySendPost, \reverbSendPost].every({ arg name; high.mixBus(name).index.isNil }),
         "effects: free frees the mix area's buses");
 };

@@ -44,7 +44,7 @@ var areas = if (missingAreas.notEmpty) {
 // The run's own deadline (s): run_engine_check.sh passes 30 s less than its
 // timeout ($ENGINE_CHECK_TIMEOUT, 3000 by default), so a long soak can be given more
 var deadline = { var given = ("STRATA_ENGINE_CHECK_DEADLINE".getenv ? "").asInteger; if (given > 0) { given } { 2970 } }.value;
-var context, engine, h, runChecks, bootFailed, portAnswered, statusResponder, booted = false;
+var context, engine, h, running, runChecks, bootFailed, portAnswered, statusResponder, booted = false;
 // The voice defs are the engine's type list (3.8: voiceTypeDefs), read once
 // the engine is built (readVoiceDefs), so a type package edits no list here
 var voiceDefs, allDefs, engineVoiceDefs;
@@ -334,13 +334,53 @@ var awaitReply = { arg condition, timeout = 5;
     timedOut.not
 };
 
+// A teardown barrier must hear its own reply. Time it in wall time, even
+// when the checking Routine's logical time lags, and remove its responder
+// on every exit. A timed-out query must not look like an empty group.
+var teardownReply = { arg stage, path, template, send;
+    var ready = Condition(false), reply, timedOut = false, start = Main.elapsedTime, retry;
+    var watcher = OSCFunc({ arg msg; reply = msg; ready.test = true; ready.signal },
+        path, server.addr, argTemplate: template);
+    var timer = Routine({ if (reply.isNil) { timedOut = true; ready.test = true; ready.signal } });
+    protect {
+        SystemClock.schedAbs(start + 5, timer);
+        if (path == '/synced') {
+            // Only the barrier is idempotent and uniquely tagged. Either
+            // matching reply acknowledges the original stop/free commands.
+            retry = Routine({
+                if (reply.isNil and: { Main.elapsedTime < (start + 5) }) {
+                    ("teardown %: %: retry /sync % after 1 s without /synced".format(
+                        running ? "engine", stage, template[0])).postln;
+                    send.value;
+                };
+            });
+            SystemClock.schedAbs(start + 1, retry);
+        };
+        send.value;
+        ready.wait;
+    } { watcher.free; timer.stop; retry !? { retry.stop } };
+    if (timedOut) {
+        Error("% teardown: %: no % % within 5 s".format(running ? "engine", stage, path, template)).throw;
+    };
+    reply
+};
+var teardownSync = { arg stage;
+    var id = UniqueID.next;
+    teardownReply.(stage, '/synced', [id], { server.sendMsg('/sync', id) });
+};
+
 // Depth-first list of synth def names under a node, from /g_queryTree.
-var synthNames = { arg group;
+var synthNames = { arg group, teardownStage;
     var condition = Condition(false), reply, list = List.new, index = 2, parse;
-    OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
-        '/g_queryTree.reply', server.addr).oneShot;
-    server.sendMsg('/g_queryTree', group.nodeID, 0);
-    if (awaitReply.(condition).not) { reply = [nil, 0, 0, 0] };  // parses as an empty tree
+    if (teardownStage.notNil) {
+        reply = teardownReply.(teardownStage, '/g_queryTree.reply', [0, group.nodeID],
+            { server.sendMsg('/g_queryTree', group.nodeID, 0) });
+    } {
+        OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
+            '/g_queryTree.reply', server.addr).oneShot;
+        server.sendMsg('/g_queryTree', group.nodeID, 0);
+        if (awaitReply.(condition).not) { reply = [nil, 0, 0, 0] };  // parses as an empty tree
+    };
     parse = {
         var numChildren = reply[index + 1];
         index = index + 2;
@@ -709,8 +749,8 @@ var freeEngine = { arg target;
 };
 
 // The voice, grain and mod synths running in an engine's context
-var voiceNodesLeft = { arg target;
-    synthNames.(target.context.xg).select({ arg name; engineVoiceDefs.includes(name) })
+var voiceNodesLeft = { arg target, stage;
+    synthNames.(target.context.xg, stage).select({ arg name; engineVoiceDefs.includes(name) })
 };
 
 // Every note synth an engine's notes area tracks for a voice (3.5): each
@@ -782,12 +822,13 @@ var noteNodesAgree = { arg target;
 // included (a mod synth, which has no kill fade, is freed), and wait until
 // none of its voice, grain or mod synths is left. Each area ends with this.
 var stopAllVoices = { arg target;
+    var left, deadline;
     target = target ? engine;
     target.numVoices.do({ arg voice;
         commandTo.(target, \voiceOff, voice);
         commandTo.(target, \setGrainSource, voice, 0);
     });
-    server.sync;
+    teardownSync.("stop voices, after voiceOff and source reset");
     target.numVoices.do({ arg voice;
         (target.releasingSynths[voice].values.asArray ++ target.fadingSynths[voice].asArray
             ++ target.cuttingSynths[voice].asArray ++ noteSynthsTracked.(target, voice)).do({ arg synth;
@@ -796,7 +837,13 @@ var stopAllVoices = { arg target;
             };
         });
     });
-    waitFor.({ voiceNodesLeft.(target).isEmpty }, 3);
+    deadline = Main.elapsedTime + 3;
+    left = voiceNodesLeft.(target, "stop voices, inspect remaining nodes");
+    while { left.notEmpty and: { Main.elapsedTime < deadline } } {
+        0.05.wait;
+        left = voiceNodesLeft.(target, "stop voices, inspect remaining nodes");
+    };
+    if (left.notEmpty) { Error("% teardown: stop voices left %".format(running ? "engine", left)).throw };
 };
 
 // Every voice started as the engine check always has: voice 7 (engine voice
@@ -1010,7 +1057,7 @@ var checkSweep = {
 // is named, and they are put back, so the next area starts as every area
 // does), every voice is on its own type, every slot is empty
 var finishArea = { arg name, seconds;
-    var left = voiceNodesLeft.(engine), keys = engine.synths.keys.reject({ arg key; engine.effectKeys.includes(key) });
+    var left = voiceNodesLeft.(engine, "inspect nodes after area"), keys = engine.synths.keys.reject({ arg key; engine.effectKeys.includes(key) });
     var notes = noteRecordsLeft.(engine);
     var message = "%: leaves no voice, grain or mod synth running".format(name), moved = pollsMoved.value;
     // the engine's records as the area left them (#943)
@@ -1027,7 +1074,7 @@ var finishArea = { arg name, seconds;
     // area leaves a voice on another type for the next
     engine.numVoices.do({ arg voice; command.(\setVoiceType, voice, voice) });
     engine.numBuffers.do({ arg slot; command.(\clearBuffer, slot) });
-    server.sync;
+    teardownSync.("clear slots after area");
     ("area %: % s".format(name, seconds.round(0.1))).postln;
 };
 
@@ -1054,7 +1101,7 @@ SystemClock.sched(deadline, {
 // The check itself: runs once the server has booted (and is the function
 // waitForBoot is given below)
 runChecks = {
-    var exitCode, defaultScratchDir, running, workDir = "STRATA_CHECK_TMPDIR".getenv;
+    var exitCode, defaultScratchDir, workDir = "STRATA_CHECK_TMPDIR".getenv;
     booted = true;
     // the server's PID for run_engine_check.sh, which stops this scsynth if
     // it outlives sclang (a crash, #152)
@@ -1228,6 +1275,7 @@ runChecks = {
             measure: { arg self, probe, bus, seconds = 0.3; measure.(probe, bus, seconds) },
             probeFree: { arg self, count; probeFree.(count) },
             startEngine: { arg self, settings; startEngine.(settings) },
+            teardownSync: { arg self, stage; teardownSync.(stage) },
             freeEngine: { arg self, target; freeEngine.(target) },
             // put polls taken out of norns' poll registry back, the very
             // objects ([poll, running] pairs; #652: never register copies)
@@ -1244,7 +1292,7 @@ runChecks = {
                 // engine's are the ones registered (else the periodic
                 // bufferState went on reporting the freed engine's slots)
                 engine.pollNames.do({ arg name; CronePollRegistry.remove(name) });
-                server.sync;
+                teardownSync.("free replaced engine");
                 engine = buildEngine.(context, settings);
                 addDefs32.(engine);
                 server.sync;
@@ -1275,8 +1323,8 @@ runChecks = {
 
         engine.bufferStatePoll.stop;
         freeEngine.(engine);
-        server.sync;
-        check.(synthNames.(context.xg).size == 0, "free removes every node of the engine the areas ran on");
+        teardownSync.("free final engine");
+        check.(synthNames.(context.xg, "inspect final engine nodes").size == 0, "free removes every node of the engine the areas ran on");
         // a List past its capacity grows inside the OSC handler: raise pollListCapacity
         check.(([pollMessages] ++ pollValueLists.values.asArray).every({ arg list; list.size < pollListCapacity }),
             "the poll lists never grew past pollListCapacity (% messages of %)".format(pollMessages.size, pollListCapacity));

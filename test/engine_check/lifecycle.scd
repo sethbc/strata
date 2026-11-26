@@ -330,7 +330,7 @@ var checkSynthSetWalk = { arg seed;
             rows.collect({ arg name; [name, result[\reached][name] ? 0] }), missing, endProblems));
     h.stopAllVoices(target);
     h.freeEngine(target);
-    server.sync;
+    h.teardownSync("free walk engine");
 };
 
 // The invariant warnings (#46): a synth found releasing where the

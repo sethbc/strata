@@ -1454,7 +1454,7 @@ checkSpectralNotes = {
             other.tier, writer !? { writer.defName }, note !? { note.defName }, kind, level));
     h.stopAllVoices(other);
     h.freeEngine(other);
-    server.sync;
+    h.teardownSync("free high engine");
 };
 
 // Rulings 44, 48 and 49: the own note's park through a synth voice's
