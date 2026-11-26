@@ -304,7 +304,7 @@ return function(S)
   -- step, or while pressed as a later note of the line in the step;
   -- false and nothing unless Strata leads. A line queued here is never
   -- taken out again while Strata leads
-  function M.send(device, command, ...)
+  local function enqueue(on_sent, device, command, ...)
     if not state.leading then return false end
     local entry = entry_for(false, device, command, ...)
     local turn = turn_for(entry)
@@ -314,7 +314,7 @@ return function(S)
       return false
     end
     if command == SPEC.note_trigger or turn.id == entry.pair then turn.closed = true end
-    entry.turn = turn
+    entry.turn, entry.on_sent = turn, on_sent
     turn.waiting = turn.waiting + 1
     table.insert(state.queue, entry)
     if state.pairs[entry.pair] then
@@ -322,6 +322,15 @@ return function(S)
       line.waiting = line.waiting + 1
     end
     return true
+  end
+
+  function M.send(device, command, ...)
+    return enqueue(nil, device, command, ...)
+  end
+
+  -- Same admission and ordering as send. Queue discard never calls on_sent.
+  function M.send_tracked(on_sent, device, command, ...)
+    return enqueue(on_sent, device, command, ...)
   end
 
   -- An off (a gate low or a note's release) is queued exactly when its
@@ -412,7 +421,8 @@ return function(S)
     state.step = state.step + 1
     for _ = 1, math.min(II.sends_per_step, #state.queue) do
       local entry = table.remove(state.queue, 1)
-      S.lib.io_crow.send_now(entry.line)
+      local sent = S.lib.io_crow.send_now(entry.line)
+      if sent and entry.on_sent then entry.on_sent() end
       if entry.turn then served(entry.turn) end
       if state.pairs[entry.pair] then
         local line = line_state(entry.key)

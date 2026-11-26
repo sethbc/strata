@@ -25,10 +25,17 @@ local function install_ii(state)
       if state.fail_next then state.fail_next = nil; error("send failed", 0) end
       if state.fail_at and state.fail_at[state.attempts] then error("send failed #" .. state.attempts, 0) end
       state.calls[#state.calls + 1] = {kind, ...}
+      return true
     end
   end
   S.lib.io_ii = {
     leads = function() return state.leading end,
+    II = {queue_max = 48}, queued = function() return 0 end,
+    send_tracked = function(on_sent, ...)
+      recorder("send", true)(...)
+      on_sent()
+      return true
+    end,
     send = recorder("send", true), send_off = recorder("send_off", true), send_direct = recorder("send_direct"),
     add_params = function()
       local total = 0
@@ -529,6 +536,150 @@ local function last_line(context, prefix)
   return last
 end
 
+-- Follow only the settings and gates the real queue handed to crow.
+local function envelope_trace(context, output)
+  local values = {}
+  for _, line in ipairs(context.crow.sent) do
+    local value = line:match("^ii%.txo%.env_act%(" .. output .. ", ([01])%)$")
+    if value then values[#values + 1] = value end
+  end
+  return table.concat(values, ",")
+end
+
+for _, interruption in ipairs({"none", "full", "unplug", "leave", "leave budget"}) do
+  test("output 3 leaves envelope mode after " .. interruption, function()
+    local context, S = leading_real()
+    local ii = S.lib.io_ii
+    params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+    S.lib.notes.play(1, played(7750, 60))
+    context.clock.run_for(0.2)
+    assert_equal(envelope_trace(context, 3), "1")
+    assert_equal(last_line(context, "ii.txo.tr(3, "), "ii.txo.tr(3, 1)")
+    if interruption == "full" then
+      for k = 1, 48 do ii.send("filler", "full", k) end
+      assert_equal(ii.queued(), 48)
+    elseif interruption == "leave budget" then
+      for port = 1, 14 do ii.send_off("er301", "tr", port, 0) end
+    end
+    params:set("v1_out_txo_cv", 1)
+    if interruption == "unplug" then
+      context.crow.unplug(); context.crow.plug()
+    elseif interruption:match("^leave") then
+      local before = #context.crow.sent
+      S.lib.io_rig.set("ii_bus", "off")
+      if interruption == "leave budget" then
+        assert_equal(#context.crow.sent - before, 15, "14 gate offs and JF release fill the leave budget")
+        assert_equal(envelope_trace(context, 3), "1", "configuration waits for the next lead")
+      end
+      S.lib.io_rig.set("ii_bus", "strata")
+    end
+    context.clock.run_for(1)
+    assert_equal(envelope_trace(context, 3), "1,0", "exactly one deactivation reaches crow")
+    assert_equal(last_line(context, "ii.txo.tr(3, "), "ii.txo.tr(3, 0)")
+    assert_equal(last_line(context, "ii.txo.env(3, "), "ii.txo.env(3, 0)")
+  end)
+end
+
+test("leaving the lead releases only envelope activations that reached crow", function()
+  local context, S = leading_real()
+  params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+  context.clock.run_for(0.2)
+  -- Moving to 4 queues off(3), on(4) and the two times. Leave before drain.
+  params:set("v1_out_txo", 4)
+  S.lib.io_rig.set("ii_bus", "off")
+  assert_equal(envelope_trace(context, 3), "1,0", "3 still held the delivered setup")
+  assert_equal(envelope_trace(context, 4), "", "the queued setup on 4 never reached crow")
+  params:set("v1_out_txo", 3)
+  S.lib.io_rig.set("ii_bus", "strata")
+  context.clock.run_for(0.2)
+  assert_equal(envelope_trace(context, 3), "1,0,1")
+  assert_equal(envelope_trace(context, 4), "")
+end)
+
+test("a second voice choosing the same envelope while disconnected gets the current times", function()
+  local context, S = leading_real()
+  params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+  context.clock.run_for(0.2)
+  params:set("v1_out_txo_cv", 1)
+  context.crow.unplug()
+  params:set("v2_out_txo", 3); params:set("v2_out_txo_cv", ENVELOPE)
+  params:set("txo_attack", 123); params:set("txo_decay", 456)
+  context.crow.plug()
+  context.clock.run_for(0.5)
+  assert_equal(envelope_trace(context, 3), "1,1", "no obsolete deactivation")
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 123)")
+  assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 456)")
+end)
+
+-- Recover at checkpoints as well as at the end. An output that received
+-- env_act 1 can survive several discarded queues before the next checkpoint.
+local function check_bus_walk(state)
+  local context, S = state.context, state.S
+  if not state.plugged then context.crow.plug(); state.plugged = true end
+  S.lib.io_rig.set("ii_bus", "strata")
+  context.clock.run_for(0.6)
+  local heard = {}
+  for _, line in ipairs(context.crow.sent) do
+    local field, port, value = line:match("^ii%.txo%.env_(%a+)%((%d+), (%d+)%)$")
+    if field then
+      local output = tonumber(port)
+      heard[output] = heard[output] or {}
+      heard[output][field] = tonumber(value)
+    end
+  end
+  local wanted = {}
+  for voice = 1, 3 do
+    if params:get("v" .. voice .. "_out_txo_cv") == ENVELOPE then
+      wanted[params:get("v" .. voice .. "_out_txo")] = true
+    end
+  end
+  for output = 1, 4 do
+    local got = heard[output] or {}
+    if (got.act == 1) ~= (wanted[output] == true) then
+      return "output " .. output .. " reached crow in the wrong mode"
+    elseif wanted[output] and (got.att ~= params:get("txo_attack") or got.dec ~= params:get("txo_decay")) then
+      return "output " .. output .. " reached crow with stale envelope times"
+    end
+  end
+end
+
+h.walk({
+  name = "TXo bus walk reconciles the crow trace to the current routes",
+  seeds = {1097, 871, 752}, steps = 150,
+  setup = function(context)
+    local S = local_value("S")
+    context.crow.plug(); S.lib.io_rig.set("ii_bus", "strata")
+    params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
+    context.clock.run_for(0.2)
+    return {context = context, S = S, plugged = true}
+  end,
+  ops = {
+    {4, "route", function(_, random) params:set("v" .. random(3) .. "_out_txo", random(5) - 1) end},
+    {4, "mode", function(_, random) params:set("v" .. random(3) .. "_out_txo_cv", random(2)) end},
+    {2, "time", function(_, random)
+      local field = random(2) == 1 and "txo_attack" or "txo_decay"
+      params:set(field, random(500))
+    end},
+    {2, "fill", function(state)
+      for index = 1, 48 do state.S.lib.io_ii.send("filler", "full", index) end
+    end},
+    {3, "partial drain", function(state, random)
+      for _ = 1, random(3) do state.context.clock.advance_until(state.S.lfo_clock) end
+    end},
+    {2, "crow cable", function(state)
+      if state.plugged then state.context.crow.unplug() else state.context.crow.plug() end
+      state.plugged = not state.plugged
+    end},
+    {2, "bus leader", function(state)
+      local rig = state.S.lib.io_rig
+      rig.set("ii_bus", rig.get("ii_bus") == "strata" and "off" or "strata")
+    end},
+    {1, "recover", function(state) state.problem = check_bus_walk(state) end},
+  },
+  after = function(state) return state.problem end,
+  finish = check_bus_walk,
+})
+
 test("a gate high when crow leaves is lowered when crow returns", function()
   -- crow-ii.md §2 (TELEXo): tr(n, 1) and env(n, 1) raise, tr(n, 0) and env(n, 0) lower; a crow
   -- that leaves can send nothing, so the lows are owed to the next lead (lib/io/ii.lua)
@@ -588,10 +739,9 @@ test("a crow that leaves and returns turns off an envelope no longer wanted", fu
   assert_true(not on, "and does not set it up again")
 end)
 
-test("an envelope's setup the queue refused is sent again at the next sync", function()
+test("an envelope's refused setup retries as room returns", function()
   -- #871: with the ii queue full (II.queue_max, 48) the three setup lines are refused; the
-  -- output is not set up on the module, so a later sync (here another voice's output changing)
-  -- sends them: crow-ii.md §2 (TELEXo), env_act(n, 1), env_att(n, ms), env_dec(n, ms)
+  -- clock retries the setup as room returns: crow-ii.md §2 (TELEXo), env_act(n, 1), env_att(n, ms), env_dec(n, ms)
   local context, S = leading_real()
   local ii = S.lib.io_ii
   for k = 1, 60 do ii.send("filler", "full", k) end
@@ -601,22 +751,18 @@ test("an envelope's setup the queue refused is sent again at the next sync", fun
   assert_equal(ii.dropped() - before, 3, "the three setup lines were refused")
   for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
   assert_equal(ii.queued(), 0, "drained")
-  assert_equal(last_line(context, "ii.txo.env_"), nil, "no setup line reached crow")
+  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 10)", "setup retried without an edit")
   params:set("txo_attack", 25)
-  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
-  assert_equal(last_line(context, "ii.txo.env_att(3, "), nil, "an output not set up gets no time on its own")
-  params:set("v2_out_txo", 7)  -- the next sync: voice 2 to output 7, in pitch mode
   for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
   assert_equal(last_line(context, "ii.txo.env_act(3, "), "ii.txo.env_act(3, 1)", "the envelope set up")
   assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 25)", "its attack")
   assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 500)", "its decay")
-  assert_equal(last_line(context, "ii.txo.env_act(7, "), nil, "the pitch-mode output gets no envelope")
 end)
 
-test("a setup the queue took only in part is sent again whole at the next sync", function()
+test("a setup the queue took only in part is retried whole when room returns", function()
   -- #871: with one place left (47 of II.queue_max waiting) env_act is admitted and env_att and
   -- env_dec, later sends of its port's turn in the step, are refused; the output does not count
-  -- as set up, so the next sync sends all three (crow-ii.md §2, TELEXo)
+  -- as set up, so the retry sends all three (crow-ii.md §2, TELEXo)
   local context, S = leading_real()
   local ii = S.lib.io_ii
   for k = 1, ii.II.queue_max - 1 - ii.queued() do ii.send("filler", "full", k) end  -- the lead's own lines count
@@ -626,9 +772,6 @@ test("a setup the queue took only in part is sent again whole at the next sync",
   assert_equal(ii.dropped() - before, 2, "env_att and env_dec refused")
   for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
   assert_equal(last_line(context, "ii.txo.env_act(3, "), "ii.txo.env_act(3, 1)", "env_act reached crow")
-  assert_equal(last_line(context, "ii.txo.env_att(3, "), nil, "env_att did not")
-  params:set("v2_out_txo", 7)  -- the next sync: voice 2 to output 7, in pitch mode
-  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
   assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 10)", "its attack")
   assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 500)", "its decay")
   local env_acts = 0
@@ -645,9 +788,9 @@ test("a setup the queue took only in part is sent again whole at the next sync",
   end
 end)
 
-test("a time change the queue refused reaches the module at a later sync", function()
+test("a refused time change reaches the module as room returns", function()
   -- #871 one step on: an output set up whole, then an attack change refused by a full queue;
-  -- the next sync sends the setup again whole, env_att(n, ms) with the new time (crow-ii.md §2)
+  -- the retry sends the setup again whole, env_att(n, ms) with the new time (crow-ii.md §2)
   local context, S = leading_real()
   local ii = S.lib.io_ii
   params:set("v1_out_txo", 3); params:set("v1_out_txo_cv", ENVELOPE)
@@ -658,9 +801,6 @@ test("a time change the queue refused reaches the module at a later sync", funct
   params:set("txo_attack", 25)
   assert_equal(ii.dropped() - before, 1, "the attack's line refused")
   for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
-  assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 10)", "the module keeps the old time")
-  params:set("v2_out_txo", 7)  -- the next sync
-  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
   assert_equal(last_line(context, "ii.txo.env_att(3, "), "ii.txo.env_att(3, 25)", "the new attack")
   assert_equal(last_line(context, "ii.txo.env_dec(3, "), "ii.txo.env_dec(3, 500)", "and the decay, with the setup")
 end)
@@ -688,8 +828,6 @@ test("a setup is not tried again while the queue has no room for it", function()
   params:set("v2_out_txo", 7)  -- a sync while the queue is still full
   assert_equal(ii.dropped() - before, 0, "no retry while the queue is full")
   for _ = 1, 60 do context.clock.advance_until(S.lfo_clock) end
-  params:set("v2_out_txo", 8)  -- a sync with room
-  for _ = 1, 10 do context.clock.advance_until(S.lfo_clock) end
   assert_equal(last_line(context, "ii.txo.env_act(3, "), "ii.txo.env_act(3, 1)", "set up once there is room")
 end)
 
