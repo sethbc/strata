@@ -30,7 +30,7 @@
 - **Invariant:** `scan holds`: a voice's scan is held exactly while its set of holders is not empty (`scan_hold[v]` true with one or more holders, false with none; #238's one boolean behind several holders).
 - **Test:** `test/unit/positions_test.lua`: "scan hold: every cell is decided" and its rows (voice 3, a stopped buffer voice, so a start is its voice sync; the holders a grid on port 1 and the arc).
 
-Every cell is a row. `scanHold 1` goes out when the first holder joins and `scanHold 0` when the last one leaves, while the voice runs; the cleanup step `scrub_glide` lets every holder go through `hold_scan`.
+Every cell is a row. `scanHold 1` goes out when the first holder joins and `scanHold 0` when the last one leaves, while the voice runs; the cleanup step `scrub_glide` lets every holder go through `hold_scan`. On either edge, `set_scan_hold` advances the playhead at the old rate before changing the hold. A failed estimate prints its traceback. Consecutive failures with the same message on that voice stay quiet until the message changes or an estimate on a hold edge succeeds. The hold, engine send and redraws still follow the holders.
 
 | State | Event | Next | Effect |
 |---|---|---|---|

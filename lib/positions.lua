@@ -138,8 +138,9 @@ return function(S)
   -- playhead estimate up to now first. Every grid's hold key shows it,
   -- whoever changed it (a grid key, the arc, a grid that left, cleanup),
   -- and so does BUFFER's ALT ring 1 (#934)
+  local hold_estimate_errors = {}
   local function set_scan_hold(voice_idx, on)
-    S.lib.playheads.advance(voice_idx)
+    S.lib.ui_frame.contained_call(hold_estimate_errors, voice_idx, "scan hold estimate", S.lib.playheads.advance, voice_idx)
     scan_hold[voice_idx] = on
     send_grain(voice_idx, "scanHold", on and 1 or 0)
     grid_redraw()
