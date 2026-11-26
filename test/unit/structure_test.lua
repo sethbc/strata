@@ -829,6 +829,21 @@ local function global_accesses(file_path, label)
   return reads, writes, unresolved
 end
 
+test("unit files keep discarded return values local (#1137)", function()
+  if not GLOBAL_CHECK_RUNS then
+    real_print("     (skipped: the global-write check runs under Lua 5.3 only)")
+    return
+  end
+  assert_true(LUAC, "the global-write check needs Lua 5.3's luac on PATH")
+  local problems = {}
+  for _, name in ipairs(h.unit_files(repo_root .. "/test/unit")) do
+    local path = "test/unit/" .. name
+    local _, writes = global_accesses(repo_root .. "/" .. path, path)
+    if writes._ then problems[#problems + 1] = writes._ end
+  end
+  assert_equal(#problems, 0, "unit files write the global _: " .. table.concat(problems, ", "))
+end)
+
 -- The globals norns (as stubbed) and the Lua standard library provide: the
 -- keys of _G right after stubs.install, with every global a script load
 -- left behind cleared first (and put back after)

@@ -95,6 +95,7 @@ The Wave 0 golden master (a logged scripted session compared with a fixture) pro
   - `luac -l -l -p` lists each file's `GETTABUP`/`SETTABUP` on `_ENV` (the name in the comment, or for a key past the first 256 constants the `LOADK` into its register);
   - every global read must be written by some script file or be a key of `_G` right after `stubs.install` (norns and the standard library);
   - `KNOWN_UNDEFINED_GLOBALS` lists reads allowed while their bug is open (none today).
+- Unit files keep discarded return values local. In a serial run, norns' `tab.load` stub returns the global `_` for a missing file. The Lua 5.3 structure check reads each unit file's bytecode to catch assignments to that global (#1137).
 - **Duplicate-global check** (same listing, Lua 5.3 only): no global, function or value, is written by more than one file, since a later include would silently replace the earlier definition. `GLOBALS_WRITTEN_IN_TWO_FILES` allows `key` and `enc`, which `lib/pages/buffer.lua` puts back when the file selector fails.
 - **Locals probe**:
   - inserts `local p1, ..., pN` at the end of each file's main chunk (before a module's final top-level `return`) and of each constructor (before its final `  return M\nend`; every module but the plain constants table must end that way);
