@@ -135,6 +135,22 @@ return function(S)
   S.register_ii_device({name = "er301", ports = true, param_count = ER301.param_count,
     add_params = function() M.add_params() end})
 
+  -- An ordinary edit runs the route action. A silent preset read skips it,
+  -- so compare the final ports with those last applied before ending notes.
+  local applied_ports = {}
+  local function route_changed(voice, port)
+    applied_ports[voice] = port
+    if S.lib.io_targets and S.lib.io_targets.route_changed then S.lib.io_targets.route_changed(voice) end
+  end
+
+  S.register_pset_hook({name = "io_er301", read = function(_, _, _, silent)
+    if not silent then return end
+    for voice, applied in ipairs(applied_ports) do
+      local port = port_of(voice)
+      if port ~= applied then route_changed(voice, port) end
+    end
+  end})
+
   -- The seven params, PSET-only, in the ii group (the ii module adds it)
   function M.add_params()
     for voice = 1, NUM_VOICES do
@@ -144,9 +160,8 @@ return function(S)
           local port = param:get()
           return port == 0 and ER301.labels.off or string.format(ER301.labels.port, port)
         end,
-        action = function()
-          if S.lib.io_targets and S.lib.io_targets.route_changed then S.lib.io_targets.route_changed(voice) end
-        end}
+        action = function(port) route_changed(voice, port) end}
+      applied_ports[voice] = port_of(voice)
     end
   end
 

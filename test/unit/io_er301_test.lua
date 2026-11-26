@@ -347,6 +347,56 @@ local function last_line(context, prefix)
   return last
 end
 
+-- #1110: exercise the played-note owner, the preset read and the ii queue.
+for _, silent in ipairs({false, true}) do
+  for _, destination in ipairs({0, 2}) do
+    test(("a %s PSET read moves a held ER-301 route from port 1 to %d"):format(
+        silent and "silent" or "normal", destination), function()
+      local context, S = leading_real()
+      params:set("midi_note_off", 2) -- release
+      params:set("v1_out_er301", destination)
+      params:set("v2_out_er301", 3)
+      local path = context.data_dir .. "er301-route.pset"
+      params:write(path)
+      params:set("v1_out_er301", 1)
+
+      local function midi_note(channel, pitch, down)
+        context.midi.send(1, {type = down and "note_on" or "note_off", ch = channel,
+          note = pitch, vel = down and 100 or 0})
+        context.clock.run_for(0.2)
+      end
+      local function gates()
+        local sent = {}
+        for _, line in ipairs(context.crow.sent) do
+          if line:match("^ii%.er301%.tr") then sent[#sent + 1] = line end
+        end
+        context.crow.clear()
+        return table.concat(sent, "|")
+      end
+
+      midi_note(1, 60, true)
+      midi_note(2, 65, true)
+      assert_equal(gates(), "ii.er301.tr(1, 1)|ii.er301.tr(3, 1)")
+      params:read(path, silent)
+      context.clock.run_for(0.2)
+      assert_equal(gates(), "ii.er301.tr(1, 0)", "the old gate lowers at load")
+      assert_true(next(S.lib.io_targets.sounding(1)) == nil, "the old target is released")
+      assert_true(next(S.lib.io_targets.sounding(2)) ~= nil, "the other voice keeps its target")
+
+      midi_note(1, 62, true)
+      assert_equal(gates(), destination == 0 and "" or "ii.er301.tr(2, 1)", "the next note follows the route")
+      params:read(path, silent)
+      context.clock.run_for(0.2)
+      midi_note(1, 60, false)
+      assert_equal(gates(), "", "an unchanged read and the old key-up leave sounding notes alone")
+      midi_note(1, 62, false)
+      midi_note(2, 65, false)
+      assert_equal(gates(), destination == 0 and "ii.er301.tr(3, 0)" or "ii.er301.tr(2, 0)|ii.er301.tr(3, 0)",
+        "each sounding port lowers at its own key-up")
+    end)
+  end
+end
+
 test("a gate high when crow leaves is lowered when crow returns", function()
   -- crow-ii.md §2 (ER-301): tr(port, 1) raises the trigger, tr(port, 0) lowers it; a crow that
   -- leaves can send nothing, so the low is owed to the next lead (lib/io/ii.lua)
