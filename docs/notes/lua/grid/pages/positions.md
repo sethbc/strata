@@ -11,6 +11,8 @@
 - `lib/grid/pages/positions.lua` (`S.lib.grid_pages_positions`): its record (`M.record`, `sides = 2`), registered at `GRID_PAGES.positions`, and `M.POSITIONS_PAGE` (side 2's columns: `marks` 6 store, 7 hold, 8 whole; `slot_column` 8; `record_line` 1, `clear_line` 2), and the local `still_of(pane, x, y, z)`.
 - Unit tests: `test/unit/grid_pages_positions_test.lua`, on every arrangement of the pane harness; the marks' waiting blink on side 2 in `test/unit/playheads_test.lua`; the press records' pane in `test/unit/positions_test.lua`.
 
+A bookmark stored from another pane keeps that pane's physical press. If the pane changes page or reuses the coordinate, the bookmark returns to its steady LED while Store on the other pane stays bright (#1095).
+
 ## Keys and LEDs (design §10.7)
 
 Side 1 (lines 1-7 are voices 1-7):
