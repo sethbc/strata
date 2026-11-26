@@ -289,42 +289,53 @@ end)
 
 -- 3.9 (#909): a grain-restart hook is told its reason ("start" or
 -- "source"), so none reads voice.active to tell a start from a switch.
--- Each S.register_grain_restart(...) in the script's Lua files, comments
--- and strings left out: its hook's body (a function written in the call,
--- or the named local function of the same file), from its first line to
--- the line at the same indentation that begins with end, or the one line
--- when the call ends on it. Returns the hooks found (file and line) and
--- the ones whose body reads .active
+-- Extract one function body from the sanitized call or from the named
+-- local's declaration. In Lua, function, if and do (including a loop's
+-- do) each take one end. An inline function must be the whole argument.
+local function restart_hook_body(call, code)
+  local name = call:match("^%(%s*([%a_][%w_]*)%s*%)$")
+  local rest
+  if name then
+    local declaration = "%f[%w_]local%s+function%s+" .. name .. "%s*%b()"
+    local _, params_end = code:find(declaration)
+    if not params_end or code:find(declaration, params_end + 1) then return nil end
+    rest = code:sub(params_end + 1)
+  else
+    rest = call:match("^%(%s*function%s*%b()(.*)$")
+    if not rest then return nil end
+  end
+  local depth = 1
+  for word, after in rest:gmatch("([%a_][%w_]*)()") do
+    if word == "function" or word == "if" or word == "do" then
+      depth = depth + 1
+    elseif word == "end" then
+      depth = depth - 1
+      if depth == 0 then
+        if name or rest:match("^%s*%)$", after) then return rest:sub(1, after - 1) end
+        return nil
+      end
+    end
+  end
+end
+
+-- Find each registration before looking at its argument. The balanced
+-- parentheses cover the whole inline body, regardless of its line breaks.
+-- A registration we cannot resolve is a failure at its own file and line.
 local function grain_restart_hook_reads(sources)
   local hooks, reads = {}, {}
   for _, source in ipairs(sources) do
-    local lines = {}
-    for line in (sync_check.sanitize_lua(source.text) .. "\n"):gmatch("([^\n]*)\n") do lines[#lines + 1] = line end
-    local function body_from(first)
-      local indent = lines[first]:match("^(%s*)")
-      if lines[first]:match("end%s*%)%s*$") then return { lines[first] } end
-      local body = { lines[first] }
-      for number = first + 1, #lines do
-        body[#body + 1] = lines[number]
-        if lines[number]:match("^(%s*)") == indent and lines[number]:match("^%s*end%f[^%w_]") then break end
-      end
-      return body
-    end
-    for number, line in ipairs(lines) do
-      local argument = line:match("register_grain_restart%s*%(%s*([%w_]+)")
-      if argument and not line:match("function%s+[%w_.:]*register_grain_restart") then
-        local first = number
-        if argument ~= "function" then
-          first = nil
-          for at, other in ipairs(lines) do
-            if other:match("^%s*local%s+function%s+" .. argument .. "%s*%(") then first = at end
-          end
-        end
-        local where = source.path .. ":" .. number
+    local code = sync_check.sanitize_lua(source.text)
+    for start, open in code:gmatch("()%f[%w_]register_grain_restart%s*()%(") do
+      local before = code:sub(1, start - 1)
+      if not before:match("%f[%w_]function%s+[%w_.:]*%s*$") then
+        local _, newlines = source.text:sub(1, start - 1):gsub("\n", "")
+        local where = source.path .. ":" .. (newlines + 1)
         hooks[#hooks + 1] = where
-        if not first then
-          reads[#reads + 1] = where .. " (its function " .. argument .. " is not a local function of the file)"
-        elseif table.concat(body_from(first), "\n"):find("%.active%f[^%w_]") then
+        local call = code:match("^%b()", open) or ""
+        local body = restart_hook_body(call, code)
+        if not body then
+          reads[#reads + 1] = where .. " (expected an inline function or a named local function)"
+        elseif body:find("%.%s*active%f[^%w_]") then
           reads[#reads + 1] = where
         end
       end
@@ -332,6 +343,37 @@ local function grain_restart_hook_reads(sources)
   end
   return hooks, reads
 end
+
+test("multiline grain-restart hooks are scanned and an unsupported argument fails closed", function()
+  local hooks, reads = grain_restart_hook_reads({ { path = "probe.lua", text = [[
+local function clean(v) return v end
+local function unsafe(v) return v.active end
+S.register_grain_restart(
+  clean)
+S.register_grain_restart(
+  -- a named hook
+  unsafe)
+S.register_grain_restart(
+  function(v)
+    if v then return v.active end
+  end)
+S.register_grain_restart(
+  function(v) return v end)
+S.register_grain_restart(
+  build_hook())
+function M.register_grain_restart(fn) end
+local example = "S.register_grain_restart(unsafe)"
+-- S.register_grain_restart(unsafe)
+S.register_grain_restart(function() end and unsafe or function() end)
+]] } })
+  assert_equal(table.concat(hooks, " "), "probe.lua:3 probe.lua:5 probe.lua:8 probe.lua:12 probe.lua:14 probe.lua:19",
+    "each registration is counted once, including a call with an unsupported expression")
+  assert_equal(#reads, 4, "two forbidden reads and two unrecognized hook expressions")
+  assert_equal(reads[1], "probe.lua:5", "the named function reads .active")
+  assert_equal(reads[2], "probe.lua:8", "the inline function reads .active")
+  assert_true(reads[3]:match("^probe%.lua:14 ") ~= nil, "report the unrecognized argument at its registration")
+  assert_true(reads[4]:match("^probe%.lua:19 ") ~= nil, "a function literal inside an expression is not the hook")
+end)
 
 test("no grain-restart hook reads voice.active", function()
   -- the scanner itself
