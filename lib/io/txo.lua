@@ -174,7 +174,14 @@ return function(S)
     end
   end
 
+  -- The route last applied for each voice, including voices with no TXo output.
+  local applied_routes = {}
+  local function remember_route(voice)
+    applied_routes[voice] = {output = output_of(voice), envelope = envelope_of(voice)}
+  end
+
   local function route_changed(voice)
+    remember_route(voice)
     local targets = S.lib.io_targets
     if targets and targets.route_changed then targets.route_changed(voice) end
   end
@@ -333,7 +340,13 @@ return function(S)
   -- A silent read skipped the route actions. Settle all outputs together:
   -- one voice can leave an envelope that another recalled voice still wants.
   S.register_pset_hook({name = "io_txo", read = function(_, _, _, silent)
-    if silent then M.sync() end
+    if not silent then return end
+    for voice, applied in ipairs(applied_routes) do
+      if output_of(voice) ~= applied.output or envelope_of(voice) ~= applied.envelope then
+        route_changed(voice)
+      end
+    end
+    M.sync()
   end})
 
   function M.add_params()
@@ -350,6 +363,7 @@ return function(S)
         end, action = changed}
       params:add{type = "option", id = mode_id(voice), name = "v" .. voice .. " txo mode",
         options = TXO.modes, default = 1, action = changed}
+      remember_route(voice)
     end
     for _, field in ipairs({"attack", "decay"}) do
       params:add{type = "number", id = "txo_" .. field, name = "txo " .. field,

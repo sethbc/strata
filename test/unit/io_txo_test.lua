@@ -734,6 +734,73 @@ h.walk({
   finish = check_bus_walk,
 })
 
+-- Read actual PSETs while two MIDI keys hold TXo gates. The keyboard,
+-- target ledger and ii queue all take the same paths as on norns.
+for _, silent in ipairs({false, true}) do
+  for _, recalled_output in ipairs({0, 4}) do
+    local kind = silent and "silent" or "ordinary"
+    test(kind .. " PSET changing TXo output 1 to " .. recalled_output .. " ends its gate at load (#1111)", function()
+      local context, S = leading_real()
+      context.midi.plug(1, "keys")
+      params:set("midi_note_off", 2)
+      params:set("v1_out_txo", recalled_output)
+      params:set("v2_out_txo", 2)
+      params:set("v3_out_txo", 1)
+      params:write(1)
+      params:set("v1_out_txo", 1)
+      local function key_event(voice, pitch, down)
+        context.midi.send(1, {type = down and "note_on" or "note_off", ch = voice, note = pitch, vel = down and 100 or 0})
+        context.clock.run_for(0.2)
+      end
+      local function gate(output)
+        return last_line(context, "ii.txo.tr(" .. output .. ", ")
+      end
+      key_event(1, 60, true)
+      key_event(2, 64, true)
+      assert_equal(gate(1), "ii.txo.tr(1, 1)", "old gate held")
+      assert_equal(gate(2), "ii.txo.tr(2, 1)", "another voice holds its gate")
+      params:read(1, silent)
+      context.clock.run_for(0.2)
+      assert_equal(gate(1), "ii.txo.tr(1, 0)", "old gate lowered before key-up")
+      assert_equal(next(S.lib.io_targets.sounding(1)), nil, "old target released at load")
+      assert_true(next(S.lib.io_targets.sounding(2)) ~= nil, "unrelated voice still owns its gate")
+      assert_equal(gate(2), "ii.txo.tr(2, 1)", "unrelated gate stayed high")
+      key_event(3, 67, true)
+      key_event(1, 60, false)
+      assert_equal(gate(1), "ii.txo.tr(1, 1)", "late key-up left the replacement note high")
+      key_event(1, 62, true)
+      if recalled_output > 0 then
+        assert_equal(gate(4), "ii.txo.tr(4, 1)", "next note raised the new output")
+      else
+        assert_equal(next(S.lib.io_targets.sounding(1)), nil, "next note has no external target")
+      end
+      params:read(1, silent)
+      context.clock.run_for(0.2)
+      assert_equal(gate(1), "ii.txo.tr(1, 1)", "unchanged read preserved the replacement gate")
+      if recalled_output > 0 then assert_equal(gate(4), "ii.txo.tr(4, 1)", "unchanged new route stayed high") end
+      key_event(3, 67, false)
+      assert_equal(gate(1), "ii.txo.tr(1, 0)", "replacement key-up lowered its gate")
+    end)
+  end
+end
+
+test("a silent TXo mode change releases the note's envelope and trigger on their original output (#1111)", function()
+  local context, S = leading_real()
+  context.midi.plug(1, "keys")
+  params:set("v1_out_txo", 1)
+  params:write(1)
+  params:set("v1_out_txo_cv", ENVELOPE)
+  context.midi.send(1, {type = "note_on", ch = 1, note = 60, vel = 100})
+  context.clock.run_for(0.2)
+  assert_equal(last_line(context, "ii.txo.env(1, "), "ii.txo.env(1, 1)", "the note raised the envelope gate")
+  params:read(1, true)
+  context.clock.run_for(0.2)
+  assert_equal(last_line(context, "ii.txo.tr(1, "), "ii.txo.tr(1, 0)", "the note's trigger ended")
+  assert_equal(last_line(context, "ii.txo.env(1, "), "ii.txo.env(1, 0)", "the original envelope gate ended")
+  assert_equal(last_line(context, "ii.txo.env_act(1, "), "ii.txo.env_act(1, 0)", "the output returned to pitch mode")
+  assert_equal(next(S.lib.io_targets.sounding(1)), nil, "the old note has no target")
+end)
+
 test("a gate high when crow leaves is lowered when crow returns", function()
   -- crow-ii.md §2 (TELEXo): tr(n, 1) and env(n, 1) raise, tr(n, 0) and env(n, 0) lower; a crow
   -- that leaves can send nothing, so the lows are owed to the next lead (lib/io/ii.lua)
