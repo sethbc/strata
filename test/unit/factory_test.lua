@@ -659,6 +659,50 @@ test("a refused write stops the load with one line and marks nothing", function(
   assert_equal(marked(context), 1, "the next load finishes it")
 end)
 
+-- Keep the real size probe, data file handles, output and rename. Only the
+-- source read fails, immediately or after bytes have reached the part.
+for _, prefix in ipairs({ 0, 16, 13 }) do
+  test("a factory source read error after " .. prefix .. " bytes preserves the destination and can be retried", function()
+    local context, _, dir = session()
+    local source = dir .. "factory/dusk/audio/bell.wav"
+    local destination = install_dir(context) .. "bell.wav"
+    local original = file_text(source)
+    factory().FACTORY.copy_chunk_bytes = 16
+    util.make_dir(install_dir(context))
+    if prefix > 0 then write_text(destination, "previous sample") end
+    local open, measured, consumed = io.open, nil, 0
+    io.open = function(path, mode)
+      local file, why = open(path, mode)
+      if not file or path ~= source or mode ~= "rb" then return file, why end
+      return {
+        seek = function(_, where)
+          measured = file:seek(where)
+          return measured
+        end,
+        read = function(_, bytes)
+          if consumed == prefix then return nil, "injected source I/O error", 5 end
+          local chunk = file:read(math.min(bytes, prefix - consumed))
+          consumed = consumed + #chunk
+          return chunk
+        end,
+        close = function() return file:close() end,
+      }
+    end
+    local ok, why = pcall(function() assert_true(factory().load("dusk")); run_load(context) end)
+    io.open = open
+    assert_true(ok, tostring(why))
+    assert_equal(measured, #original, "the installer measured the real source before copying")
+    assert_equal(consumed, prefix)
+    assert_equal(file_text(destination), prefix > 0 and "previous sample" or nil)
+    assert_true(not util.file_exists(destination .. ".part"))
+    assert_equal(marked(context), nil)
+    assert_equal(#lines_with(context, "bell.wav could not be installed (injected source I/O error)"), 1)
+    assert_true(factory().load("dusk")); run_load(context)
+    assert_equal(file_text(destination), original)
+    assert_equal(marked(context), 1)
+  end)
+end
+
 test("a load refuses a key the index lists not, and one that is no key", function()
   session()
   assert_equal(select(2, factory().load("dawn")), "no set")
