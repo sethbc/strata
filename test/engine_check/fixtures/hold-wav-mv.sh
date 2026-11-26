@@ -6,7 +6,7 @@ case $dest in
   */peaks-search-fault/buf1.peaks)
     /bin/mv "$@" || exit $?
     exec chmod 000 "${dest%/*}" ;;
-  */held-*.wav) ;;
+  */held-*.wav|*/held-peaks-*/buf1.peaks) ;;
   *) exec /bin/mv "$@" ;;
 esac
 if mkdir "$dest.barrier" 2>/dev/null; then

@@ -1971,7 +1971,7 @@ test.("record: a loop recording's refresh writes its peaks file only when the ov
 test.("record: a command sent during a peaks refresh is handled with the refresh's rename still under way (#210, #964)", {
     var slot = 2, rounds = 10, counters = state[\peakWrites], mover = engine.areaState[\waveform][\mover];
     var results = List.new(rounds), ping, usable, source = noiseSource.value, good, round;
-    var partOf = { arg generation; engine.peaksPath(slot).standardizePath ++ "." ++ engine.instanceTag ++ "-" ++ generation ++ ".part" };
+    var path = File.realpath(engine.peaksPath(slot).dirname) +/+ engine.peaksPath(slot).basename;
     server.sync;
     record.(slot, 0.25, 1.0);
     waitDone.(slot, 2);
@@ -1985,7 +1985,7 @@ test.("record: a command sent during a peaks refresh is handled with the refresh
             each[\heard] = true;
             each[\refreshes] = counters[\refreshes] - each[\refreshesBefore];
             each[\pending] = mover[\pending] - each[\pendingBefore];
-            each[\partThere] = File.exists(partOf.(engine.areaState[\waveform][\generation]));
+            each[\partThere] = engine.pathRenames[path].notNil and: { File.exists(path ++ "." ++ engine.pathRenames[path][\token] ++ ".part") };
             each[\generation] = engine.areaState[\waveform][\generation] - each[\generationBefore];
         };
     }, '/strataCheckRefreshPing');
