@@ -30,7 +30,7 @@ Each output has a **source**, a **range** (`0..5`, `0..10` or `-5..5` V) and a *
 - **a modulation source** (`lfo1`, `macro3`, `pressure2`, `crow1`, ... the sources MOD lists) - the output follows it across its range, smoothed over 20 ms. An LFO that runs in the engine (its destination shows `~` on the LFO page) is followed as Strata's own model of it, so the output shows `~` too: in step with a clocked LFO, drifting slowly from a free one, and the random shapes draw their own values
 - **v1 pitch** to **v7 pitch** - the voice's newest note, at 1 V an octave with MIDI note 60 (middle C) at 0 V, kept inside the range
 - **v1 gate** to **v7 gate** - 5 V while the voice has a note sounding, 0 V when the last one ends. Choosing a gate source sets the jack at once: 5 V when that voice sounds, otherwise 0 V, so a gate moved off a sounding voice never stays high
-- **clock** - a 10 ms pulse of 5 V every **div** beats (`1/16` to `4`, default `1`) of norns' clock
+- **clock** - a 10 ms pulse of 5 V every **div** beats (`1/16` to `4`, default `1`) of norns' clock. Loading a PSET changes the pulse rate to its saved division. Loading the same division keeps the next pulse on time.
 
 A PSET keeps each output's source by its name, so a later release that adds modulation sources still loads it on the same source; a source a PSET names that this Strata does not have leaves the output off until one that has it loads the PSET.
 
