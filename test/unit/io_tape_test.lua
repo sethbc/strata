@@ -181,24 +181,42 @@ end)
 test("each param reaches both voices while the tape is on", function()
   local context = started()
   params:set("tapeloop", 1)
+  audio.level_eng_cut(0.4)  -- a system mixer adjustment while the tape runs
+  params:set("tapeloop_rec", 0)
   params:set("tapeloop_length", 8)
   params:set("tapeloop_rate", -1)
   params:set("tapeloop_feedback", 0.8)
   params:set("tapeloop_level", 0.3)
-  params:set("tapeloop_rec", 0)
   for v = 1, 2 do
     assert_equal(value(context, "loop_end", v), 8)
     assert_equal(value(context, "rate", v), -1)
     assert_near(value(context, "level_cut_cut", v, v), 0.8 / 1.2, 1e-9)
     assert_near(value(context, "level", v), 0.3, 1e-9)
-    assert_equal(value(context, "rec_level", v), 0)
+    assert_equal(value(context, "level_input_cut", v, v), 0, "record off closes the input")
+    assert_equal(value(context, "rec_level", v), 1, "feedback is still written")
+    assert_equal(value(context, "play", v), 1)
   end
   params:set("tapeloop_wear", 1)
   for v = 1, 2 do assert_near(value(context, "pre_filter_fc", v), 800, 1e-6) end
   params:set("tapeloop_wear", 0)
   for v = 1, 2 do assert_near(value(context, "pre_filter_fc", v), 12000, 1e-6) end
   params:set("tapeloop_rec", 1)
-  for v = 1, 2 do assert_equal(value(context, "rec_level", v), 1) end
+  for v = 1, 2 do assert_equal(value(context, "level_input_cut", v, v), 1, "record on reopens the input") end
+  assert_equal(context.audio.levels.eng_cut, 0.4, "the record switch leaves the mixer alone")
+end)
+
+test("starting the tape with record off closes the inputs and writes the repeats", function()
+  local context = started()
+  params:set("tapeloop_rec", 0)
+  params:set("tapeloop_feedback", 1)
+  params:set("tapeloop", 1)
+  for v = 1, 2 do
+    assert_equal(value(context, "level_input_cut", v, v), 0, "input closed at start")
+    assert_equal(value(context, "rec_level", v), 1, "feedback can reach the buffer")
+    assert_equal(value(context, "level_cut_cut", v, v), 1 / 1.2)
+    assert_equal(value(context, "rec", v), 1)
+    assert_equal(value(context, "play", v), 1)
+  end
 end)
 
 test("turning the tape off, and cleanup, disable both voices and put the mixer back", function()

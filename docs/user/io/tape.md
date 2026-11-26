@@ -11,7 +11,7 @@ All seven are saved with a PSET (the **tape** group in PARAMETERS: `tape loop`, 
 | Setting | Values | Default | What it does |
 |---|---|---|---|
 | tape | off, on | off | turns the loop on or off |
-| record | off, on | on | whether new sound is written into the loop; off keeps what it holds (the feedback still applies) |
+| record | off, on | on | turn off to stop adding new sound. The loop keeps playing at its set speed, with feedback and wear applied on each pass |
 | length | 0.25-60 s | 4 s | how long the loop is |
 | speed | -2 to 2 | 1 | playback speed; negative plays backward; changes glide over 0.2 s |
 | feedback | 0-1 | 0.5 | how much of the loop stays each pass; at the top the loop just holds |
