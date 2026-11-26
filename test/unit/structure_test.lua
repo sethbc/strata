@@ -3627,7 +3627,7 @@ test("the 3.13 script's -c reports a run missing some of the workflow's shards a
     -- run 1 is whole; run 2 has alpha alone, and it passed; run 3 lacks the grouped shard and its zeta crashed
     { "1-zeta", 0, passed }, { "1-alpha", 0, passed }, { "1-buffers_loops_types", 0, passed }, { "2-alpha", 0, passed },
     { "3-zeta", 1, "ENGINE CHECK FAILED: sclang ended on signal 11 after 9 s; sclang stopped\n" }, { "3-alpha", 0, passed },
-    -- run 4 is in the old single-process layout, never incomplete
+    -- run 4 has its single-process log
     { "4", 0, passed },
   })
   local output = run_fake_313(checkout, "-c -n 4 -o " .. shell_quote(root))
@@ -3638,6 +3638,21 @@ test("the 3.13 script's -c reports a run missing some of the workflow's shards a
     assert_true(output:find(expected, 1, true) ~= nil, "the summary holds \"" .. expected .. "\": " .. output)
   end
   h.remove_tree(checkout)
+end)
+
+test("the 3.13 script's -c reports a missing single-run log as incomplete (#1085)", function()
+  local root = data_root .. "sc313-missing-log"
+  write_shard_fixtures(root, { { "1", 0, "ENGINE CHECK PASSED\n" } })
+  local arguments = "-c -n 1 -o " .. h.shell_quote(root)
+  local control = run_313_script(root, arguments)
+  assert_true(control:find("run 1: passed\n", 1, true) ~= nil and control:find("exit=0", 1, true) ~= nil, control)
+
+  assert(os.remove(root .. "/run-1.log"))
+  local output = run_313_script(root, arguments)
+  assert_true(output:find("run 1: incomplete", 1, true) ~= nil and output:find("run-1.log", 1, true) ~= nil, output)
+  assert_true(output:find("passed 0 of 1;", 1, true) ~= nil and output:find("incomplete 1\n", 1, true) ~= nil, output)
+  assert_true(output:find("exit=1", 1, true) ~= nil, output)
+  h.remove_tree(root)
 end)
 
 test("the 3.13 script classifies a run by its log (#545, #544)", function()
