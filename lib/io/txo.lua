@@ -21,6 +21,7 @@ return function(S)
     level_volts = 5,                          -- an envelope's full level, at velocity 1
     attack = {min = 1, max = 10000, default = 10},    -- ms
     decay = {min = 1, max = 10000, default = 500},    -- ms
+    time_fields = {"attack", "decay"},
     time_commands = {attack = "env_att", decay = "env_dec"},
     setup_lines = 3,                          -- env_act, env_att, env_dec
     partial = "partial",                      -- setup or a time needs retrying
@@ -36,7 +37,7 @@ return function(S)
   -- was raised}. A note stays on the output and in the mode it started in
   -- until it ends, whatever its voice's params say by then.
   local lines = {}
-  -- active projects the queue through its tail (true = complete setup).
+  -- A complete setup in active holds its attack and decay at the queue tail.
   -- delivered holds just the envelopes whose last env_act handed to crow
   -- was 1. A lead change discards the queue, so it starts from delivered.
   local active, delivered = {}, {}
@@ -114,10 +115,11 @@ return function(S)
 
   local function set_up(output)
     local act = send_active(output, 1)
-    local att = bus().send("txo", "env_att", output, params:get("txo_attack"))
-    local dec = bus().send("txo", "env_dec", output, params:get("txo_decay"))
+    local attack, decay = params:get("txo_attack"), params:get("txo_decay")
+    local att = bus().send("txo", TXO.time_commands.attack, output, attack)
+    local dec = bus().send("txo", TXO.time_commands.decay, output, decay)
     if act and att and dec then
-      active[output] = true
+      active[output] = {attack = attack, decay = decay}
     else
       if act or active[output] then active[output] = TXO.partial end
       retry_needed = true
@@ -127,6 +129,27 @@ return function(S)
   local function room_for(count)
     local ii = bus()
     return ii.II.queue_max - ii.queued() >= count
+  end
+
+  local function set_time(output, field, value)
+    if not bus().send("txo", TXO.time_commands[field], output, value) then
+      active[output] = TXO.partial
+      retry_needed = true
+    elseif active[output] ~= TXO.partial then
+      active[output][field] = value
+    end
+  end
+
+  local function reconcile_output(output)
+    local setup = active[output]
+    if not setup or setup == TXO.partial then
+      if room_for(TXO.setup_lines) then set_up(output) else retry_needed = true end
+      return
+    end
+    for _, field in ipairs(TXO.time_fields) do
+      local value = params:get("txo_" .. field)
+      if setup[field] ~= value then set_time(output, field, value) end
+    end
   end
 
   -- Every route participates in the desired mode. Reconfigure the edited
@@ -147,13 +170,7 @@ return function(S)
     local named = only_voice and envelope_output(only_voice)
     if named then set_up(named) end
     for _, output in ipairs(sorted_outputs(want)) do
-      if output ~= named and active[output] ~= true then
-        if room_for(TXO.setup_lines) then
-          set_up(output)
-        else
-          retry_needed = true
-        end
-      end
+      if output ~= named then reconcile_output(output) end
     end
   end
 
@@ -163,14 +180,11 @@ return function(S)
     if retry_needed and leading() and room_for(1) then M.sync() end
   end)
 
-  local function send_time(command, value)
+  local function send_time(field, value)
     if not leading() then return end
     local want = wanted()
     for _, output in ipairs(sorted_outputs(active)) do
-      if want[output] and not bus().send("txo", command, output, value) then
-        active[output] = TXO.partial
-        retry_needed = true
-      end
+      if want[output] then set_time(output, field, value) end
     end
   end
 
@@ -365,11 +379,11 @@ return function(S)
         options = TXO.modes, default = 1, action = changed}
       remember_route(voice)
     end
-    for _, field in ipairs({"attack", "decay"}) do
+    for _, field in ipairs(TXO.time_fields) do
       params:add{type = "number", id = "txo_" .. field, name = "txo " .. field,
         min = TXO[field].min, max = TXO[field].max, default = TXO[field].default,
         formatter = function(param) return string.format(TXO.labels.ms, param:get()) end,
-        action = function(value) send_time(TXO.time_commands[field], value) end}
+        action = function(value) send_time(field, value) end}
     end
   end
 
