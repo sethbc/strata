@@ -240,15 +240,11 @@ test("the engine's shared constants equal strata.lua's (#25)", function()
   assert_equal(engine_spec.buffer_state_loads, declared.BUFFER_STATE_LOADS, "bufferStateLoads = BUFFER_STATE_LOADS")
 end)
 
--- #459: the engine packs bufferLoadFailed, bufferSaveResult and recordState
--- in three Value methods and Lua decodes them in three handlers. Each
--- method's expression is read from the engine source and evaluated as
--- sclang does (binary operators left to right, messages first), and the
--- values it gives reach the handlers, which must act on the load, save or
--- recording they name.
+-- Evaluate the engine's poll expressions as sclang does (binary operators
+-- left to right, messages first), then feed the values to Lua's handlers.
 local function engine_value_method(name)
   local source = stubs.strip_sc_comments(engine_sources())
-  local args, body = source:match("\n%s*" .. name .. "%s*{%s*arg%s+([%w_,%s]-);%s*%^([^\n]-)%s*\n%s*}")
+  local args, body = source:match("\n%s*" .. name .. "%s*{%s*arg%s+([%w_,%s]-);%s*%^([^\n}]-)%s*}")
   assert_true(args ~= nil, "the engine has " .. name .. " { arg ...; ^... }")
   local names = {}
   for arg in args:gmatch("[%w_]+") do table.insert(names, arg) end
@@ -345,6 +341,38 @@ test("the engine's event polls decode in Lua's handlers (#459)", function()
   assert_true(save_buffer(6))
   context.polls.fire("bufferSaveResult", save_result_value(5, 2, true))
   assert_equal(S.lib.ui_flash.text("header"), "buf 6 save failed", "bufferSaveResult: save 2 failed (the header's, #878)")
+end)
+
+test("the engine's bufferOnsets poll decodes in Lua's slice handler (#1126)", function()
+  local context = load_strata(); h.finish_startup(context)
+  local S = local_value("S")
+  local slices = S.lib.slices
+  local onsets_value = engine_value_method("bufferOnsetsValue")
+  for _, slot in ipairs({3, 8}) do
+    load_buffer(slot, "/tmp/loop.wav")
+    context.polls.fire("bufferState", context.polls.buffer_state_value(slot, 1, 1))
+    assert_true(slices.analyze(slot), "requested slot " .. slot)
+    h.write_text(S.lib.scenes.scene_data_dir .. "buf" .. slot .. ".onsets", string.format(
+      "strata-onsets 1\nslot %d\nframes 48000\nrate 48000\nonsets 12000\nstrengths 1.000\n", slot))
+  end
+
+  context.polls.fire("bufferOnsets", onsets_value(2, 1, true))
+  context.clock.run_for(0.05)
+  assert_true(not slices.analyzing(3), "slot 3's failed pass ended")
+  assert_equal(slices.candidates(3), nil, "a failed pass ignores the file")
+  assert_true(slices.analyzing(8), "slot 8 still awaits its own report")
+
+  assert_true(slices.analyze(3))
+  context.polls.fire("bufferOnsets", onsets_value(2, 1, false))
+  assert_true(slices.analyzing(3), "the old report cannot end slot 3's second pass")
+  context.polls.fire("bufferOnsets", onsets_value(7, 1, false))
+  context.polls.fire("bufferOnsets", onsets_value(2, 2, false))
+  context.clock.run_for(0.05)
+  for _, slot in ipairs({3, 8}) do
+    local candidates = slices.candidates(slot)
+    assert_true(not slices.analyzing(slot), "the matching report ended slot " .. slot .. "'s pass")
+    assert_equal(candidates and candidates.frames[1], 12000, "slot " .. slot .. "'s file was read")
+  end
 end)
 
 -- #858: the freeze area's report of a hold it abandoned, as the engine
