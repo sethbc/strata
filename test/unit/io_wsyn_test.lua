@@ -107,6 +107,65 @@ test("the route's change ends the voice's target notes", function()
   assert_equal(calls[#calls], 3)
 end)
 
+for _, silent in ipairs({false, true}) do
+  local mode = silent and "silent" or "ordinary"
+  test(mode .. " PSET read ends only the changed W/ route (#1113)", function()
+    local context = load_strata({data_subdir = "wsyn_pset_" .. mode}); finish_startup(context)
+    local S = local_value("S")
+    context.crow.plug()
+    S.lib.io_rig.set("ii_bus", "strata")
+    params:set("midi_note_off", 2)  -- release
+    params:set("v2_out_wsyn", 1)
+    local off, on = context.data_dir .. "off.pset", context.data_dir .. "on.pset"
+    params:write(off, "off")
+    params:set("v1_out_wsyn", 1)
+    params:write(on, "on")
+    context.clock.run_for(0.25)
+    local from = #context.crow.sent
+    local function commands()
+      context.clock.run_for(0.1)
+      local calls = {}
+      for i = from + 1, #context.crow.sent do
+        local cmd = context.crow.sent[i]:match("^ii%.wsyn%.([%w_]+)%(")
+        if cmd then calls[#calls + 1] = cmd end
+      end
+      return table.concat(calls, " ")
+    end
+    local function midi(kind, voice, pitch)
+      context.midi.send(1, {type = kind, ch = voice, note = pitch, vel = kind == "note_on" and 100 or 0})
+    end
+    local function sounding(voice)
+      local _, note = next(S.lib.io_targets.sounding(voice))
+      return note and table.concat(note.targets, ",")
+    end
+
+    midi("note_on", 1, 60)
+    assert_equal(commands(), "play_note")
+    midi("note_on", 2, 65)
+    assert_equal(commands(), "play_note play_note")
+    params:read(on, silent)
+    assert_equal(sounding(1), "wsyn", "unchanged route keeps the held note")
+    params:read(off, silent)
+    assert_equal(sounding(1), nil, "the disabled route releases its target before key-up")
+    assert_equal(sounding(2), "wsyn", "the other voice keeps its target")
+    midi("note_off", 1, 60)
+    midi("note_on", 1, 62)
+    assert_equal(sounding(1), nil, "the disabled route takes no new note")
+    midi("note_off", 1, 62)
+    assert_equal(commands(), "play_note play_note", "W/ ends its own notes")
+    params:read(on, silent)
+    midi("note_on", 1, 64)
+    assert_equal(sounding(1), "wsyn", "the restored route takes the next note")
+    params:read(on, silent)
+    assert_equal(sounding(1), "wsyn", "a repeated read keeps that note")
+    midi("note_off", 1, 64)
+    midi("note_off", 2, 65)
+    assert_equal(sounding(1), nil)
+    assert_equal(sounding(2), nil)
+    assert_equal(commands(), "play_note play_note play_note", "one shot per routed strike")
+  end)
+end
+
 test("its eight params are in the ii group and its rows show on the voice section", function()
   local _, S = started()
   assert_equal(device_of(S).param_count, 8)

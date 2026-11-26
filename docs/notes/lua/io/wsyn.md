@@ -4,13 +4,13 @@
 - **Absent ii module, absent params**: with no `S.lib.io_ii`, or before `add_params` ran, `routed(voice)` is false, `rows(voice)` is empty (the IO page raises on a `param` row whose param does not exist), `note_on` sends nothing and nothing reads a param.
 - **A note is one `("wsyn", "play_note", volts, velocity * wsyn_level)`**: volts are `S.lib.io_targets.volts(pitch)` clamped to -5..5 (`WSYN.volts_limit`); a note off sends nothing (W/ shapes and ends its own notes in AR mode).
 - **`ready` is `ar_mode` 1 then `voices` 4**, in that order; the device has no `release`.
-- **A route's change ends the voice's target notes**: `v<i>_out_wsyn`'s action calls `S.lib.io_targets.route_changed(voice)`.
+- **A route's change ends the voice's target notes.** `apply_route` records the applied toggle and calls `S.lib.io_targets.route_changed(voice)`. The param action takes this path on an edit or ordinary PSET read. After a silent PSET read, the `io_wsyn` hook takes it for each voice whose loaded toggle differs from its applied value. A repeated read keeps held notes on unchanged routes (#1113).
 - **The toggles are binary** (plan ruling 25), shown as a `param` row with `binary = {[0] = "off", [1] = "on"}`; the eight params (seven toggles and `wsyn_level`, 0 to 10 V, default 5) are PSET-only.
 
 ## Owns
 
 - `lib/io/wsyn.lua` (`S.lib.io_wsyn`): `WSYN` (every tunable), `add_params()` (called by the ii bus module's group `strata_out_ii`), the ii device `wsyn` (`param_count` 8; `ports = false`: `play_note`'s first argument is a pitch, so the ii queue gives `play_note` one turn) and the note target `wsyn` (rows `w/ syn` and `w/ level` on IO's `voice` section; `w/ syn` marked `WSYN.idle_mark`, `[idle]`, while the route is on and Strata does not lead the bus, #937).
-- Tests: `test/unit/io_wsyn_test.lua`, with `S.lib.io_ii` a recording double.
+- Tests: `test/unit/io_wsyn_test.lua`, with an ii recording double for the device commands and a crow stub for the PSET and idle-route checks.
 - User page: `docs/user/io/w.md`.
 
 ## How it works

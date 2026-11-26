@@ -10,6 +10,8 @@ A W/ runs one engine at a time (Tape, Delay or Synth) and you switch engines fro
 
 Each voice has a `w/ syn` toggle (off by default) and there is one `w/ level` (0 to 10 V, default 5), all on the `voice` section of IO and saved with a PSET. A note on a routed voice sends one note: its pitch in volts (note 60 is 0 V, 1 V per octave, held to -5 to 5 V) and its velocity scaled by the level. W/ synth has four voices (2-operator FM) in AR mode, and ends its notes itself, so Strata sends nothing at a note's end. Strata puts W/ in AR mode with four voices when the bus becomes Strata's. While Strata does not lead the bus (no crow, `bus leader` at `off` or `teletype leads`), a route that is set plays nothing, and its `w/ syn` row shows `[idle]` at its right.
 
+Loading a PSET that turns off a voice's `w/ syn` route lets notes already sent to W/ decay naturally. Further notes from that voice reach W/ when you enable its route again.
+
 ## W/ tape
 
 The `w/ tape` section has six rows. Each press sends one command and the row shows what was last sent, or `-` before any:
