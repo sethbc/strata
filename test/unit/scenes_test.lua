@@ -5218,6 +5218,21 @@ test("a recall after a hand set of an exp freq sends nothing for it (#977)", fun
   assert_equal(params:get("v1_freq"), held, "the freq is the one the hand set left")
 end)
 
+test("recalling an unchanged mapped control sends its CC exactly once (#1063)", function()
+  local context = load_strata(); finish_startup(context)
+  local controller = context.midi.plug(2, "controller")
+  params:set_raw("reverb_mix", 0.5)
+  capture_scene(3)
+  norns.pmap.new("reverb_mix")
+  norns.pmap.assign("reverb_mix", 2, 4, 17)
+  norns.pmap.data.reverb_mix.echo = true
+  context.clear_engine_calls()
+  recall_scene(3, 0)
+  assert_equal(#controller.sent, 1)
+  assert_equal(table.concat(controller.sent[1], ","), "179,17,64")
+  assert_equal(#context.engine_calls, 0, "the unchanged control runs no engine action")
+end)
+
 test("the first recall of the state in force sends nothing (#977)", function()
   local context = load_strata(); finish_startup(context)
   capture_scene(3)
