@@ -32,12 +32,13 @@ A value that has just arrived from the app is not sent back to it. Send `/strata
 
 ## TouchOSC
 
-TouchOSC has no default ports, so type them in. In its connections, make a UDP connection with:
+TouchOSC has no default ports, so type them in. Set up OSC connection 1 for UDP with these settings.
+
 - **Host**: norns' address (its IP address or `norns.local`)
 - **Send port**: 10111
 - **Receive port**: the same number as `port` in the IO page's `osc` section (9000 by default)
 
-Two layouts are in `extras/touchosc/` in the Strata folder: `strata-tablet.tosc` and `strata-phone.tosc`. Each has three pages: the sixteen macros, the seven voices (run, mute and level) and the sixteen scenes with the patterns' toggle. They are made by `tools/touchosc/generate.py` from `tools/touchosc/lib/layout.lua` (see `tools/touchosc/README.md`), in a file format Hexler does not document.
+Two layouts are in `extras/touchosc/` in the Strata folder: `strata-tablet.tosc` and `strata-phone.tosc`. With Strata's OSC feedback on, entering control surface mode requests the current values on connection 1 and fills in the controls. Each has three pages: the sixteen macros, the seven voices (run, mute and level) and the sixteen scenes with the patterns' toggle. They are made by `tools/touchosc/generate.py` from `tools/touchosc/lib/layout.lua` (see `tools/touchosc/README.md`), in a file format Hexler does not document.
 
 ## Sources
 

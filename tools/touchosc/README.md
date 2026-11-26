@@ -18,6 +18,6 @@ It regenerates both files in memory and exits non-zero, naming the file, when on
 
 ## What is verified
 
-`test/unit/io_osc_test.lua` checks every param and address in `lib/layout.lua` against Strata's params and OSC addresses, and that both files exist.
+`test/unit/io_osc_test.lua` checks every param and address in `lib/layout.lua` against Strata's params and OSC addresses, and that both files exist. Run `python3 tools/touchosc/test_startup.py` to execute the root startup script from each committed panel and check that it requests the current values on OSC connection 1.
 
 The file format is unofficial. A `.tosc` file is zlib-compressed XML (`<lexml version="3">`, one root group holding a pager of page groups); the generator writes it as the tosclib library does (`docs/design/3.6-facts/checks.md`, section 5). Hexler publishes no schema, and **no file has been opened in TouchOSC** here: whether TouchOSC accepts them is unverified until the 4.0 hardware check. If one does not open, the connection settings and the addresses in `lib/layout.lua` are still correct and the controls can be built by hand in the editor.

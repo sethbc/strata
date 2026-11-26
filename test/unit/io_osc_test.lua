@@ -258,6 +258,25 @@ test("a handler that raises or a malformed sender never escapes osc.event, and /
   assert_equal(#lines, 1)
 end)
 
+test("an ordinary first edit gets no snapshot, then hello sends the existing control values", function()
+  local context, S = started()
+  S.lib.io_rig.set("osc_feedback", "on")
+  S.lib.io_actions.run_voice(1, 1)
+  params:set("v1_amp", 0.3)
+  params:set("macro_2", 0.72)
+
+  context.osc.receive("/param/macro_1", {0.4}, SENDER)
+  context.clock.run_for(0.5)
+  assert_equal(#context.osc.sent, 0)
+
+  context.osc.receive("/strata/hello", {}, SENDER)
+  context.clock.run_for(0.5)
+  assert_equal(#context.osc.sent, 39)
+  assert_equal(sent_path(context, "/strata/voice/1/running")[1].args[1], 1)
+  assert_near(sent_path(context, "/param/v1_amp")[1].args[1], 0.3, 1e-6)
+  assert_near(sent_path(context, "/param/macro_2")[1].args[1], 0.72, 1e-6)
+end)
+
 test("watch adds a param and hello sends everything watched", function()
   local context, S = feeding()
   context.osc.receive("/strata/watch", {"v1_freq"}, SENDER)
@@ -366,7 +385,7 @@ test("every address in the layout description is a param or one of Strata's addr
   -- checks.md §5: the description is a Lua table the generator reads; design §10.1's table
   local _, S = started()
   local layout = dofile("tools/touchosc/lib/layout.lua")
-  local known = {["/strata/scene"] = true, ["/strata/patterns"] = true}
+  local known = {["/strata/scene"] = true, ["/strata/patterns"] = true, ["/strata/hello"] = true}
   for v = 1, S.constants.NUM_VOICES do known["/strata/voice/" .. v .. "/run"] = true; known["/strata/voice/" .. v .. "/retrigger"] = true end
   for _, id in ipairs(layout.params) do assert_true(params.lookup[id] ~= nil, id .. " is a param") end
   for _, path in ipairs(layout.addresses) do assert_true(known[path], path .. " is a Strata address") end
