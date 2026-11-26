@@ -312,6 +312,38 @@ local function last_line_for(context, jack)
   return nil
 end
 
+for _, silent in ipairs({false, true}) do
+  local read_mode = silent and "silent" or "ordinary"
+  test(read_mode .. " PSET reclamps the held crow pitch on the jack whose range changed", function()
+    local context, S = started()
+    context.crow.plug()
+    params:set("midi_note_off", 2)
+    params:set("crow_out2_source_key", "v3 pitch")
+    params:set("crow_out3_source_key", "v3 gate")
+    local path = h.data_root .. "crow_pitch_range.pset"
+    params:write(path)  -- output 2 is 0..5 V
+    params:set("crow_out2_range", option("crow_out2_range", "-5..5"))
+
+    context.midi.send(1, {type = "note_on", note = 48, vel = 100, ch = 3})
+    local id = next(S.lib.io_targets.sounding(3))
+    assert_true(id ~= nil, "the target holds MIDI 48")
+    assert_equal(last_line_for(context, "output[2].volts"), "output[2].volts = -1")
+    assert_equal(last_line_for(context, "output[3].volts"), "output[3].volts = 5")
+    context.crow.clear()
+    params:read(path, silent)
+    assert_equal(last_line_for(context, "output[2].volts"), "output[2].volts = 0", "the held pitch at recall")
+    assert_equal(count_lines(context, "output[2].volts = 0"), 1)
+    assert_equal(any_line_with(context, "output[3]"), nil, "the gate stays high")
+    assert_true(S.lib.io_targets.sounding(3)[id] ~= nil, "the same note is held")
+
+    context.crow.clear()
+    params:read(path, silent)
+    assert_equal(#context.crow.sent, 0, "an unchanged recall leaves the jacks alone")
+    context.midi.send(1, {type = "note_off", note = 48, vel = 0, ch = 3})
+    assert_equal(last_line_for(context, "output[3].volts"), "output[3].volts = 0", "its key still lowers the gate")
+  end)
+end
+
 test("a gate output moved off a sounding voice goes low (through the real targets core)", function()
   -- crow-ii.md §1 Outputs: output[n].volts; the targets core ends the voice it left (lib/io/targets.lua)
   local context, S = started()

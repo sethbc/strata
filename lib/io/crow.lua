@@ -49,6 +49,7 @@ return function(S)
   -- (only those get an off line)
   local state = {started = false, stopped = false, source_keys = {}, source_labels = {}, source_by_key = {},
     input_volts = {}, input_ranges = {}, last_volts = {}, notes = {}, clocks = {}, applied_source = {},
+    applied_range = {},
     owners = {input = false, output = 0}, errors = {}, set_up = {input = {}, output = {}}}
   for voice = 1, NUM_VOICES do state.notes[voice] = {} end
   local budget = {window = -math.huge, sent = 0, pending = {}, order = {}, clock = nil}
@@ -306,6 +307,7 @@ return function(S)
 
   -- Send output n's lines again and restart its clock
   local function apply_output(n)
+    state.applied_range[n] = param_value(out_id(n, "range"))
     stop_output_clock(n)
     state.last_volts[n] = nil
     if not active() then return end
@@ -598,6 +600,9 @@ return function(S)
       if key ~= state.applied_source[n] then
         change_source(n, key)
       elseif clock_divisions[n] and clock_divisions[n] ~= param_value(out_id(n, "div")) then
+        apply_output(n)
+      end
+      if source_of(n).kind == "pitch" and param_value(out_id(n, "range")) ~= state.applied_range[n] then
         apply_output(n)
       end
     end
