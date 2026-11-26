@@ -1002,6 +1002,72 @@ test("the hold LED follows the scan hold, not the key", function()
   S.grids[1] = nil
 end)
 
+for _, fault in ipairs({false, true}) do
+  test("unplugging the last scan holder releases the running voice with " ..
+      (fault and "a failed estimate" or "a healthy estimate"), function()
+    local context, S = buffer_voices()
+    local positions = S.lib.positions
+    local holding = h.grid_pane(context, "128h")
+    local watching = h.grid_pane(context, "128h", {port = 2})
+    for _, pane in ipairs({holding, watching}) do pane.show(S.constants.GRID_PAGES.positions, 2) end
+    holding.press(7, 1, 1)
+    assert_equal(watching.led(7, 1), 15, "the second grid shows the first grid's hold")
+    context.clear_engine_calls()
+    local advance = S.lib.playheads.advance
+    if fault then
+      S.lib.playheads.advance = function(voice)
+        if voice == 1 then error("voice 1 estimate unavailable") end
+        return advance(voice)
+      end
+    end
+    context.grid.unplug(1)
+    context.clock.run_for(0.2)
+    S.lib.playheads.advance = advance
+    assert_equal(positions.holds_scan(1, "grid:1"), false)
+    assert_equal(positions.scan_held(1), false, "the final holder released the scan")
+    assert_equal(watching.led(7, 1), 4, "the second grid shows the release")
+    assert_equal(#grain_calls(context, "scanHold"), 1, "one release across repeated ticks")
+    assert_equal(last_grain(context, "scanHold", 0), 0)
+    if fault then
+      local hold_errors = 0
+      for _, line in ipairs(context.take_script_errors()) do
+        assert_true(line:find("voice 1 estimate unavailable", 1, true))
+        if line:find("strata: scan hold estimate failed: ", 1, true) == 1 then hold_errors = hold_errors + 1 end
+      end
+      assert_equal(hold_errors, 1, "the failed release estimate was reported")
+    end
+    watching.press(7, 1, 1)
+    assert_equal(last_grain(context, "scanHold", 0), 1, "the next press holds again")
+    watching.press(7, 1, 0)
+    assert_equal(last_grain(context, "scanHold", 0), 0)
+    assert_equal(#grain_calls(context, "scanHold"), 3)
+  end)
+end
+
+test("a failed playhead estimate on the first scan hold preserves both holders and their edges", function()
+  local context, S = buffer_voices()
+  local positions, old_holds = S.lib.positions, {}
+  S.lib.playheads.advance = function(voice)
+    old_holds[#old_holds + 1] = positions.scan_held(voice)
+    error("hold estimate unavailable")
+  end
+  positions.hold_scan(1, true, "arc")
+  positions.hold_scan(1, true, "grid:1")
+  positions.hold_scan(1, false, "arc")
+  assert_equal(positions.scan_held(1), true, "the grid still holds")
+  assert_equal(#grain_calls(context, "scanHold"), 1)
+  assert_equal(last_grain(context, "scanHold", 0), 1)
+  positions.hold_scan(1, false, "grid:1")
+  positions.hold_scan(1, false, "grid:1")
+  assert_equal(positions.scan_held(1), false)
+  assert_equal(last_grain(context, "scanHold", 0), 0)
+  assert_equal(#grain_calls(context, "scanHold"), 2, "only the first and last holders send")
+  assert_equal(#old_holds, 2)
+  assert_equal(old_holds[1], false, "acquire integrates the free scan")
+  assert_equal(old_holds[2], true, "release integrates the held scan")
+  h.claim_script_errors(context, 1, "strata: scan hold estimate failed: ", "hold estimate unavailable")
+end)
+
 test("a synth voice's hold key stays dim and holds nothing", function()
   local context, S = buffer_voices()
   local positions = S.lib.positions
