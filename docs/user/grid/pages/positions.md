@@ -50,6 +50,7 @@ The slots, on columns 9-16 (slot 1 to slot 8):
 
 What side 2 shows (all of a voice's marks dark when it reads no buffer):
 - a bookmark key at 6, the bookmark last recalled at 10 (until the voice changes its source), and 15 while you store it; a bookmark that waits for its beat or bar (quantize actions) blinks between 15 and 2 until it lands
+- On the 16×16, you can hold ST in one pane and store a bookmark in the other. Leaving the bookmark's page ends its bright indication and keeps the saved position. If both panes hold that bookmark, it stays bright until the last key is up
 - ST at 15 while it is held on this grid, 4 otherwise
 - HD at 15 while the voice's scan is held (by any grid or the arc), 4 otherwise
 - WH at 15 while the loop is the whole buffer, 4 otherwise

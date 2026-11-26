@@ -361,8 +361,9 @@ return function(S)
   -- forgets it): {held = {voice, cell, cells, pane, still} (the position
   -- key held), hold = {[voice] = {[pane] = still}}, store = {[voice] =
   -- {[pane] = still}} (a store key per voice and pane), pressed = {[voice]
-  -- = key}, bank = {[voice] = the slice bank shown, nil for 1}, slices =
-  -- {[voice] = {[cell] = the slice key held: {n, pane, still, token,
+  -- = {key, panes = {[pane] = still}}} (the latest stored bookmark and
+  -- its presses), bank = {[voice] = the slice bank shown, nil for 1},
+  -- slices = {[voice] = {[cell] = the slice key held: {n, pane, still, token,
   -- released}}}}. `still` is the press's own test that its key is still
   -- held (held_still, below). `records` names each record this module
   -- made, to find it again when the port's state is gone
@@ -522,6 +523,9 @@ return function(S)
         record.pressed[voice_idx] = nil
       end
     end
+    for voice_idx, pressed in pairs(record.pressed) do
+      if stale_panes(pressed.panes) then record.pressed[voice_idx] = nil end
+    end
     local held = record.held
     if held and stale(held.still) then record.held = nil end
     -- a slice key whose release can no longer come ends now
@@ -641,14 +645,21 @@ return function(S)
         local record = record_of(port)
         if storing(record, voice_idx) then
           M.store_bookmark(voice_idx, key)
-          record.pressed[voice_idx] = key
+          local pressed = record.pressed[voice_idx]
+          if not pressed or pressed.key ~= key then
+            pressed = {key = key, panes = {}}
+            record.pressed[voice_idx] = pressed
+          end
+          pressed.panes[pane] = held_still(still)
         else
           M.recall_bookmark_quantized(voice_idx, key)
         end
       elseif records[port] then
-        -- a release ends only its own voice's key
-        local pressed = records[port].pressed
-        if pressed[voice_idx] == key then pressed[voice_idx] = nil end
+        local pressed = records[port].pressed[voice_idx]
+        if pressed and pressed.key == key then
+          pressed.panes[pane] = nil
+          if next(pressed.panes) == nil then records[port].pressed[voice_idx] = nil end
+        end
       end
     elseif key == "store" then
       if z == 1 then
@@ -773,7 +784,16 @@ return function(S)
       return bank_holds_slices(voice_idx, key) and LEVELS.bank_filled or LEVELS.bank_empty
     end
     if valid_bookmark(key) then
-      if any_record(function(record) return storing(record, voice_idx) and record.pressed[voice_idx] == key end, port) then
+      if any_record(function(record)
+        local pressed = record.pressed[voice_idx]
+        if pressed and pressed.key == key then
+          -- A page change redraws before the stale sweep. Another grid can
+          -- keep the same bookmark bright in the shared display signature.
+          for _, still in pairs(pressed.panes) do
+            if still() then return true end
+          end
+        end
+      end, port) then
         return LEVELS.stored
       end
       if M.waiting_bookmark(voice_idx) == key then return S.lib.grid_core.waiting_level() end
