@@ -317,6 +317,7 @@ return function(S)
   S.register_pset_hook(files.pset_hook(nil, function(silent)
     if silent then
       for n, sequence in ipairs(sequences) do
+        sequence.position = position_of(n)
         if sequence.count_clock ~= clock_option(n) then sequence.count = nil end
       end
     end
