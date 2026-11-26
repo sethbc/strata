@@ -38,6 +38,9 @@
         bufferSampleRates = Array.fill(numBuffers, { context.server.sampleRate });
         slotChanges = Array.fill(numBuffers, 0);
         bufferLoads = Array.fill(numBuffers, 0);
+        areaState[\buffers][\snapshots] = Set.new;
+        areaState[\buffers][\unremovedSnapshots] = Set.new;
+        areaState[\buffers][\deferredLoads] = IdentityDictionary.new;
         // Per slot: the newest load number that can no longer take effect (loadsSuperseded)
         areaState[\buffers][\loadsSuperseded] = Array.fill(numBuffers, 0);
         // Per slot: the load numbers whose check routine runs (a long file
@@ -141,6 +144,7 @@
 
     // The slots and buses (every area's nodes are gone by now)
     freeBuffers {
+        this.retryLoadSnapshotCleanup;
         buffersL.do({ arg buffer; buffer.free });
         buffersR.do({ arg buffer; buffer.free });
         inputBus.free;
@@ -276,6 +280,91 @@
         ^readers
     }
 
+    // Stage the selected region on audio storage during its existing
+    // decode pass. Each admitted file has at most the slot's frames times
+    // two float channels, with up to numBuffers outstanding per engine.
+    openLoadSnapshot { arg index, load, channels, rate;
+        var live = areaState[\buffers][\snapshots], path, reserved, snapshot, created = false;
+        this.retryLoadSnapshotCleanup;
+        if (live.size >= numBuffers) {
+            ^if (live.size > areaState[\buffers][\unremovedSnapshots].size) { \busy }
+        };
+        path = scratchDir +/+ "strata-load-%-%.%-%.part".format(thisProcess.pid, instanceTag, index, load);
+        try {
+            File.mkdir(scratchDir);
+            reserved = File(path, "wx");
+            if (reserved.isOpen) {
+                created = true;
+                live.add(path);
+                reserved.close;
+                snapshot = SoundFile.openWrite(path, "WAV", "float", channels.min(2), rate);
+            };
+        };
+        if (created and: { snapshot.isNil }) { this.removeLoadSnapshot(path) };
+        ^snapshot
+    }
+
+    retryLoadSnapshotCleanup {
+        areaState[\buffers][\unremovedSnapshots].asArray.do({ arg old; this.areaCall(\removeLoadSnapshot, old) });
+    }
+
+    removeLoadSnapshot { arg path;
+        var retry = areaState[\buffers][\unremovedSnapshots];
+        if (try { File.delete(path) or: { File.type(path) == \not_found } } { false }) {
+            retry.remove(path);
+            areaState[\buffers][\snapshots].remove(path);
+        } {
+            retry.add(path);
+        };
+        this.scheduleDeferredLoads;
+    }
+
+    // Validation accepts this load now, including ending an active take.
+    // After its fade the buffers are zero: disappearance before the stage
+    // becomes available reports this accepted load as emptied.
+    deferCheckedLoad { arg index, load, path, start;
+        var change = this.beginCheckedLoad(index, load);
+        this.afterSlotFade(index, change, {
+            buffersL[index].zero;
+            buffersR[index].zero;
+            areaState[\buffers][\deferredLoads][index] = [load, path, start, change];
+            this.areaCall(\scheduleDeferredLoads);
+        });
+    }
+
+    scheduleDeferredLoads {
+        var state = areaState[\buffers];
+        if (state[\deferredLoads].notEmpty and: { state[\drainScheduled] != true }) {
+            state[\drainScheduled] = true;
+            SystemClock.sched(0, {
+                state[\drainScheduled] = false;
+                this.areaCall(\drainDeferredLoads);
+                nil
+            });
+        };
+    }
+
+    drainDeferredLoads {
+        var state = areaState[\buffers], pending = state[\deferredLoads], live = state[\snapshots];
+        pending.keys.asArray.do({ arg index;
+            var candidate;
+            if ((live.size < numBuffers) or: { live.size == state[\unremovedSnapshots].size }) {
+                candidate = pending.removeAt(index);
+                this.areaCall(\loadSlot, index, candidate[1], candidate[2], candidate[0], candidate[3]);
+            };
+        });
+    }
+
+    checkedLoadSnapshot { arg snapshot, frames;
+        var info;
+        snapshot.close;
+        info = SoundFile.openRead(snapshot.path);
+        if (info.isNil or: { protect { info.numFrames != frames } { info.close } }) {
+            Error("load snapshot is missing or short").throw;
+        };
+        ^true
+    }
+
     // Read up to bufferSeconds of a sound file into a slot (channel 0 to the
     // left buffer, channel 1, or 0 again for a mono file, to the right).
     // At most bufferSeconds at the server rate fit (the buffers' size), so a
@@ -292,19 +381,28 @@
     // file, #375). bufferLoads counts at the command either way, so
     // bufferLoadFailed's numbering is the same.
     // start: seconds into the file at its own rate, clipped to the file. The
-    // check and the read both begin at that frame, and at most bufferSeconds
+    // check begins at that frame and stages it as the first frame read by
+    // the server. At most bufferSeconds
     // from it fit. A start past the file's end loads its last frames, as
     // many as the slot holds (a stale start, the file having been replaced
     // by a shorter one, still loads something a player can hear). The check
     // also makes the load's peaks (one FloatArray), which become the slot's
     // only if the load takes effect (applyLoad).
-    loadSlot { arg index, path, start = 0;
-        var file, frames, rightChannel, sampleRate, load, decodes, damaged, canceled, startFrame, slotFrames, peaks;
+    loadSlot { arg index, path, start = 0, load, change;
+        var file, frames, rightChannel, sampleRate, decodes, damaged, startFrame, slotFrames, peaks, snapshot, canceled = false;
+        var current = { if (change.isNil) { load > this.loadsSuperseded(index) } { slotChanges[index] == change } };
+        var failedLoad = { arg reason;
+            if (change.isNil) { this.areaCall(\rejectLoad, index, load, reason, canceled) } {
+                this.areaCall(\reportFailedLoadRead, index, load, change, reason)
+            }
+        };
         if (this.validBuffer(index).not) { ^this };
-        bufferLoads[index] = bufferLoads[index] + 1;
-        load = bufferLoads[index];
+        if (load.isNil) {
+            bufferLoads[index] = bufferLoads[index] + 1;
+            load = bufferLoads[index];
+        };
         file = SoundFile.openRead(path.standardizePath);
-        if (file.isNil) { ^this.rejectLoad(index, load, "cannot read sound file " ++ path) };
+        if (file.isNil) { ^failedLoad.("cannot read sound file " ++ path) };
         sampleRate = file.sampleRate;
         slotFrames = [(sampleRate * bufferSeconds).floor.asInteger, buffersL[index].numFrames].minItem;
         // compared as a Float, before converting: an int32 overflows about
@@ -315,14 +413,29 @@
         frames = (file.numFrames - startFrame).min(slotFrames);
         rightChannel = if (file.numChannels > 1) { 1 } { 0 };
         damaged = "sound file " ++ path ++ " is damaged (it stops decoding early)";
-        if (frames < 1) { file.close; ^this.rejectLoad(index, load, "sound file " ++ path ++ " is empty") };
+        if (frames < 1) { file.close; ^failedLoad.("sound file " ++ path ++ " is empty") };
+        snapshot = this.openLoadSnapshot(index, load, file.numChannels, sampleRate);
+        if (snapshot.isNil) { file.close; ^failedLoad.("cannot stage sound file " ++ path) };
+        if (snapshot == \busy) { snapshot = nil };
         file.seek(startFrame, 0);
         peaks = FloatArray.newClear(this.waveformPoints);
         if (frames <= this.loadCheckAtOnceFrames) {
-            decodes = this.fileDecodes(file, frames, false, peaks);
+            decodes = try {
+                this.fileDecodes(file, frames, false, peaks, nil, snapshot) and: { snapshot.isNil or: { this.checkedLoadSnapshot(snapshot, frames) } }
+            } { arg error;
+                damaged = "cannot check or stage sound file % (%)".format(path, error.tryPerform(\what) ? error.class.name);
+                false
+            };
             file.close;
-            if (decodes.not) { ^this.rejectLoad(index, load, damaged) };
-            ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate, startFrame, peaks)
+            if (decodes.not) {
+                snapshot !? {
+                    if (snapshot.isOpen) { snapshot.close };
+                    this.areaCall(\removeLoadSnapshot, snapshot.path);
+                };
+                ^failedLoad.(damaged)
+            };
+            if (snapshot.isNil) { ^this.deferCheckedLoad(index, load, path, start) };
+            ^this.applyLoad(index, load, path, frames, rightChannel, sampleRate, snapshot.path, peaks, change)
         };
         // a long file: in its check from now until its outcome, so no
         // report names it meanwhile (bufferStateLoad, #983), the cancel's
@@ -330,8 +443,10 @@
         // over (Lua's load_buffer ends it), but for a take that is ending,
         // which completes (takeEnding, #890)
         areaState[\buffers][\checks][index].add(load);
-        canceled = this.slotRecording(index) and: { this.takeEnding(index).not };
-        if (canceled) { this.cancelSlotRecording(index, load - 1) };
+        if (this.slotRecording(index) and: { this.takeEnding(index).not }) {
+            canceled = true;
+            this.cancelSlotRecording(index, load - 1)
+        };
         // (stops at the first chunk after something supersedes the load,
         // #375). An sclang error in the check still ends the load (#885):
         // the file closed, and a load not superseded meanwhile is rejected,
@@ -339,7 +454,8 @@
         fork({
             var failed = false;
             try {
-                decodes = this.fileDecodes(file, frames, true, peaks, { load > this.loadsSuperseded(index) });
+                decodes = this.fileDecodes(file, frames, true, peaks, current, snapshot)
+                    and: { snapshot.isNil or: { this.checkedLoadSnapshot(snapshot, frames) } };
                 this.loadCheckFaultHook.value(index, load);
             } { arg error;
                 // the error's class and what it says (never its errorString,
@@ -353,10 +469,18 @@
             try { file.close };
             // the check has its outcome: from here the reports name it
             areaState[\buffers][\checks][index].remove(load);
-            if (load > this.loadsSuperseded(index)) {
-                if (failed.not and: { decodes }) {
-                    this.areaCall(\applyLoad, index, load, path, frames, rightChannel, sampleRate, startFrame, peaks)
-                } { this.rejectLoad(index, load, damaged, canceled) };
+            if (current.value and: { failed.not } and: { decodes }) {
+                if (snapshot.isNil) {
+                    this.areaCall(\deferCheckedLoad, index, load, path, start)
+                } {
+                    this.areaCall(\applyLoad, index, load, path, frames, rightChannel, sampleRate, snapshot.path, peaks, change)
+                }
+            } {
+                snapshot !? {
+                    if (snapshot.isOpen) { snapshot.close };
+                    this.areaCall(\removeLoadSnapshot, snapshot.path);
+                };
+                if (current.value) { failedLoad.(damaged) };
             };
         }, SystemClock);
     }
@@ -386,8 +510,8 @@
     // reads 0 frames until the reads have completed (a sync after them),
     // then its length and rate reach the grain synths and the poll, only if
     // nothing else changed the slot meanwhile (slotChanges). A server read
-    // that fails (/fail for /b_readChannel: the file vanished, or became
-    // unreadable, after the checks) leaves the slot zeroed, so it stays
+    // that fails, or a source no longer accessible after the fade,
+    // leaves the slot zeroed, so it stays
     // empty and the load is reported as failed with the slot emptied; or,
     // when anything called slotChanged meanwhile (a later load taking
     // effect, a clear, a recording, a stop, a load canceling a recording),
@@ -398,8 +522,8 @@
     // A load that read its frames sets the slot's peaks and writes its peaks
     // file first, and reports its length once the file is in place, so every
     // bufferState report that announces audio finds it there.
-    applyLoad { arg index, load, path, frames, rightChannel, sampleRate, startFrame, peaks;
-        var change, readFailed, failWatcher, bufnums;
+    beginCheckedLoad { arg index, load;
+        var change;
         this.stopRecording(index);
         change = this.slotChanged(index, load);
         bufferFrames[index] = 0;
@@ -411,38 +535,43 @@
         // (3.7: the new audio plays at gain 1 until Lua sends its own)
         this.setSlotGainValue(index, 1);
         this.bufferChanged(index);
-        this.afterSlotFade(index, change, {
-            buffersL[index].zero;
-            buffersR[index].zero;
-            // the server answers a read it cannot do with /fail, naming the
-            // file ("File '<path>' could not be opened: ...") and the bufnum:
-            // both must match, so an earlier load's failed read of another
-            // file, still in flight in this slot, never fails this one
-            readFailed = false;
+        ^change
+    }
+
+    reportFailedLoadRead { arg index, load, change, reason;
+        var emptied = slotChanges[index] == change;
+        postln("strata: " ++ reason ++ "; buffer " ++ (index + 1)
+            ++ if (emptied) { " emptied" } { " changed since by a later command" });
+        if (emptied) {
+            bufferSampleRates[index] = context.server.sampleRate;
+            this.clearSlotPeaks(index);
+            this.bufferChanged(index);
+        };
+        bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, emptied));
+    }
+
+    applyLoad { arg index, load, path, frames, rightChannel, sampleRate, snapshot, peaks, change;
+        var readFailed, failWatcher, bufnums;
+        var read = {
+            // Preserve the emptied failure for a drive removed during the
+            // fade. The original supplies no audio here: the server takes
+            // both channels from the region that supplied the peak scan.
+            readFailed = try { File.use(path.standardizePath, "rb", { arg source; source.isOpen.not }) } { true };
             bufnums = [buffersL[index].bufnum, buffersR[index].bufnum];
             failWatcher = OSCFunc({ arg msg;
                 if ((msg[1].asSymbol == '/b_readChannel') and: { bufnums.includes(msg[3]) }
-                    and: { msg[2].asString.contains("'" ++ path.standardizePath ++ "'") }) { readFailed = true };
+                    and: { msg[2].asString.contains("'" ++ snapshot ++ "'") }) { readFailed = true };
             }, '/fail', context.server.addr);
-            buffersL[index].readChannel(path.standardizePath, startFrame, frames, 0, false, [0]);
-            buffersR[index].readChannel(path.standardizePath, startFrame, frames, 0, false, [rightChannel]);
+            if (readFailed.not) {
+                buffersL[index].readChannel(snapshot, 0, frames, 0, false, [0]);
+                buffersR[index].readChannel(snapshot, 0, frames, 0, false, [rightChannel]);
+            };
             fork({
-                var emptied;
                 context.server.sync;  // answered once both reads are done (after any /fail)
                 failWatcher.free;
+                this.areaCall(\removeLoadSnapshot, snapshot);
                 if (readFailed) {
-                    // emptied only while nothing has called slotChanged
-                    // since: a later load, clear, recording or stop
-                    // decides what the slot holds (#1035)
-                    emptied = slotChanges[index] == change;
-                    postln("strata: the server could not read sound file " ++ path ++ "; buffer " ++ (index + 1)
-                        ++ (if (emptied) { " emptied" } { " changed since by a later command" }));
-                    if (emptied) {
-                        bufferSampleRates[index] = context.server.sampleRate;
-                        this.clearSlotPeaks(index);
-                        this.bufferChanged(index);
-                    };
-                    bufferLoadFailedPoll.update(this.bufferLoadFailedValue(index, load, emptied));
+                    this.areaCall(\reportFailedLoadRead, index, load, change, "the server could not read sound file " ++ path);
                 } {
                     // the file's rate goes to the peaks file and becomes the
                     // slot's with its frames, so the slot is never at the
@@ -457,7 +586,17 @@
                     };
                 };
             }, SystemClock);
-        });
+        };
+        if (change.isNil) {
+            change = this.beginCheckedLoad(index, load);
+            this.afterSlotFade(index, change, {
+                buffersL[index].zero;
+                buffersR[index].zero;
+                read.value;
+            }, { this.areaCall(\removeLoadSnapshot, snapshot) });
+        } {
+            read.value; // a deferred load has already faded and emptied the slot
+        };
     }
 
     // A load whose file cannot be used leaves the slot as it is, except that
@@ -507,10 +646,10 @@
     // off. bufferFadeWait later when a running voice reads the slot, at once
     // otherwise. A delayed action runs only if nothing changed the slot
     // meanwhile (slotChanges), so a later load, record or clear always wins.
-    afterSlotFade { arg index, change, action;
+    afterSlotFade { arg index, change, action, canceled;
         if (this.slotPlaying(index).not) { ^action.value };
         SystemClock.sched(bufferFadeWait, {
-            if (slotChanges[index] == change) { action.value };
+            if (slotChanges[index] == change) { action.value } { canceled.value };
             nil
         });
     }
@@ -524,10 +663,13 @@
     // (every load sent so far unless given) can no longer take effect
     // (loadsSuperseded): a long file still in its check is dropped.
     slotChanged { arg index, throughLoad;
-        var superseded = areaState[\buffers][\loadsSuperseded];
+        var superseded = areaState[\buffers][\loadsSuperseded], pending = areaState[\buffers][\deferredLoads][index];
         slotChanges[index] = slotChanges[index] + 1;
         stopReplies[index] = nil;
         superseded[index] = superseded[index].max(throughLoad ? bufferLoads[index]);
+        if (pending.notNil and: { pending[0] <= superseded[index] }) {
+            areaState[\buffers][\deferredLoads].removeAt(index);
+        };
         ^slotChanges[index]
     }
 

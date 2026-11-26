@@ -3869,7 +3869,7 @@ end)
 local function peak_scan_findings(text, name)
   local found = {}
   local body = sc_method_body(text, name) or ""
-  for _, pattern in ipairs({ "%.abs", "[%s%(]abs%(", "copyRange", "collect", "maxItem", "minItem" }) do
+  for _, pattern in ipairs({ "%.abs", "[%s%(]abs%(", "copyRange", "collect", "maxItem", "minItem", "Array%s*%.%s*series%s*%(" }) do
     if body:find(pattern) then found[#found + 1] = name .. ": " .. pattern end
   end
   if body:find("FloatArray%.fill%s*%([^,]+,%s*{") then found[#found + 1] = name .. ": FloatArray.fill with a function" end
@@ -3886,6 +3886,10 @@ test("no script file lists a folder with util.scandir (#465)", function()
 end)
 
 test("the peak scan allocates nothing per sample", function()
+  assert_equal(#peak_scan_findings("\n  caught { a = Array.series(frames, 0, channels) }", "caught"), 1,
+    "caught: Array.series calls a function per frame")
+  assert_equal(#peak_scan_findings("\n  allowed { a = (0, channels .. last) }", "allowed"), 0,
+    "allowed: the numeric series primitive")
   assert_equal(#peak_scan_findings("\n  caught { var a; b = c.abs; }", "caught"), 1, "caught: a per-sample abs")
   assert_equal(#peak_scan_findings("\n  caught { var a; b = chunk.maxItem; }", "caught"), 1, "caught: maxItem")
   assert_equal(#peak_scan_findings("\n  caught { x = FloatArray.fill(n, { 0 }) }", "caught"), 1, "caught: a fill with a function")

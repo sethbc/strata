@@ -271,7 +271,7 @@
     // bin boundary, so no chunk spans two bins. A bin's peak is Signal's
     // peak, a C primitive: no array and no sclang function per sample
     // (maxItem and minItem call a function for every sample, #131).
-    fileDecodes { arg file, frames, yielding = false, peaks, keepGoing;
+    fileDecodes { arg file, frames, yielding = false, peaks, keepGoing, snapshot;
         var channels = file.numChannels, done = 0, bin = 0, binEnd, wanted, chunk, decoded;
         peaks = peaks ?? { FloatArray.newClear(this.waveformPoints) };
         while { done < frames } {
@@ -284,15 +284,38 @@
             // counted for the check: a superseded check stops at its next chunk (#375)
             areaState[\files][\decodeChunks] = (areaState[\files][\decodeChunks] ? 0) + 1;
             decoded = chunk.size div: channels;
-            if (decoded > 0) { peaks[bin] = peaks[bin].max(chunk.peak.min(1.0)) };
+            if (decoded > 0) {
+                peaks[bin] = peaks[bin].max(chunk.peak.min(1.0));
+                if (snapshot.notNil and: { this.writeLoadChunk(snapshot, chunk, channels, decoded) == false }) {
+                    Error("cannot write load snapshot").throw;
+                };
+            };
             done = done + decoded;
-            if ((decoded < wanted) and: { done < frames }) { ^(frames - done) <= loadShortfallFrames };
+            if ((decoded < wanted) and: { done < frames }) {
+                if ((frames - done) > loadShortfallFrames) { ^false };
+                if (snapshot.notNil and: { snapshot.writeData(Signal.newClear((frames - done) * snapshot.numChannels)) == false }) {
+                    Error("cannot finish load snapshot").throw;
+                };
+                ^true
+            };
             if (yielding and: { done < frames }) {
                 this.yieldToCommands(0);
                 if (keepGoing.notNil and: { keepGoing.value.not }) { ^false };
             };
         };
         ^true
+    }
+
+    // Snapshot the exact two channels the slot plays. Mono is read twice
+    // by the server. The input peak scan still sees every source channel.
+    writeLoadChunk { arg snapshot, chunk, channels, frames;
+        var keys, stereo, last = (frames - 1) * channels;
+        if (frames == 0 or: { channels <= 2 }) { ^snapshot.writeData(chunk) };
+        keys = this.interleaveKeys(frames);
+        stereo = FloatArray.newClear(frames * 2);
+        stereo.putEach(keys[0], chunk.at((0, channels .. last)));
+        stereo.putEach(keys[1], chunk.at((1, channels + 1 .. last + 1)));
+        ^snapshot.writeData(stereo)
     }
 
     // The first frame after a load's bin (integers, so every frame is in

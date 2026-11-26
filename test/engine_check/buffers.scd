@@ -207,18 +207,22 @@ var checkFilePitch = {
 // not, the second load having taken effect after it
 var checkReadFailureMatching = { arg stereoPath, monoPath;
     var firstPath = scratchRoot +/+ "first-of-two.wav", before, firstLoad, alone, aloneLoad;
+    var issued, firstRead = {
+        issued = h.wireUnits({ command.(\loadBuffer, 5, firstPath, 0) }).flatten(1)
+            .detect({ arg msg; msg[0].asString == "/b_readChannel" })[2];
+    };
     var failRead = { thisProcess.recvOSCmessage(0, server.addr, NetAddr.langPort, ['/fail', '/b_readChannel',
-        "File '" ++ firstPath.standardizePath ++ "' could not be opened: System error : No such file or directory.\n",
+        "File '" ++ issued ++ "' could not be opened: System error : No such file or directory.\n",
         engine.buffersL[5].bufnum]) };
     File.delete(firstPath); File.copy(monoPath, firstPath);
     before = loadFailures.value.size;
-    command.(\loadBuffer, 5, firstPath, 0);
+    firstRead.value;
     aloneLoad = engine.bufferLoads[5];
     failRead.value;
     waitFor.({ loadFailures.value.size > before });
     alone = loadFailures.value.drop(before);
     before = loadFailures.value.size;
-    command.(\loadBuffer, 5, firstPath, 0);
+    firstRead.value;
     firstLoad = engine.bufferLoads[5];
     command.(\loadBuffer, 5, stereoPath, 0);
     failRead.value;
@@ -235,6 +239,143 @@ var checkReadFailureMatching = { arg stereoPath, monoPath;
     File.delete(firstPath);
 };
 
+// Rewrite the pathname while an active voice fades, in both directions.
+var checkReplacedFileLoad = {
+    var slot = 2, path = scratchRoot +/+ "changing-load.wav";
+    var stereo = [48000, 9000, [0.25, -0.25]], mono = [32000, 3000, [0.75]];
+    [[stereo, mono], [mono, stereo]].do({ arg pair;
+        var old = pair[0], new = pair[1], before = loadFailures.value.size, values, expected, peaks;
+        var rate, frames, wantedPeak = old[2][0], seconds = (old[1] / old[0]).round(0.01);
+        h.writeTestFile(path, old[0], old[1], old[2]);
+        command.(\loadBuffer, slot, path, 0);
+        h.writeTestFile(path, new[0], new[1], new[2]);
+        h.awaitLoad(slot); server.sync;
+        values = [100, 6000].collect({ arg frame;
+            [bufferSample.(engine.buffersL[slot], frame), bufferSample.(engine.buffersR[slot], frame)]
+        }).flat;
+        expected = if (old === stereo) { [0.25, -0.25, 0.25, -0.25] } { [0.75, 0.75, 0, 0] };
+        peaks = engine.areaState[\waveform][\peaks][slot];
+        frames = engine.bufferFrames[slot]; rate = engine.bufferSampleRates[slot];
+        check.((frames == old[1]) and: { rate == old[0] } and: { (peaks.minItem - wantedPeak).abs < 0.001 }
+            and: { (peaks.maxItem - wantedPeak).abs < 0.001 } and: { values.every({ arg v, i; (v - expected[i]).abs < 0.001 }) }
+            and: { loadFailures.value.size == before } and: { bufferStateSeen.(slot, seconds) },
+            "buffers: replacing a checked % channel file during the fade installs the checked audio (frames %, rate %, peak %, samples %, failures %)".format(
+                old[2].size, frames, rate, peaks.maxItem, values, loadFailures.value.drop(before)));
+    });
+};
+// Staging fails before the slot is changed. The old audio and its
+// overview remain usable and a later load can use the scratch directory.
+var checkLoadStagingFailure = {
+    var slot = 2, original = engine.scratchDir, failures = loadFailures.value.size, expected;
+    var frames = engine.bufferFrames[slot], rate = engine.bufferSampleRates[slot], peak = engine.areaState[\waveform][\peaks][slot].copy;
+    var left = bufferSample.(engine.buffersL[slot], 100), right = bufferSample.(engine.buffersR[slot], 100);
+    protect {
+        engine.scratchDir = stereoPath; // an existing file cannot hold a snapshot
+        command.(\loadBuffer, slot, monoPath, 0);
+        expected = engine.bufferLoads[slot] * 2 * engine.numBuffers + slot;
+    } { engine.scratchDir = original };
+    check.(waitFor.({ loadFailures.value.drop(failures) == [expected] }) and: { engine.bufferFrames[slot] == frames }
+        and: { engine.bufferSampleRates[slot] == rate } and: { engine.areaState[\waveform][\peaks][slot] == peak }
+        and: { bufferSample.(engine.buffersL[slot], 100) == left } and: { bufferSample.(engine.buffersR[slot], 100) == right },
+        "buffers: an unavailable staging directory reports one unchanged failure and preserves the slot");
+};
+// Integer series at zero and one frame: never select a nonexistent
+// channel or lose the lone frame at a waveform bin boundary.
+var checkPackedLoadEdges = {
+    var samples, sink = (writeData: { arg self, data; samples = data });
+    engine.writeLoadChunk(sink, Signal.newClear(0), 3, 0);
+    check.(samples.notNil and: { samples.isEmpty }, "buffers: packing zero three-channel frames gives an empty stage chunk");
+    engine.writeLoadChunk(sink, Signal[0.25, -0.5, 0.75], 3, 1);
+    check.(samples == FloatArray[0.25, -0.5], "buffers: packing one three-channel frame keeps exactly its first stereo pair");
+};
+// Without a language yield, all eight read pairs still own their private
+// input, even if the server has already completed some reads.
+var checkLoadSnapshotBudget = {
+    var other = h.startEngine, live = other.areaState[\buffers][\snapshots];
+    var path = scratchRoot +/+ "snapshot-budget.wav", n = loadFailures.value.size, bytes = 0, healthy = true, zeroes = 0, left = other.buffersL[0];
+    h.writeTestFile(path, 48000, 9000, [0.25, -0.5, 0.8]);
+    other.numBuffers.do({ arg i; h.commandTo(other, \loadBuffer, i, path, 0) });
+    live.do({ arg name;
+        var info = SoundFile.openRead(name);
+        bytes = bytes + File.fileSize(name);
+        healthy = healthy and: { info.numFrames == 9000 } and: { info.numChannels == 2 };
+        info.close;
+    });
+    check.(live.size == other.numBuffers and: { healthy } and: { bytes <= (other.numBuffers * ((9000 * 8) + 1024)) },
+        "buffers: eight pending reads own eight stages limited to the selected stereo samples (bytes %)".format(bytes));
+    other.buffersL[0] = (numFrames: left.numFrames, bufnum: left.bufnum,
+        zero: { zeroes = zeroes + 1; left.zero },
+        readChannel: { arg self ... args; left.performList(\readChannel, args) });
+
+    other.numBuffers.do({ arg i; h.commandTo(other, \loadBuffer, i, monoPath, 0) });
+    h.commandTo(other, \clearBuffer, 1);
+    h.commandTo(other, \loadBuffer, 2, stereoPath, 0);
+    h.commandTo(other, \loadBuffer, 3, textPath, 0);
+    check.(live.size == other.numBuffers and: { h.waitFor({
+        other.bufferFrames == [4410, 0, 11025, 4410, 4410, 4410, 4410, 4410] and: { live.isEmpty }
+    }, 3) } and: { loadFailures.value.drop(n) == [(6 * other.numBuffers) + 3] }
+        and: { (bufferSample.(left, 100) - 0.4).abs < 0.001 }
+        and: { (bufferSample.(other.buffersR[0], 100) - 0.4).abs < 0.001 }
+        and: { (bufferSample.(other.buffersR[2], 100) + 0.25).abs < 0.001 }
+        and: { (other.scratchDir +/+ "strata-load-*.part").pathMatch.isEmpty },
+        "buffers: two full-slot restores keep eight stages, clear cancels, a later replacement wins and a bad later load preserves the queued load (frames %, failures %)".format(other.bufferFrames, loadFailures.value.drop(n)));
+    check.(zeroes == 1, "buffers: the deferred load zeroes its buffer once after fading (% zeroes)".format(zeroes));
+    other.buffersL[0] = left;
+    h.freeEngine(other);
+};
+// A and B are both valid at admission, then B vanishes before a stage
+// is available. Lua must receive an emptied B, never a rollback to A.
+var checkDeferredLoadFailure = {
+    var other = h.startEngine, slot = 7, path = scratchRoot +/+ "deferred-gone.wav", n = loadFailures.value.size;
+    var cancel, accepted, state, failures;
+    h.commandTo(other, \loadBuffer, slot, stereoPath, 0); h.awaitLoad(slot, other);
+    h.commandTo(other, \loadBuffer, slot, textPath, 0);
+    waitFor.({ loadFailures.value.size == (n + 1) });
+    check.(other.bufferFrames[slot] == 11025 and: { loadFailures.value.drop(n) == [4 * other.numBuffers + slot] },
+        "buffers: a missing source before admission reports unchanged and keeps the stereo slot");
+    h.commandTo(other, \recordBuffer, slot, 2, 1, 0.5, 0, 0, 0, 0, 0); 0.12.wait; h.server.sync;
+    cancel = other.slotRecording(slot);
+    File.copy(stereoPath, path); n = loadFailures.value.size;
+    other.numBuffers.do({ arg i; h.commandTo(other, \loadBuffer, i % 7, stereoPath, 0) });
+    h.commandTo(other, \loadBuffer, slot, monoPath, 0);
+    accepted = other.slotRecording(slot).not;
+    h.commandTo(other, \loadBuffer, slot, path, 0);
+    File.delete(path);
+    waitFor.({ loadFailures.value.size > n });
+    h.server.sync;
+    failures = loadFailures.value.drop(n); state = other.bufferStateReport(slot, other.bufferStateSeconds(slot));
+    check.(cancel and: { accepted }, "buffers: a valid short load ends its active take immediately even with eight outstanding reads");
+    check.(failures == [(9 * other.numBuffers) + slot] and: { other.bufferFrames[slot] == 0 }
+        and: { other.bufferSampleRates[slot] == h.server.sampleRate } and: { other.areaState[\waveform][\peaks][slot].maxItem == 0 }
+        and: { bufferSample.(other.buffersL[slot], 100) == 0 } and: { bufferSample.(other.buffersR[slot], 100) == 0 }
+        and: { h.pollValueNear(\bufferState, state, 0.001) },
+        "buffers: B disappearing after displacing A reports B emptied and zero playable frames, samples and peaks (state %, failures %)".format(state, failures));
+    h.freeEngine(other);
+};
+// Losing directory write permission after the reads were sent must not
+// lose the accounting for a snapshot that could not be removed.
+var checkLoadSnapshotCleanup = { arg freeAtEnd;
+    var other = h.startEngine, dir = other.scratchDir, denied, files;
+    var probe = dir +/+ "unlink-probe", live = other.areaState[\buffers][\snapshots];
+    File.mkdir(dir); File.use(probe, "w", { arg f; f.write("probe") });
+    h.commandTo(other, \loadBuffer, 0, stereoPath, 0);
+    protect {
+        ("chmod 555 " ++ dir.shellQuote).systemCmd;
+        denied = try { File.delete(probe).not } { true };
+        h.awaitLoad(0, other);
+        files = (dir +/+ "strata-load-*.part").pathMatch;
+        if (denied) {
+            check.(files.size == 1 and: { live.includes(files[0]) },
+                "buffers: a snapshot the directory will not unlink stays accounted for after successful server reads");
+        };
+    } { ("chmod 755 " ++ dir.shellQuote).systemCmd };
+    if (freeAtEnd) { h.freeEngine(other) } {
+        h.commandTo(other, \loadBuffer, 0, monoPath, 0); h.awaitLoad(0, other)
+    };
+    check.(live.isEmpty and: { (dir +/+ "strata-load-*.part").pathMatch.isEmpty },
+        "buffers: recovered directory permits snapshot cleanup at %".format(if (freeAtEnd) { "engine free" } { "next load" }));
+    File.delete(probe); if (freeAtEnd.not) { h.freeEngine(other) };
+};
 // A file that passes loadSlot's checks but is gone when the server reads it
 // (after the fade wait; a drive unplugged, say) is the one way to make the
 // server's read itself fail: /fail for /b_readChannel. The slot was zeroed,
@@ -439,6 +580,12 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
             cutStep.round(0.000001), steadyLevel.round(0.0001), steadyStep.round(0.000001)));
     stepProbe.free; peakProbe.free; stepBus.free; peakBus.free;
     // Inside the wait (lengthened so the check can look): faded at once, zeroed or overwritten after
+    checkReplacedFileLoad.value;
+    checkLoadStagingFailure.value;
+    checkPackedLoadEdges.value;
+    checkLoadSnapshotBudget.value;
+    checkDeferredLoadFailure.value;
+    checkLoadSnapshotCleanup.(false); checkLoadSnapshotCleanup.(true);
     defaultFadeWait = engine.bufferFadeWait;
     engine.bufferFadeWait = 0.5;
     command.(\loadBuffer, 2, stereoPath, 0); h.awaitLoad(2);
@@ -504,6 +651,8 @@ var checkBufferFades = { arg stereoPath, monoPath, longPath;
     checkFadeRates.(stereoPath);
     checkFadeWaitInterleavings.(longPath);
     checkVanishedFileLoad.(stereoPath, monoPath);
+    check.(engine.areaState[\buffers][\snapshots].isEmpty and: { (engine.scratchDir +/+ "strata-load-*.part").pathMatch.isEmpty },
+        "buffers: successful, missing and superseded sources release their snapshot files and credits");
     engine.bufferFadeWait = defaultFadeWait;
 };
 
