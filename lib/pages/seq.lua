@@ -224,7 +224,7 @@ return function(S)
     local sequencer = S.lib.sequencer
     local slot, bars = sequencer.chain_place()
     if not bars then return nil end
-    if not slot and #S.lib.scenes.playable_slots(params:get("seq_chain_from"), params:get("seq_chain_scenes")) == 0 then
+    if #S.lib.scenes.playable_slots(params:get("seq_chain_from"), params:get("seq_chain_scenes")) == 0 then
       return short and SEQ_PAGE.chain_none_short or SEQ_PAGE.chain_none
     end
     if short then return "[" .. (slot and ("S" .. slot) or SEQ_PAGE.no_slot_short) .. " " .. bars .. "b]" end

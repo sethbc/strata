@@ -1851,6 +1851,44 @@ test("SEQ shows the chain's scene and the bars to its next link", function()
     "stopped: the chain's place goes")
 end)
 
+test("SEQ shows an empty chain range as soon as it changes and keeps the last link for playback", function()
+  local context, S = started_on_seq()
+  capture_scene(1)
+  params:set("seq_chain_scenes", 1)
+  params:set("seq_chain_bars", 2)
+  params:set("seq_chain", 1)
+  tap(2)
+  assert_equal(status_text(context), "[S1 2 bars]", "S1 linked at the start")
+  params:set("seq_chain_from", 2)
+  assert_equal(status_text(context), "chain [none]", "the new range contains only empty S2")
+  context.clock.run_for(2.01)
+  assert_equal(status_text(context), "chain [none]", "still empty after a bar")
+  context.clock.run_for(2.0)
+  assert_equal(status_text(context), "chain [none]", "the due link found nothing")
+  local slot, bars = S.lib.sequencer.chain_place()
+  assert_equal(slot, 1, "playback remembers the last link")
+  assert_equal(bars, 2, "playback kept its two-bar interval")
+
+  S.scenes[1].data = {}  -- a populated slot with invalid data
+  params:set("seq_chain_from", 16)
+  params:set("seq_chain_scenes", 3)  -- S16, S1, S2
+  assert_equal(status_text(context), "chain [none]", "an invalid scene cannot fill the wrapped range")
+  capture_scene(16)
+  capture_scene(2)
+  context.clock.run_for(2.0)
+  assert_equal(status_text(context), "[S1 1 bar]", "playback still sounds S1 until its next link")
+  context.clock.run_for(2.0)
+  assert_equal(status_text(context), "[S2 2 bars]", "the next playable scene after S1 is S2")
+  params:set("seq_chain_next", 0)
+  params:set("seq_chain_random", 100)
+  local real_random, draws = math.random, 0
+  math.random = function(...) draws = draws + 1; return real_random(...) end
+  local text = status_text(context)
+  math.random = real_random
+  assert_equal(text, "[S2 2 bars]", "redrawing a random chain keeps its place")
+  assert_equal(draws, 0, "rendering never draws the chain's next move")
+end)
+
 test("SEQ names a step output that failed, until the next start", function()
   local context, S = started_on_seq()
   S.patterns[1][1] = 15

@@ -2085,7 +2085,7 @@ return function(S)
   function M.reset_armed() return play.reset_beat ~= nil end
 
   -- The chain's place: the scene it linked last (nil before its first link,
-  -- or with no playable scene in its range) and the whole bars to its next
+  -- kept when the range becomes empty) and the whole bars to its next
   -- link (the bar in progress counts: 1 just before it), the sequencer's
   -- count being the clock's beats plus play.offset. nil, nil while the chain
   -- is off or the patterns stop (chain.next_beat is nil then)
