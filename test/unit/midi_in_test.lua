@@ -1522,6 +1522,44 @@ test("a port change and a device change reset the master bend range", function()
   assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "a device added on another port changes nothing")
 end)
 
+for _, policy in ipairs({"latch", "release"}) do
+  for _, silent in ipairs({false, true}) do
+    local kind = silent and "silent" or "ordinary"
+    test(kind .. " PSET recall of " .. policy .. " clears old MIDI ownership and keeps the next key on reread (#1106)", function()
+      local context = load_strata(); finish_startup(context)
+      local S = local_value("S")
+      context.midi.plug(1, "keys")
+      params:set("midi_channel_mode", 3)
+      local release = policy == "release"
+      params:set("midi_note_off", release and 2 or 1)
+      params:write(1)
+      params:set("midi_note_off", release and 1 or 2)
+      set_master_range(context, 12)
+      note_on(context, 2, 60)
+      assert_equal(S.lib.notes.find(1, "midi", key_of(2, 60)), 1)
+      local other = S.lib.notes.play(2, {owner = "seq", key = "step", pitch = 67, velocity = 0.5,
+        set_own = function() end, extra_only = true})
+      assert_true(other ~= nil, "the sequencer holds a slot")
+
+      context.clear_engine_calls()
+      params:read(1, silent)
+      assert_equal(S.lib.notes.find(1, "midi", key_of(2, 60)), nil, "the old allocator owner is gone")
+      assert_equal(S.midi_state.held[1][key_of(2, 60)], nil, "the old key is up")
+      assert_equal(#context.calls_named("voiceOff"), release and 1 or 0, "only release stops the held voice")
+      assert_equal(S.lib.notes.find(2, "seq", "step"), other, "the sequencer keeps its slot")
+      assert_near(master_bend_ratio(context, S), full_up(12), 1e-9, "the same controller keeps its range")
+
+      note_on(context, 2, 62)
+      note_off(context, 2, 60)
+      params:read(1, silent)
+      assert_equal(S.lib.notes.find(1, "midi", key_of(2, 62)), 1, "the unchanged read keeps the new note")
+      assert_true(S.midi_state.held[1][key_of(2, 62)], "the new key stays down")
+      note_off(context, 2, 62)
+      assert_equal(S.voices[1].active, not release, "the first new key follows the recalled policy")
+    end)
+  end
+end
+
 test("a device added on the selected port resets the master bend range (#688)", function()
   local context = load_strata(); finish_startup(context)
   local S = local_value("S")
