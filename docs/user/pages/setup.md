@@ -72,7 +72,7 @@ K2:back E3:note K3:F#
 ```
 
 - **root** and **scale** - E3 changes them, as PARAMETERS > scale does
-- **notes** - the scale's twelve notes from the root: a note's letter (or `#` for a sharp) when it is in the scale, `.` when it is not. E3 moves along them, K3 turns the one under the cursor in or out (the hint row names it). Under a built-in scale (or off) the first toggle copies the scale into **custom** and changes that; the last note cannot be turned out. While the editor is open a MIDI note toggles its note the same way and plays nothing, but not while SEQ's step editor is open over it (from a grid): then the note plays as usual
+- **notes** - the scale's twelve notes from the root: a note's letter (or `#` for a sharp) when it is in the scale, `.` when it is not. E3 moves along them, K3 turns the one under the cursor in or out (the hint row names it). Under a built-in scale (or off) the first toggle copies the scale into **custom** and changes that; the last note cannot be turned out. While SCALE is visible, a MIDI note toggles its class the same way and plays nothing. While the norns menu or SEQ's step editor (opened from a grid) covers SCALE, MIDI notes play as usual.
 - **tuning** - E3 steps through the built-in tunings, then your `.scl` files in `data/strata/tunings/` (listed when the editor opens), shown dim until K3 applies the one shown. A file Strata cannot read is refused and the hint row says why
 - In a tuning that is not twelve notes to an octave, **scale** and **notes** show `--` and do nothing: every tone of the tuning is allowed, and MIDI notes play
 - **E2** - move between the rows
