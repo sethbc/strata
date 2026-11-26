@@ -2008,9 +2008,10 @@ test.("record: a command sent during a peaks refresh is handled with the refresh
         (each[\heard] == true) and: { each[\pending] == 1 } and: { each[\partThere] == true }
     });
     check.(usable and: { results.size == rounds } and: { good == rounds },
-        "record: a command sent during a peaks refresh is handled with the refresh's rename still under way (#210, #964; mover %, % of % rounds: heard %, refreshes since the send %, renames in the mover %, .part there %)".format(
+        "record: a command sent during a peaks refresh is handled with the refresh's rename still under way (#210, #964; mover %, % of % rounds: heard %, refreshes since the send %, generations since the send %, renames in the mover %, .part there %)".format(
             usable, good, rounds, results.collect({ arg each; each[\heard] ? false }).asArray, results.collect({ arg each; each[\refreshes] }).asArray,
-            results.collect({ arg each; each[\pending] }).asArray, results.collect({ arg each; each[\partThere] }).asArray));
+            results.collect({ arg each; each[\generation] }).asArray, results.collect({ arg each; each[\pending] }).asArray,
+            results.collect({ arg each; each[\partThere] }).asArray));
     reset.(slot);
 });
 
