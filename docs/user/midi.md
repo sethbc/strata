@@ -6,7 +6,7 @@ A MIDI keyboard or sequencer plays the voices: one channel per voice, every chan
 
 ## Playing the voices
 
-Choose the port on the SETUP page (the first field; E3 changes it) or in PARAMETERS > midi; the port numbers are the norns SYSTEM > DEVICES > MIDI slots 1-16. Devices can be plugged in and out while Strata runs; unplugging the device, or moving it to another port in SYSTEM > DEVICES, releases every note it was playing (in release mode, the voices its keys held stop).
+Choose the port on the SETUP page (the first field; E3 changes it) or in PARAMETERS > midi; the port numbers are the norns SYSTEM > DEVICES > MIDI slots 1-16. Recalling a PSET that selects another port releases the old port’s notes and switches MIDI input to the saved port. Devices can be plugged in and out while Strata runs; unplugging the device, or moving it to another port in SYSTEM > DEVICES, releases every note it was playing (in release mode, the voices its keys held stop).
 
 - **Channels** - PARAMETERS > midi > midi channels (SETUP's `channels` row) has four modes:
   - **per voice** (the default): MIDI channel 1 plays voice 1 (Resonator) ... channel 7 plays voice 7 (Ring); channels 8-16 are ignored;

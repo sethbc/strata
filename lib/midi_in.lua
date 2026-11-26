@@ -104,6 +104,14 @@ return function(S)
     attach_midi(params:get("midi_device"))
   end
 
+  -- A silent PSET read skips the port action. S.midi_device identifies
+  -- the attached vport even when it is empty or claimed.
+  S.register_pset_hook({name = "midi_input_port", read = function(path_base, number, pset_path, silent)
+    if not silent then return end
+    local param = params:lookup_param("midi_device")
+    if S.lib.io_ports.out(vport_index(param:get())) ~= S.midi_device then param:bang() end
+  end})
+
   -- Hot-plug, through S.lib.io_ports.on_change: norns assigns the device to
   -- its vport before calling midi.add, and clears the vport only after
   -- midi.remove returns. They read the midi_device param, which init adds,
