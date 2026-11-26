@@ -387,17 +387,14 @@ var checkSuperseded = {
 
 // A pass that finds its slot changed after its rename was handed on deletes
 // the renamed file only while it is the slot's newest analysis (#888), and
-// a newer pass's rename waits for it (#963): with the mover stopped, an
-// older pass hands its rename on, the slot changes, and a newer pass
-// writes its .part and waits while the older's rename is under way
-// (pathRenames); once the mover goes on, the older's rename ends (failed:
-// the slot changed), then the newer's lands. The older pass reports failed
-// and leaves the newer pass's file in place. The change is the slot's count
+// a newer pass revokes its pending rename. With the mover stopped, the
+// older pass reports failure and the newer pass is queued. Once the mover
+// resumes, only the newer file lands. The change is the slot's count
 // alone (slotChanged, as a load of the same audio counts it): a load's own
 // peaks rename would wait in the stopped mover.
 var checkOlderRename = {
     var slot = 6, path = scratchRoot +/+ "onsets-older-rename.wav", frames = (0.5 * rate).asInteger;
-    var mover = engine.areaState[\waveform][\mover], older, newer, pid, handedOlder = false, newerWaits = false, fields, stopped = false;
+    var mover = engine.areaState[\waveform][\mover], older, newer, pid, handedOlder = false, olderFailed = false, fields, stopped = false;
     writeClickFile.(path, frames, [(0.25 * rate).asInteger], [0.5]);
     loadInto.(engine, slot, path);
     if (File.exists(onsetsFile.(engine, slot))) { File.delete(onsetsFile.(engine, slot)) };
@@ -411,18 +408,17 @@ var checkOlderRename = {
             handedOlder = waitFine.({ mover[\pending] == 1 }, 0.5);
             engine.slotChanged(slot);
             newer = startAnalysis.(engine, slot);
-            // both .part files there, the older's alone in the mover
-            newerWaits = waitFine.({ partFilesOf.(engine, slot).size == 2 }, 0.5) and: { mover[\pending] == 1 };
+            olderFailed = waitFine.({ older[\failed] == true }, 0.5);
         } { ("kill -CONT " ++ pid).systemCmd };
         finishAnalysis.(older);
         finishAnalysis.(newer);
         waitFor.({ mover[\pending] == 0 });
     };
     fields = readOnsets.(onsetsFile.(engine, slot));
-    check.(stopped and: { handedOlder } and: { newerWaits } and: { older[\failed] == true } and: { newer[\failed] == false }
+    check.(stopped and: { handedOlder } and: { olderFailed } and: { older[\failed] == true } and: { newer[\failed] == false }
         and: { fields.notNil } and: { fields[\frames] == [frames.asString] } and: { partFilesOf.(engine, slot).isEmpty },
-        "onsets: a pass that finds its slot changed after its rename was handed on leaves a newer pass's file, whose rename waits for it (mover held %, handed on %, the newer waiting %; failed %, %; file %)".format(
-            stopped, handedOlder, newerWaits, older !? { older[\failed] }, newer !? { newer[\failed] }, fields.notNil));
+        "onsets: a pass that finds its slot changed after its rename was handed on leaves a newer pass's file, whose pending write revoked it (mover held %, handed on %, older failed while held %; failed %, %; file %)".format(
+            stopped, handedOlder, olderFailed, older !? { older[\failed] }, newer !? { newer[\failed] }, fields.notNil));
     command.(\clearBuffer, slot); server.sync;
     File.delete(path);
 };
@@ -433,9 +429,9 @@ var checkOlderRename = {
 // backlog (peaksMoverBacklog), the slot's audio gains a second click on
 // the server and its count changes, and a newer pass then finds the
 // backlog full, so its rename would go by subprocess at once, while the
-// older's goes by subprocess only past peaksMoverTimeout. The newer waits
-// for the older's rename to end (pathRenames): the file in place once both
-// have ended is the newer pass's, two onsets, never the older's one
+// older's goes by subprocess only past peaksMoverTimeout. The newer revokes
+// the older part before publishing. The file in place once both have ended
+// is the newer pass's, two onsets, never the older's one
 var checkRenameOrder = {
     var slot = 7, path = scratchRoot +/+ "onsets-order.wav", frames = (0.5 * rate).asInteger;
     var clicks = [(0.1 * rate).asInteger, (0.4 * rate).asInteger];
@@ -475,6 +471,84 @@ var checkRenameOrder = {
     fills.do({ arg each; if (File.exists(each)) { File.delete(each) } });
     command.(\clearBuffer, slot); server.sync;
     File.delete(path);
+};
+
+// #1089: hold the first real subprocess before mv. Both registered analyses
+// read equal-length slots, so only the marker identifies which audio won.
+var checkPublication = {
+    var dir = scratchRoot +/+ "onsets-publication", bin = dir +/+ "bin", original = "PATH".getenv;
+    var first = dir +/+ "first.wav", second = dir +/+ "second.wav", frames = 16384;
+    var fallbacks = { Engine_Strata.classVars[Engine_Strata.classVarNames.indexOf(\wavFallbacks)] };
+    var flushReports = { arg target;
+        var arrived = false, ack = OSCFunc({ arrived = true }, '/strataCheckOnsetsDrained');
+        target.bufferOnsetsPoll.oscAddr.sendMsg('/strataCheckOnsetsDrained');
+        protect { waitFor.({ arrived }) } { ack.free }
+    };
+    File.mkdir(bin);
+    File.copy(h.testDir +/+ "engine_check/fixtures/hold-wav-mv.sh", bin +/+ "mv");
+    ("chmod 700 " ++ (bin +/+ "mv").shellQuote).systemCmd;
+    writeClickFile.(first, frames, [4096], [0.5]);
+    writeClickFile.(second, frames, [8192], [0.5]);
+    "PATH".setenv(bin ++ ":" ++ original);
+    protect {
+        [false, true].do({ arg reload;
+            var folder = dir +/+ ("held-onsets-" ++ reload.asString), target, path, oldCount, newCount;
+            var reports = List.new(4), expected, watcher, entered, published, before, settled, after;
+            var build = {
+                var e = h.startEngine((settingsDir: folder, modelPath: dir +/+ "no-board"));
+                e.stopPeaksMover;
+                e.bufferOnsetsPoll.start;
+                e
+            };
+            target = build.value;
+            path = onsetsFile.(target, 0);
+            watcher = OSCFunc({ arg msg;
+                if (msg[1] == target.bufferOnsetsPoll.index) { reports.add(msg[2].asInteger) };
+            }, '/poll/value');
+            protect {
+                loadInto.(target, 0, first);
+                h.commandTo(target, \analyzeBuffer, 0);
+                oldCount = analysesOf.(target)[0];
+                entered = waitFor.({ (path ++ ".barrier/in.*").pathMatch.notEmpty and: { fallbacks.value > 0 } });
+                if (reload) { h.freeEngine(target); target = build.value };
+                loadInto.(target, 0, second);
+                h.commandTo(target, \analyzeBuffer, 0);
+                newCount = analysesOf.(target)[0];
+                published = waitFor.({ reports.includes(target.bufferOnsetsValue(0, newCount, false).asInteger) }, 5);
+                before = onsetFrames.(readOnsets.(path));
+            } { File.use(path ++ ".release", "w", { arg file; file.write("release") }) };
+            // The fallback's unixCmd callback returns the credit after the process exits.
+            settled = waitFor.({ (path ++ ".barrier/out.*").pathMatch.notEmpty and: { fallbacks.value == 0 } });
+            settled = flushReports.(target) and: { settled };
+            expected = [target.bufferOnsetsValue(0, newCount, false).asInteger];
+            if (reload.not) { expected = expected.add(target.bufferOnsetsValue(0, oldCount, true).asInteger) };
+            after = onsetFrames.(readOnsets.(path));
+            check.(entered and: { published } and: { before == [8192] } and: { settled } and: { after == [8192] }
+                and: { reports.asArray.sort == expected.sort } and: { partFilesOf.(target, 0).isEmpty }
+                and: { target.pathRenames[path].isNil } and: { File.type(target.wavReceipt(path)) == \not_found },
+                "onsets: after the held 4096 rename the new success still owns 8192 (#1089; reload %, entered %, published %, settled %, markers % then %, numbered reports %, expected %)".format(
+                    reload, entered, published, settled, before, after, reports, expected));
+            if (reload.not) {
+                var kept = File.readAllString(path), token = target.wavPartToken(target.instVarAt(\writeCount) + 1);
+                var expectFailure = { arg description;
+                    var failed = analyze.(target, 0);
+                    expected = expected.add(target.bufferOnsetsValue(0, failed[\count], true).asInteger);
+                    check.(flushReports.(target) and: { failed[\failed] == true } and: { reports.asArray.sort == expected.sort }
+                        and: { File.readAllString(path) == kept } and: { partFilesOf.(target, 0).isEmpty }
+                        and: { File.type(target.wavReceipt(path)) == \not_found },
+                        "onsets: % reports its numbered failure once and preserves the previous markers (reports %, expected %)".format(
+                            description, reports, expected));
+                };
+                // The write and close succeed but retain zero bytes, as a short write can.
+                ("ln -s /dev/null " ++ (path ++ "." ++ token ++ ".part").shellQuote).systemCmd;
+                expectFailure.("a short preparation");
+                File.use(path ++ ".reject", "w", { arg file; file.write("reject") });
+                expectFailure.("a failed rename");
+            };
+            watcher.free;
+            h.freeEngine(target);
+        });
+    } { "PATH".setenv(original) };
 };
 
 // Refused at once, with a failed report: an empty slot, and a slot that
@@ -661,6 +735,7 @@ body = {
         checkSuperseded.value;
         checkOlderRename.value;
         checkRenameOrder.value;
+        checkPublication.value;
         checkRefused.value;
         checkRefusedEnding.value;
         checkLong.value;

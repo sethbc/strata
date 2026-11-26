@@ -247,58 +247,21 @@
             ++ (["strengths"] ++ strengths.collect({ arg value; this.peakText(value / strongest) })).join(" ") ++ "\n"
     }
 
-    // Write the slot's onsets file through a .part renamed into place
-    // (renameIntoPlace, the waveform area's mover), whose end reports:
-    // written once the file is in place, failed when the rename failed or
-    // the slot changed meanwhile (a file renamed into place after a change
-    // is deleted, as it describes audio the slot no longer holds, but only
-    // while this pass is the slot's newest analysis: once a newer one has
-    // come, the path may hold its file, #888). Inside the pass's routine:
-    // an older pass's rename to the path still under way (pathRenames, the
-    // files area's record, which writeSlot keeps the same way) is waited
-    // for first, yielding (at most twice peaksMoverTimeout, as writeSlot
-    // waits), so renames land in pass order whatever carries them: an older
-    // rename by subprocess past the mover's timeout never lands over a
-    // newer pass's file (#963). A pass the slot's change, a newer analysis
-    // or the engine's stop overtakes while it waits hands nothing on.
-    // pathRenames[path] names the pass's count while its rename is under
-    // way. Returns whether the rename is under way; false, reporting
-    // nothing, when the .part cannot be written, a folder is in the way or
-    // the slot changed.
+    // Once the files area takes the part, it reports the outcome, including
+    // revocation by a later publication. If the audio changed after the
+    // rename, remove these markers only while this is the newest pass.
     writeOnsetsFile { arg index, count, frames, rate, picks, change;
-        var path = this.onsetsPath(index).standardizePath, partPath = path ++ "." ++ instanceTag ++ "-" ++ count ++ ".part";
-        var text = this.onsetsText(index, frames, rate, picks), file, written, waitStart, renameEnded = false;
-        var current = { this.onsetPassCurrent(index, count, change) };
-        try { File.mkdir(path.dirname) };
-        written = try {
-            file = File.new(partPath, "w");
-            if (file.isOpen) { file.write(text); file.close; true } { false }
-        } { false };
-        // mv -f would move the file into a folder at the path, and succeed
-        if (written.not or: { PathName(path).isFolder } or: { slotChanges[index] != change }) {
+        var path = this.onsetsPath(index).standardizePath, text = this.onsetsText(index, frames, rate, picks);
+        if (this.onsetPassCurrent(index, count, change).not) { ^false };
+        this.areaCall(\publishAnalysisPart, path, { arg part;
+            File.use(part, "w", { arg file; file.write(text) });
+            File.fileSize(part) == text.size
+        }, { arg written;
+            var kept = written and: { this.onsetPassCurrent(index, count, change) };
             if (written.not) { postln("strata: cannot write " ++ path) };
-            try { if (File.exists(partPath)) { File.delete(partPath) } };
-            ^false
-        };
-        waitStart = Main.elapsedTime;
-        while { this.pathRenames[path].notNil and: { current.value }
-            and: { (Main.elapsedTime - waitStart) < (this.peaksMoverTimeout * 2) } } {
-            this.yieldToCommands(this.peaksMoverPollStep)
-        };
-        // no yield between this check and the rename's start
-        if (current.value.not) {
-            try { if (File.exists(partPath)) { File.delete(partPath) } };
-            ^false
-        };
-        this.renameIntoPlace(partPath, path, { arg moved;
-            var kept = moved and: { slotChanges[index] == change };
-            renameEnded = true;
-            if (this.pathRenames[path] == count) { this.pathRenames.removeAt(path) };
-            if (moved.not) { postln("strata: cannot move " ++ partPath ++ " to " ++ path) };
-            if (moved and: { kept.not } and: { areaState[\onsets][\analyses][index] == count }) { try { File.delete(path) } };
-            this.reportOnsets(index, count, kept.not);
-        });
-        if (renameEnded.not) { this.pathRenames[path] = count };
+            if (written and: { kept.not } and: { areaState[\onsets][\analyses][index] == count }) { try { File.delete(path) } };
+            this.reportOnsets(index, count, kept.not)
+        }, { this.reportOnsets(index, count, true) });
         ^true
     }
 }

@@ -6,6 +6,8 @@ case $dest in
   */peaks-search-fault/buf1.peaks)
     /bin/mv "$@" || exit $?
     exec chmod 000 "${dest%/*}" ;;
+  */held-onsets-*/buf1.onsets)
+    if [ -f "$dest.reject" ]; then printf partial > "$part"; exit 1; fi ;;
   */held-*.wav|*/held-peaks-*/buf1.peaks) ;;
   *) exec /bin/mv "$@" ;;
 esac
