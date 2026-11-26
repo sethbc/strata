@@ -349,19 +349,19 @@ return function(S)
     return true
   end
 
-  -- Choose an entry (a built-in or a file's: name, period, tones): its name,
-  -- then its text, whose action applies it. norns runs a text param's
+  -- Choose an entry (a built-in or a file's: name, period, tones). Its
+  -- name follows only once its text is in force. norns runs a text param's
   -- action only on a change, so a text tuning_tones holds already that the
   -- tuning never took (a silent params:set of tuning_tones), or whose tuning
   -- the engine lacks, is applied here (#842)
   function M.select(entry)
     local text = M.text_of(entry.period, entry.tones)
-    params:set("tuning_name", entry.name)
     if params:get("tuning_tones") == text and engine_text ~= text then
       M.apply_text(text)
     else
       params:set("tuning_tones", text)
     end
+    if current.text == text then params:set("tuning_name", entry.name) end
   end
 
   function M.built_ins()
@@ -423,7 +423,9 @@ return function(S)
     local period = pitches[count]
     local problem = tones_problem(period, tones)
     if problem then return nil, problem end
-    return period, tones
+    -- The four-decimal PSET text must still ascend at OSC float precision.
+    -- Give the editor the same tuning it can apply, or the refusal to show.
+    return M.parse_text(M.text_of(period, tones))
   end
 
   local function folder() return _path.data .. TUNING.folder end
