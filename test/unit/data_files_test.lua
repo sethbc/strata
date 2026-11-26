@@ -227,6 +227,11 @@ test("read says a file is missing, too large or damaged; read_text gives a file'
   local path = context.data_dir .. "read.data"
   local value, outcome, why = data_files.read(context.data_dir .. "no_such.data")
   assert_equal(value, nil); assert_equal(outcome, "missing"); assert_equal(why, nil)
+  -- A regular file in the path makes open fail with ENOTDIR, even as root.
+  write_text(path, "a file")
+  value, outcome, why = data_files.read(path .. "/child")
+  assert_equal(value, nil); assert_equal(outcome, "unreadable")
+  assert_true(type(why) == "string" and why ~= "", "the system error reaches the caller")
   -- a good file padded with spaces to exactly max_bytes reads; one byte more does not
   local good = tabutil_text({ version = 2, paths = { "a.wav" } })
   write_text(path, good .. string.rep(" ", max_bytes - #good))

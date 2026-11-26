@@ -22,6 +22,7 @@
 
 return function(S)
   local M = {}
+  local ENOENT = 2  -- no such file or directory on norns
 
   local DATA_FILES = {
     -- a larger file is not read: 3.9's 4a tripled it from 4 MB, keeping it
@@ -369,12 +370,14 @@ return function(S)
     return list
   end
 
-  -- The value the file at path holds; or nil and "missing" (it cannot be
-  -- opened); or nil, "unreadable" and why (larger than
-  -- DATA_FILES.max_bytes, or not tab.save's layout)
+  -- Only ENOENT means a missing file. Other open errors, like a read or
+  -- decode failure, must reach the caller's unreadable-file handling.
   local function read_value(path)
-    local file = io.open(path, "rb")
-    if not file then return nil, "missing" end
+    local file, open_error, errno = io.open(path, "rb")
+    if not file then
+      if errno == ENOENT then return nil, "missing" end
+      return nil, "unreadable", open_error
+    end
     local size = file:seek("end")
     if type(size) ~= "number" or size > DATA_FILES.max_bytes then
       file:close()
