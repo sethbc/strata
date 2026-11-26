@@ -386,6 +386,42 @@ test("a backup never replaces an earlier one", function()
   assert_equal(file_text(path), "fifth", "the file itself is untouched")
 end)
 
+test("setting a file aside skips unreadable backups, directories and dangling links (#1072)", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  local path = context.data_dir .. "bad.data"
+  local backup = path .. ".bak"
+  write_text(path, "new archive")
+  write_text(backup, "old archive")
+  os.execute("chmod 000 " .. h.shell_quote(backup))
+  os.execute("mkdir " .. h.shell_quote(backup .. ".2"))
+  write_text(backup .. ".2/inside", "keep the directory")
+  os.execute("ln -s " .. h.shell_quote("missing-target") .. " " .. h.shell_quote(backup .. ".3"))
+
+  local moved = data_files.set_aside(path, ".bak")
+  os.execute("chmod 600 " .. h.shell_quote(backup))
+  assert_equal(file_text(backup), "old archive", "the unreadable backup keeps its bytes")
+  assert_equal(moved, backup .. ".4", "the first available name")
+  assert_equal(file_text(moved), "new archive")
+  assert_true(not util.file_exists(path), "the source moved")
+  assert_equal(file_text(backup .. ".2/inside"), "keep the directory")
+  write_text(context.data_dir .. "missing-target", "link target")
+  assert_equal(file_text(backup .. ".3"), "link target", "the old link still points to its target")
+end)
+
+test("a backup lookup that cannot traverse the destination keeps the source (#1072)", function()
+  local context = load_strata()
+  local data_files = local_value("S").lib.data_files
+  local path = context.data_dir .. "bad.data"
+  write_text(path, "keep the source")
+  write_text(path .. ".parent", "a file, not a directory")
+  local moved, problem = data_files.set_aside(path, ".parent/archive")
+  assert_equal(moved, nil)
+  assert_true(type(problem) == "string" and problem ~= "every backup name is taken", "report the filesystem error")
+  assert_equal(file_text(path), "keep the source")
+  assert_equal(file_text(path .. ".parent"), "a file, not a directory")
+end)
+
 -- 3.9 (#895, ruling 8): read, set_aside and write keep each file's problem,
 -- and problems() lists them for SETUP, in the order each was first touched
 local function problem_of(data_files, path)

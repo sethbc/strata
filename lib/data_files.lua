@@ -458,18 +458,22 @@ return function(S)
     return path .. suffix .. (number > 1 and ("." .. number) or "")
   end
 
-  -- The first backup name no file (or folder) has, or nil when every one
-  -- is taken: a backup never replaces an earlier one (#466)
+  -- A POSIX rename to the same name checks the directory entry without
+  -- opening it or following a symbolic link. Only ENOENT is a free name.
   local function free_backup_name(path, suffix)
     for number = 1, DATA_FILES.backups do
       local candidate = backup_name(path, suffix, number)
-      if not util.file_exists(candidate) then return candidate end
+      local occupied, problem, errno = os.rename(candidate, candidate)
+      if not occupied then
+        if errno == ENOENT then return candidate end
+        return nil, problem
+      end
     end
-    return nil
+    return nil, "every backup name is taken"
   end
 
   -- Move path out of the way, to its first free backup name: that name, or
-  -- nil and why (every name taken, or the rename failed; path is then still
+  -- nil and why (every name taken, or a lookup or rename failed; path is still
   -- in place). A file set aside after its read (its reader could not use
   -- it) is kept (problems()), under its backup's name or in place when it
   -- could not be moved: unreadable when the read could not parse it,
@@ -484,15 +488,15 @@ return function(S)
   end
 
   function M.set_aside(path, suffix)
-    local backup = free_backup_name(path, suffix)
+    local backup, problem = free_backup_name(path, suffix)
     if not backup then
       note_set_aside(path, nil)
-      return nil, "every backup name is taken"
+      return nil, problem
     end
-    local moved, problem = os.rename(path, backup)
+    local moved, move_error = os.rename(path, backup)
     if not moved then
       note_set_aside(path, nil)
-      return nil, tostring(problem)
+      return nil, tostring(move_error)
     end
     note_set_aside(path, backup)
     return backup
