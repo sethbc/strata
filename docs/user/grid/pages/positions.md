@@ -9,7 +9,7 @@ Line 1 is voice 1, line 7 voice 7. Only voices reading a buffer respond.
 A voice's buffer is cut into 16 cells from its start to its end, one line per voice.
 
 - **A press** jumps the voice to its cell's start. Inside the voice's loop it moves within the loop; outside it, the loop goes back to the whole buffer first, as recalling a bookmark outside the loop does. Either way a running voice's scan restarts from there, and an arc glide ends
-- **Two keys** set a loop: hold one cell and press another of the same voice, and the loop runs from the start of the earlier cell to the end of the later one, in either order (two neighbors make a loop two cells long); the voice then jumps to the loop's start. On an 8×8 both keys are in the half it shows
+- **Two keys** set a loop: hold one cell and press another of the same voice, and the loop runs from the start of the earlier cell to the end of the later one, in either order (two neighbors make a loop two cells long); the voice then jumps to the loop's start. On an 8×8 both keys are in the half it shows. On a 16×16 the two cells can be in different panes. If you hold the same cell in both panes, the newer press is the anchor until you release it
 - **On the beat**: with PARAMETERS > sequencer > quantize actions on beat or bar, a press, a two-key loop and a bookmark recall wait for the next beat or bar of the clock, and the header says so (`v1 jump at bar`, `v1 bm 2 at bar`); a second press before then replaces the first. Store, hold and whole act at once ([Parameters](../../params.md#sequencer-group))
 
 What the cells show, brightest first:

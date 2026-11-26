@@ -591,9 +591,11 @@ return function(S)
     if z == 0 then
       local record = records[port]
       if record and release_slice_key(port, record, voice_idx, cell) then return end
-      -- the position key held likewise, for the voice that pressed it (#733)
+      -- Both panes can hold the same cell. Only the current anchor's key releases it.
       local held = record and record.held
-      if held and held.voice == voice_idx and held.cells == cells and held.cell == cell then record.held = nil end
+      if held and held.pane == (pane or 1) and held.voice == voice_idx and held.cells == cells and held.cell == cell then
+        record.held = nil
+      end
       return
     end
     if not buffer_voice(voice_idx) then return end
