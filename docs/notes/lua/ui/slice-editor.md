@@ -5,7 +5,7 @@
 - The first marker (frame 0) is never nudged or deleted.
 - A nudge is `round(d × nudge_seconds × rate)` frames (`nudge_seconds` 0.001, ALT `fine_nudge_seconds` 0.0001; half away from 0, so 4.8 is 5 and -4.8 is -5); a nudge of 0 frames sends nothing.
 - A change that makes the slices again (the mode, or the amount in `equal` or `transients`) flashes `edits dropped` when the record was `edited` before it. In `off` the amount sets `count` and makes nothing.
-- The MIDI key: the note hook (`S.register_note_hook`, `slice editor`, its `heard`: every MIDI note a voice receives, before the slice filter, so a note outside a slicing voice's slices too, design §3.7) only notes the note's number while the editor is open on the `key` row; the next 48 Hz step (`S.lib.lfos.on_step`) sets it through `S.lib.samples.set`, so a hook sends nothing. A close forgets a noted key.
+- The MIDI key: the note hook (`S.register_note_hook`, `slice editor`, its `heard`: every MIDI note a voice receives, before the slice filter, so a note outside a slicing voice's slices too, design §3.7) only records a note when the `key` row is picked, SLICE owns the top of the modal stack and the norns menu is closed. The next 48 Hz step (`S.lib.lfos.on_step`) checks that focus again before setting the key through `S.lib.samples.set`. If focus has moved, the step discards the note. A close forgets a noted key.
 - The slot emptied under the editor closes it: its listener on `S.lib.samples.on_bind` (registered once, at the first open, behind `binds_heard`) closes the editor when its slot's bind leaves no settings record.
 - The modules it reads (`S.lib.slices`, `S.lib.samples`, `S.lib.waveforms`) are read at each use and never checked to be there: a missing module or function fails loudly. The amount's bounds are the file settings' (`S.lib.samples.SAMPLES.count_min`, `count_max` and `sensitivity_max`, the bounds `S.lib.samples.set` checks): no copies.
 - The hints are one style in every view, the other modal editors' (`<key>:<action>`, K2 and K3 first; #736), each whole on the 128 px hint row in norns.ttf: markers `K2:back K3:add E2:sel E3:move` (125 px; E3 says `move`, as `E2:sel` with `E3:nudge` would be 129), with ALT `K3:delete E2:rows E3:fine` (104); rows `K2:back E2:slices E3:edit` (100), with ALT `E2:row E3:edit` (57). A "hints" flash (BUFFER's, `buffer_page_flash`) shows in their place.
@@ -13,7 +13,7 @@
 ## Machines
 
 ### slice editor
-- **State:** `editor = {open, slot, marker, view, row}` and `pending_key` (local to `lib/ui/slice_editor.lua`): closed, or open in the markers view or the rows view (`view`), read through `S.lib.ui_slice_editor.is_open()` and `state()`; `pending_key` is a MIDI key the note hook noted on the key row, until the next 48 Hz step sets it.
+- **State:** `editor = {open, slot, marker, view, row}` and `pending_key` (local to `lib/ui/slice_editor.lua`): closed, or open in the markers view or the rows view (`view`), read through `S.lib.ui_slice_editor.is_open()` and `state()`. `pending_key` holds the note heard on the focused key row. The next 48 Hz step applies the note if the row still has focus and discards it otherwise.
 - **Invariant:** `slice editor`: the closed editor's owner is never the modal one, the open editor's is (or lies beneath SEQ's step editor, the one owner a grid can push over it); the open editor's slot has settings (`S.lib.samples.settings`); a key is noted only while it is open.
 - **Test:** `test/unit/ui_slice_editor_test.lua`: "the slice editor invariant: open exactly while its owner is on the stack, on a slot with settings, a noted key only while open" (and "the slot emptied under the editor closes it").
 
@@ -30,7 +30,7 @@ No test runs this table: it is one of the design's modal owners (its section 5, 
 | rows | E2 | markers | the picked row kept |
 | rows | ALT+E2 | rows | another row picked |
 | rows | K2 | closed | popped, a noted key forgotten |
-| rows | a MIDI note on the key row | rows | the note noted; the next step sets the key (`S.lib.samples.set`) |
+| rows | a MIDI note on the visible, selected key row | rows | the next step sets the key if the field still has focus (`S.lib.samples.set`) |
 | rows | the slot emptied | closed | popped, a noted key forgotten |
 | rows | the grid's step editor pushed over it | rows | covered, as from markers |
 

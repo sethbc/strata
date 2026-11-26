@@ -357,6 +357,52 @@ test("a MIDI note sets the key while its row is picked, and at no other time", f
   assert_equal(settings.key, 62, "closed again: nothing")
 end)
 
+for _, overlay in ipairs({
+  {name = "STEP", open = function(S) S.lib.pages_seq.open_step_editor(1, 1, 1) end,
+    close = function(S) S.lib.pages_seq.close_step_editor(1) end},
+  {name = "the norns menu", open = function() _menu.set_mode(true) end,
+    close = function() _menu.set_mode(false) end},
+}) do
+  test("the slice key learns only in view when covered by " .. overlay.name, function()
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    show_page("BUFFER")
+    with_audio(context, 1, 2)
+    local editor = S.lib.ui_slice_editor
+    assert_true(editor.open(1))
+    pick_row(editor, "key")
+    local settings = S.lib.samples.settings(1)
+    local function play(note)
+      context.clear_engine_calls()
+      context.midi.send(1, {type = "note_on", note = note, vel = 100, ch = 1})
+      context.midi.send(1, {type = "note_off", note = note, vel = 0, ch = 1})
+      assert_equal(#context.calls_named("retrigger"), 1, "the note plays on the voice")
+    end
+    local function tick()
+      for _ = 1, 2 do context.clock.advance_until(S.lfo_clock) end
+    end
+    play(48)
+    tick()
+    assert_equal(settings.key, 48, "the visible field learns the note")
+    overlay.open(S)
+    play(77)
+    overlay.close(S)
+    tick()
+    assert_equal(settings.key, 48, "a note heard under the overlay is never learned")
+    play(68)
+    overlay.open(S)
+    tick()
+    assert_equal(settings.key, 48, "losing focus before the deferred write discards it")
+    overlay.close(S)
+    tick()
+    assert_equal(settings.key, 48, "the discarded note stays discarded")
+    play(55)
+    tick()
+    assert_equal(settings.key, 55, "learning resumes when the key field is visible again")
+  end)
+end
+
 -- Design §3.7 (the controller's ruling on 2b's review): on the key row a
 -- MIDI note sets the key even on a voice that takes slice notes, where a
 -- note outside the slices plays nothing (the note hooks' heard)
