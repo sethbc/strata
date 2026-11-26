@@ -40,6 +40,8 @@ generation 41
 peaks 0.012 0.250 0.731 ... (64 values, three decimals)
 ```
 
+A silent bin is `0.000`. Each positive bin rounds to the nearest thousandth with a minimum of `0.001`, so even a 16-bit file peaking at 9/32768 reaches Lua as nonzero for normalization. The refresh compares these same serialized values.
+
 `slot` is 1-based, like the `n` of `buf<n>.peaks`. Lua (`lib/waveforms.lua`) reads it on a `bufferState` report whose seconds changed to non-zero (forgetting the slot's old overview at the change, #401), and treats it as valid only if the header says version 1 and slot n, there are 64 values in 0-1, and `frames / rate` is within 0.01 s of the reported seconds. Each write owns its unique part until a carrier finishes or a successor revokes it. The source and the receipt use the files area's allocation tag and serial, shared with WAV writes even when a save names the same destination. Free retires the old engine's ownership before a reload can install new peaks. A delayed mover or fallback can only rename its own part. The current write caches the content it installed, then runs the actions still owed for that slot. A failed peaks write also releases the current audio actions. There are two places per slot for these actions. A playable arming has a guard that follows a stop. A load or take end uses the slot change at the time of the write. A background refresh carries both forward, so the arming can report the length and the end can finish its take when the file settles. `deleteStaleParts` covers the settings folder (`stalePartDirs`), so a `.part` a crash left goes at the next alloc once older than `stalePartAge`.
 
 ## The mover

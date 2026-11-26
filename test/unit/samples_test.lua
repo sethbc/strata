@@ -55,7 +55,7 @@ local function write_peaks(slot, seconds, largest)
   local folder = local_value("S").lib.scenes.scene_data_dir
   util.make_dir(folder)
   local parts = {}
-  for index = 1, 64 do parts[index] = string.format("%.3f", index == 10 and largest or largest / 2) end
+  for index = 1, 64 do parts[index] = index == 10 and largest or "0.000" end
   write_text(folder .. "buf" .. slot .. ".peaks", string.format("strata-peaks 1\nslot %d\nframes %d\nrate 48000\n"
     .. "generation 1\npeaks %s\n", slot, math.floor(seconds * 48000), table.concat(parts, " ")))
 end
@@ -524,7 +524,7 @@ test("one file in two slots: a key or normalize set through one acts for both", 
   local file = context.audio_dir .. "a.wav"
   settle_load(context, 1, file, 8); settle_load(context, 5, file, 8)
   buffer_voice(context, 1, 1); buffer_voice(context, 2, 5)
-  write_peaks(1, 8, 0.25); write_peaks(5, 8, 0.5)
+  write_peaks(1, 8, "0.250"); write_peaks(5, 8, "0.500")
   local_value("S").lib.waveforms.stale(1); tick(context); local_value("S").lib.waveforms.stale(5); tick(context)
   context.clear_engine_calls()
   samples().set(1, "key", 57)
@@ -582,7 +582,7 @@ test("normalize sends the gain when the slot's peaks are read, never at a bind",
   local context = load_strata(); finish_startup(context)
   local file = context.audio_dir .. "a.wav"
   settle_load(context, 1, file, 8)
-  write_peaks(1, 8, 0.25); tick(context)
+  write_peaks(1, 8, "0.250"); tick(context)
   assert_equal(#gains(context), 0, "normalize off: nothing")
   assert_equal(samples().gain(1), 1)
   samples().set(1, "normalize", true)
@@ -596,7 +596,13 @@ test("normalize sends the gain when the slot's peaks are read, never at a bind",
   tick(context)
   sent = gains(context)
   assert_equal(#sent, 1, "sent again after its peaks are read"); assert_near(sent[1][2], 4, 1e-9)
-  for _, case in ipairs({ { peak = 0.01, gain = 16 }, { peak = 1, gain = 1 }, { peak = 0, gain = 1 } }) do
+  -- The 16-bit peaks at 9 and 25 / 32768 share the first positive
+  -- bin in the engine's file. Only a file of zeros means silence.
+  for _, case in ipairs({
+    { peak = "0.000", gain = 1 }, { peak = "0.001", gain = 16 },
+    { peak = "0.062", gain = 16 }, { peak = "0.063", gain = 1 / 0.063 },
+    { peak = "0.125", gain = 8 }, { peak = "1.000", gain = 1 },
+  }) do
     context.clear_engine_calls()
     write_peaks(1, 8, case.peak); local_value("S").lib.waveforms.stale(1); tick(context)
     sent = gains(context)
@@ -608,7 +614,7 @@ test("normalize sends the gain when the slot's peaks are read, never at a bind",
   assert_equal(#sent, 1); assert_near(sent[1][2], 1, 1e-9, "normalize off: 1")
   -- while the slot records, the engine's 1 stands; its end's peaks send it
   samples().set(1, "normalize", true)
-  write_peaks(1, 8, 0.5)
+  write_peaks(1, 8, "0.500")
   context.clear_engine_calls()
   params:set("record_feedback", 50)
   record_buffer(1)
