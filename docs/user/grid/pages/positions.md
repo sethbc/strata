@@ -24,7 +24,7 @@ What the cells show, brightest first:
 
 A voice set to play slices (its `slices` row on [VOICE](../../pages/voice.md) not off) whose buffer has slices shows them on its line instead of positions, 16 at a time. A voice with slices off, or a buffer with none, keeps its positions.
 
-- **A press** plays its slice, and letting go ends it, except in one shot with a moving scan, where a slice plays to its end. A key with no slice does nothing
+- **A press** plays its slice, and letting go ends it, except in one shot with a moving scan, where a slice plays to its end. On a 16×16, each pane releases the slice its key started, even if you change banks while holding it. Pressing the same slice in both panes plays it again and holds it until both keys are up. A key with no slice does nothing
 - **The bank keys**: while the line shows slices, side 2's four bookmark keys of the voice pick the bank it shows: slices 1-16, 17-32, 33-48 or 49-64. A bank with no slices cannot be picked. Each grid keeps its own bank per voice, and a new file in the slot whose slices do not reach the bank puts it back to 1. Store, hold and whole keep their meaning. Bookmarks are then recalled from [BUFFER](../../pages/buffer.md)'s `bm` field and from steps' bookmark locks
 - **On the beat**: with quantize actions on beat or bar, a press waits for the next beat or bar (`v1 sl 5 at bar`), and a key let go before then takes it back, except in one shot with a moving scan, where a tap still plays at the beat
 - **What it shows**: a slice playing at 15, a held key at 11, a slice at 9, no slice dark; the bank keys light 15 for the bank shown, 4 for a bank that holds slices and 0 for one that holds none

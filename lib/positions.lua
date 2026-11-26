@@ -363,8 +363,8 @@ return function(S)
   -- {[pane] = still}} (a store key per voice and pane), pressed = {[voice]
   -- = {key, panes = {[pane] = still}}} (the latest stored bookmark and
   -- its presses), bank = {[voice] = the slice bank shown, nil for 1},
-  -- slices = {[voice] = {[cell] = the slice key held: {n, pane, still, token,
-  -- released}}}}. `still` is the press's own test that its key is still
+  -- slices = {[voice] = {[slice] = {cell, key, panes = {[pane] = still}, token,
+  -- played}}}}. `still` is the press's own test that its key is still
   -- held (held_still, below). `records` names each record this module
   -- made, to find it again when the port's state is gone
   local records = {}
@@ -448,51 +448,53 @@ return function(S)
 
   local function slice_note_key(port, n) return port * SLICE_ROW.port_key + n end
 
-  -- A slice key's press: its slice plays at once, or at the beat or bar
-  -- (the position key's quantized action, so a press replaces a waiting
-  -- jump or slice of the voice). A cell with no slice does nothing
+  -- The last physical holder ended. Drop a waiting retrigger in wrap or
+  -- bounce, and release any earlier play already sounding under this key.
+  -- A moving one-shot tap still plays at the beat and lasts for its pass.
+  local function end_slice_note(voice_idx, notes, n, note)
+    notes[n] = nil
+    local action = "position" .. voice_idx
+    if note.token and S.lib.quantize.waiting(action, note.token) and not plays_to_end(voice_idx) then
+      S.lib.quantize.cancel(action)
+    end
+    if note.played then S.lib.slices.note_off(voice_idx, "grid", note.key) end
+  end
+
+  -- Find the slice the press started in this pane and cell, across banks.
+  local function release_slice_key(record, voice_idx, cell, pane)
+    local notes = record.slices[voice_idx]
+    if not notes then return false end
+    for n, note in pairs(notes) do
+      if note.cell == cell and note.panes[pane] then
+        note.panes[pane] = nil
+        if next(note.panes) == nil then end_slice_note(voice_idx, notes, n, note) end
+        return true
+      end
+    end
+    return false
+  end
+
   local function press_slice_key(port, voice_idx, cell, pane, still)
     local n = first_slice(read_bank(port, voice_idx)) + cell - 1
     if n > slot_slices(voice_idx) then return end
-    local entry = {n = n, pane = pane, still = held_still(still)}
-    local note_key = slice_note_key(port, n)
-    local _, token = S.lib.quantize.schedule("position" .. voice_idx, function()
-      S.lib.slices.play(voice_idx, n, {owner = "grid", key = note_key, velocity = 1})
-      -- released while it waited, and the release did not take it back
-      if entry.released then S.lib.slices.note_off(voice_idx, "grid", note_key) end
-    end, "v" .. voice_idx .. " sl " .. n)
-    entry.token = token
-    local held = record_of(port).slices
-    held[voice_idx] = held[voice_idx] or {}
-    held[voice_idx][cell] = entry
-  end
-
-  -- A slice key ends (its release, its grid's page change or removal): a
-  -- play that still waits is taken back, but in one shot with a moving
-  -- scan, where a tap plays at the beat; a play that ran gets its note off
-  local function end_slice_key(port, voice_idx, entry)
+    local record = record_of(port)
+    record.slices[voice_idx] = record.slices[voice_idx] or {}
+    local notes = record.slices[voice_idx]
+    local note = notes[n]
     local action = "position" .. voice_idx
-    if entry.token and S.lib.quantize.waiting(action, entry.token) then
-      if plays_to_end(voice_idx) then
-        entry.released = true
-      else
-        S.lib.quantize.cancel(action)
-      end
-      return
+    -- Only a sounding or pending note can be retriggered. Once a steal or
+    -- a timed end freed its slot, a new press starts with its own holders.
+    if not note or not (S.lib.notes.find(voice_idx, "grid", note.key)
+        or (note.token and S.lib.quantize.waiting(action, note.token))) then
+      note = {cell = cell, key = slice_note_key(port, n), panes = {}}
+      notes[n] = note
     end
-    S.lib.slices.note_off(voice_idx, "grid", slice_note_key(port, entry.n))
-  end
-
-  -- The release of a slice key the port holds for a voice's cell: true
-  -- when there was one. Each line is one voice's, so a release names the
-  -- voice it was pressed for; two lines can hold the same cell
-  local function release_slice_key(port, record, voice_idx, cell)
-    local held = record.slices[voice_idx]
-    local entry = held and held[cell]
-    if not entry then return false end
-    held[cell] = nil
-    end_slice_key(port, voice_idx, entry)
-    return true
+    note.panes[pane] = held_still(still)
+    local _, token = S.lib.quantize.schedule(action, function()
+      if S.lib.slices.play(voice_idx, n, {owner = "grid", key = note.key, velocity = 1}) then note.played = true end
+      if note.played and next(note.panes) == nil then S.lib.slices.note_off(voice_idx, "grid", note.key) end
+    end, "v" .. voice_idx .. " sl " .. n)
+    note.token = token
   end
 
   -- End what a port's record holds that is stale: everything when its grid
@@ -529,12 +531,9 @@ return function(S)
     local held = record.held
     if held and stale(held.still) then record.held = nil end
     -- a slice key whose release can no longer come ends now
-    for voice_idx, held in pairs(record.slices) do
-      for cell, entry in pairs(held) do
-        if stale(entry.still) then
-          held[cell] = nil
-          end_slice_key(port, voice_idx, entry)
-        end
+    for voice_idx, notes in pairs(record.slices) do
+      for n, note in pairs(notes) do
+        if stale_panes(note.panes) then end_slice_note(voice_idx, notes, n, note) end
       end
     end
     if gone then records[port] = nil end
@@ -594,7 +593,7 @@ return function(S)
     if records[port] then end_stale_port(port, records[port]) end
     if z == 0 then
       local record = records[port]
-      if record and release_slice_key(port, record, voice_idx, cell) then return end
+      if record and release_slice_key(record, voice_idx, cell, pane or 1) then return end
       -- Both panes can hold the same cell. Only the current anchor's key releases it.
       local held = record and record.held
       if held and held.pane == (pane or 1) and held.voice == voice_idx and held.cells == cells and held.cell == cell then
@@ -742,7 +741,7 @@ return function(S)
     for _, n in ipairs(S.lib.slices.playing(voice_idx)) do playing[n] = true end
     for record_port, record in pairs(records) do
       if port == nil or record_port == port then
-        for _, entry in pairs(record.slices[voice_idx] or {}) do held[entry.n] = true end
+        for n in pairs(record.slices[voice_idx] or {}) do held[n] = true end
       end
     end
     return {first = first_slice(M.bank(port, voice_idx)), count = slot_slices(voice_idx), playing = playing, held = held}

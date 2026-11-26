@@ -981,4 +981,164 @@ test("a freeze wait with no pane on voices repaints no grid", function()
   S.lib.quantize.cancel("freeze2")
 end)
 
+-- #1094: real grid events, slice regions and allocator records.
+local function slice_panes()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  assert_true(S.lib.samples.set(1, "frames", 16 * 48000))
+  assert_true(S.lib.samples.set(1, "rate", 48000))
+  assert_true(S.lib.samples.set(1, "mode", 2))
+  assert_true(S.lib.samples.set(1, "count", 32))
+  assert_true(S.lib.slices.make(1))
+  params:set("v1_slices", 3)
+  params:set("v1_note_cap", 3)
+  context.clock.run_for(0.1) -- let the buffer bind settle before playing
+  local top = grid_pane(context, "256 top")
+  local bottom = grid_pane(context, "256 bottom")
+  top.show(S.constants.GRID_PAGES.positions)
+  bottom.show(S.constants.GRID_PAGES.positions)
+  return context, S, top, bottom
+end
+
+local function bank_two(S, bottom)
+  bottom.show(S.constants.GRID_PAGES.positions, 2)
+  bottom.tap(2, 1)
+  bottom.show(S.constants.GRID_PAGES.positions, 1)
+end
+
+local function playing(S)
+  return table.concat(S.lib.slices.playing(1), ",")
+end
+
+for _, bottom_first in ipairs({false, true}) do
+  local order = bottom_first and "bottom first" or "top first"
+  for _, bottom_cell in ipairs({4, 5}) do
+    test("banked slices at bottom cell " .. bottom_cell .. " release " .. order, function()
+      local _, S, top, bottom = slice_panes()
+      top.press(4, 1, 1)
+      bank_two(S, bottom)
+      bottom.press(bottom_cell, 1, 1)
+      local other = bottom_cell == 4 and "20" or "21"
+      assert_equal(playing(S), "4," .. other)
+      if bottom_first then
+        bottom.press(bottom_cell, 1, 0)
+        assert_equal(playing(S), "4")
+        top.press(4, 1, 0)
+      else
+        top.press(4, 1, 0)
+        assert_equal(playing(S), other)
+        bottom.press(bottom_cell, 1, 0)
+      end
+      assert_equal(S.lib.notes.held(1), 0)
+    end)
+  end
+
+  test("two panes retrigger one slice until both release, " .. order, function()
+    local context, S, top, bottom = slice_panes()
+    top.press(4, 1, 1)
+    context.clear_engine_calls()
+    bottom.press(4, 1, 1)
+    assert_equal(#context.calls_named("retrigger"), 1, "the second press is audible")
+    assert_equal(S.lib.notes.held(1), 1)
+    local first, last = top, bottom
+    if bottom_first then first, last = bottom, top end
+    first.press(4, 1, 0)
+    assert_equal(playing(S), "4", "the other pane still holds the slice")
+    last.press(4, 1, 0)
+    assert_equal(S.lib.notes.held(1), 0)
+  end)
+end
+
+test("a quantized slice retrigger follows the last physical holder", function()
+  local context, S, top, bottom = slice_panes()
+  params:set("quantize_actions", 2)
+  top.press(4, 1, 1)
+  bottom.press(4, 1, 1)
+  bottom.press(4, 1, 0)
+  assert_true(S.lib.quantize.waiting("position1"), "the top press still wants the beat")
+  context.clock.run_for(clock.get_beat_sec())
+  assert_equal(playing(S), "4")
+  bottom.press(4, 1, 1) -- sounding with another retrigger pending
+  top.press(4, 1, 0)
+  bottom.press(4, 1, 0)
+  assert_true(not S.lib.quantize.waiting("position1"), "the last release cancels the retrigger")
+  assert_equal(S.lib.notes.held(1), 0, "and ends the sounding slice")
+end)
+
+test("two released one-shot keys play their shared pending slice once to its end", function()
+  local context, S, top, bottom = slice_panes()
+  params:set("v1_scan_mode", 3)
+  params:set("v1_buf_scan", 1)
+  params:set("quantize_actions", 2)
+  context.clear_engine_calls()
+  top.press(4, 1, 1)
+  bottom.press(4, 1, 1)
+  bottom.press(4, 1, 0)
+  top.press(4, 1, 0)
+  context.clock.run_for(clock.get_beat_sec())
+  assert_equal(playing(S), "4")
+  assert_equal(#context.calls_named("retrigger"), 1)
+  context.clock.run_for(0.6)
+  assert_equal(S.lib.notes.held(1), 0)
+end)
+
+test("two grids hold separate slice notes through pane changes, unplug and cleanup", function()
+  local context, S, top, bottom = slice_panes()
+  local other = grid_pane(context, "128h", {port = 2})
+  other.show(S.constants.GRID_PAGES.positions)
+  top.press(4, 1, 1)
+  bottom.press(4, 1, 1)
+  other.press(4, 1, 1)
+  assert_equal(S.lib.notes.held(1), 2)
+  bottom.show(S.constants.GRID_PAGES.patterns)
+  bottom.press(1, 2, 1)
+  context.clock.run_for(0.4)
+  assert_equal(shown_step_editor(), "2 1 1")
+  assert_equal(S.lib.notes.held(1), 2, "changing the lower pane leaves the top key and other grid")
+  context.grid.unplug(1)
+  context.clock.run_for(0.1)
+  assert_equal(S.lib.notes.held(1), 1)
+  assert_true(S.lib.notes.find(1, "grid", 204) ~= nil, "the other device still owns its slice")
+  cleanup()
+  assert_equal(S.lib.notes.held(1), 0)
+end)
+
+for _, loss in ipairs({"steal", "source change"}) do
+  test("a new slice press after a " .. loss .. " releases independently of the old holder", function()
+    local context, S, top, bottom = slice_panes()
+    params:set("v1_note_cap", 2)
+    top.press(3, 1, 1) -- own note
+    top.press(4, 1, 1) -- extra slot
+    if loss == "steal" then
+      context.clock.run_for(0.1) -- the extra slot is old enough to steal
+      top.press(5, 1, 1)
+    else
+      params:set("v1_source", 1)
+      params:set("v1_source", 2)
+    end
+    assert_equal(S.lib.notes.find(1, "grid", 104), nil, "the original extra note ended")
+    bottom.press(4, 1, 1)
+    assert_true(S.lib.notes.find(1, "grid", 104) ~= nil, "the lower pane plays a fresh note")
+    bottom.press(4, 1, 0)
+    assert_equal(S.lib.notes.find(1, "grid", 104), nil, "the upper key cannot hold the fresh note")
+    top.press(4, 1, 0)
+    top.press(5, 1, 0)
+    top.press(3, 1, 0)
+    assert_equal(S.lib.notes.held(1), 0)
+  end)
+end
+
+test("a retrigger whose slice disappeared still releases the earlier sounding note", function()
+  local context, S, top, bottom = slice_panes()
+  top.press(4, 1, 1)
+  params:set("quantize_actions", 2)
+  bottom.press(4, 1, 1)
+  assert_true(S.lib.slices.set_markers(1, {0}, true))
+  context.clock.run_for(clock.get_beat_sec())
+  assert_true(S.lib.notes.find(1, "grid", 104) ~= nil, "the earlier note is still held")
+  top.press(4, 1, 0)
+  bottom.press(4, 1, 0)
+  assert_equal(S.lib.notes.held(1), 0)
+end)
+
 end
