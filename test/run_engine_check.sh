@@ -349,16 +349,18 @@ fi
 
 # keep the interesting lines: class-library errors, the check results and
 # each area's time
-grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch )|FAILURE|alloc failed|Too many grains|Strata invariant broken|Parse error|syntax error|not understood" "$output" || true
+fatal_output='^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error'
+grep -E "^(ok |FAIL|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch )|$fatal_output|Parse error|syntax error|not understood" "$output" || true
 
 # scsynth prints "alloc failed" when a UGen cannot get real-time memory (it
 # then outputs zeros) and "Too many grains!" when a GrainIn or GrainBuf would
 # run more than its maxGrains (it drops the grain), and the engine "Strata
 # invariant broken" when its synth bookkeeping finds a state it should never
-# reach; in any part of the check each is a failure. So is a scsynth still
+# reach. A collector count error fails the check even when sclang survives
+# and posts a pass marker (#1082). So does a scsynth still
 # running after its stop (exit 3: a full run starts no shard after it)
 if grep -q "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] && [ -z "$server_left" ] \
-  && ! grep -qE "^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken" "$output"; then
+  && ! grep -qE "$fatal_output" "$output"; then
   exit 0
 fi
 echo "--- full sclang output ---"

@@ -3666,6 +3666,20 @@ end)
 -- failure, the worst class, whatever else it shows and even at status 0
 local COLLECTOR_LINE = "gr" .. "ey count error"
 
+test("the engine check runner surfaces a collector count error when sclang survives (#1082)", function()
+  for _, case in ipairs({
+    { name = "clean", line = "compiled", status = 0 },
+    { name = "error", line = "ERROR: check failed", status = 1 },
+    { name = "collector", line = "GC: " .. COLLECTOR_LINE, status = 1 },
+  }) do
+    local output = run_fake_runner(case.name, { environment = "STRATA_ENGINE_CHECK_ONE_SCLANG=1", body = function()
+      return { "echo " .. h.shell_quote(case.line) .. " >&2", 'echo "ENGINE CHECK PASSED"' }
+    end })
+    assert_true(output:find("exit=" .. case.status .. "\n", 1, true) ~= nil, case.name .. " exit status: " .. output)
+    assert_true(output:find(case.line, 1, true) ~= nil, case.name .. " diagnostic: " .. output)
+  end
+end)
+
 test("the 3.13 script counts a failed log with collector errors as a collector failure (#687)", function()
   local shell_quote, root = h.shell_quote, data_root .. "sc313-collector-failed"
   write_shard_fixtures(root, { { "1", 1, COLLECTOR_LINE .. "\n" .. COLLECTOR_LINE .. "\nFAIL waveform: a 300 s load\n" } })
