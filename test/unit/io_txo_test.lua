@@ -546,6 +546,60 @@ local function envelope_trace(context, output)
   return table.concat(values, ",")
 end
 
+-- #1098: read a saved PSET through norns' entry point. Trace the mode at
+-- crow after the real ii queue drains, including a queue lost after the read.
+for _, scenario in ipairs({"ordinary read", "silent read", "full queue", "unplug", "leave lead"}) do
+  test("a pitch PSET turns off the active TXo envelope: " .. scenario, function()
+    local context, S = leading_real()
+    params:set("v1_out_txo", 3)
+    local path = context.data_dir .. "pitch.pset"
+    params:write(path)
+    params:set("v1_out_txo_cv", ENVELOPE)
+    context.clock.run_for(0.2)
+    assert_equal(envelope_trace(context, 3), "1")
+
+    local ii = S.lib.io_ii
+    if scenario == "full queue" then
+      for k = 1, 48 do ii.send("filler", "full", k) end
+      assert_equal(ii.queued(), 48)
+    end
+    params:read(path, scenario ~= "ordinary read")
+    assert_equal(params:get("v1_out_txo_cv"), 1)
+    if scenario == "unplug" then
+      context.crow.unplug(); context.crow.plug()
+    elseif scenario == "leave lead" then
+      S.lib.io_rig.set("ii_bus", "off"); S.lib.io_rig.set("ii_bus", "strata")
+    end
+    context.clock.run_for(1)
+    assert_equal(envelope_trace(context, 3), "1,0", "pitch reached crow once")
+    assert_equal(ii.queued(), 0, "the retry settled")
+  end)
+end
+
+test("a silent PSET moves one envelope voice off a shared output and sets up only the new one", function()
+  local context = leading_real()
+  params:set("v1_out_txo", 4); params:set("v1_out_txo_cv", ENVELOPE)
+  params:set("v2_out_txo", 3); params:set("v2_out_txo_cv", ENVELOPE)
+  params:set("txo_attack", 37); params:set("txo_decay", 250)
+  local path = context.data_dir .. "shared.pset"
+  params:write(path)
+  params:set("v1_out_txo", 3)
+  context.clock.run_for(0.4)
+  context.crow.clear()
+
+  params:read(path, true)
+  context.clock.run_for(0.4)
+  assert_equal(envelope_trace(context, 3), "", "the voice remaining on 3 keeps its envelope")
+  assert_equal(envelope_trace(context, 4), "1", "the new output gets one activation")
+  assert_equal(last_line(context, "ii.txo.env_att(4, "), "ii.txo.env_att(4, 37)")
+  assert_equal(last_line(context, "ii.txo.env_dec(4, "), "ii.txo.env_dec(4, 250)")
+
+  context.crow.clear()
+  params:read(path, true)
+  context.clock.run_for(0.4)
+  assert_equal(last_line(context, "ii.txo.env_"), nil, "an unchanged read sends no envelope setup or times")
+end)
+
 for _, interruption in ipairs({"none", "full", "unplug", "leave", "leave budget"}) do
   test("output 3 leaves envelope mode after " .. interruption, function()
     local context, S = leading_real()

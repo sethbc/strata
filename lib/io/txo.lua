@@ -330,6 +330,12 @@ return function(S)
   -- Params (PSET-only, in the ii group the ii module adds)
   ---------------------------------------------------------------------------
 
+  -- A silent read skipped the route actions. Settle all outputs together:
+  -- one voice can leave an envelope that another recalled voice still wants.
+  S.register_pset_hook({name = "io_txo", read = function(_, _, _, silent)
+    if silent then M.sync() end
+  end})
+
   function M.add_params()
     for voice = 1, NUM_VOICES do
       local function changed()
