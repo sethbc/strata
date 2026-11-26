@@ -4456,6 +4456,77 @@ local function lines_holding(context, text)
   return found
 end
 
+for _, silent in ipairs({false, true}) do
+  local read_kind = silent and "a silent" or "an ordinary"
+  test(read_kind .. " PSET read starts the scene clock once over its saved slots", function()
+    local context, S = pset_session()
+    capture_scene(2)
+    capture_scene(3)
+    params:set("scene_transition_time", 0)
+    params:set("scene_duration", 4)
+    params:set("scene_sequencer_enabled", 1)
+    params:write(1)
+    params:set("scene_sequencer_enabled", 0)
+    capture_scene(1)  -- only the live scenes can start on slot 1
+
+    local recalls = S.lib.scenes.takeovers()
+    params:read(1, silent)
+    assert_equal(S.scene_sequencer_enabled, true, "clock started")
+    assert_equal(S.lib.scenes.takeovers(), recalls, "first recall waits until the read returns")
+    context.clock.run_for(1)
+    assert_equal(S.lib.scenes.takeovers(), recalls + 1)
+    assert_equal(S.current_scene, 2, "first playable slot of the loaded scenes")
+    local id = S.scene_sequencer_clock
+    local due = context.clock.events[id].sleep_time
+    local draws = 0
+    local next_slot = S.lib.scenes.next_slot
+    S.lib.scenes.next_slot = function(...)
+      draws = draws + 1
+      return next_slot(...)
+    end
+
+    for _ = 1, 2 do
+      params:read(1, silent)
+      assert_equal(S.scene_sequencer_clock, id, "same clock")
+      assert_equal(S.scene_sequencer_position, 2, "same position")
+      assert_equal(S.scene_sequencer_next, 3, "same next scene")
+      assert_equal(draws, 0, "no new draw")
+      assert_equal(context.clock.events[id].sleep_time, due, "same wake time")
+      assert_equal(S.lib.scenes.takeovers(), recalls + 1, "no extra recall")
+    end
+    context.clock.advance_until(id)
+    assert_equal(S.current_scene, 3, "the next scheduled recall still runs")
+    assert_equal(S.lib.scenes.takeovers(), recalls + 2)
+  end)
+
+  test(read_kind .. " PSET read stops a scene clock whose wake is posted", function()
+    local context, S = pset_session()
+    capture_scene(2)
+    params:write(1)
+    params:set("scene_sequencer_enabled", 1)
+    local recalls = S.lib.scenes.takeovers()
+    context.clock.advance_until(S.scene_sequencer_clock, function() params:read(1, silent) end)
+    assert_equal(S.scene_sequencer_enabled, false, "clock stopped")
+    assert_equal(S.scene_sequencer_clock, nil)
+    assert_equal(S.lib.scenes.takeovers(), recalls, "posted wake recalled nothing")
+    params:read(1, silent)
+    context.clock.run_for(1)
+    assert_equal(S.scene_sequencer_clock, nil, "still stopped")
+    assert_equal(S.lib.scenes.takeovers(), recalls)
+  end)
+end
+
+test("a silent read of a PSET missing the scene sequencer switch stops the clock", function()
+  local _, S = pset_session()
+  params:set_save("scene_sequencer_enabled", false)
+  params:write(1)
+  params:set_save("scene_sequencer_enabled", true)
+  params:set("scene_sequencer_enabled", 1)
+  params:read(1, true)
+  assert_equal(params:get("scene_sequencer_enabled"), 0, "the missing switch defaults to off")
+  assert_equal(S.scene_sequencer_clock, nil, "the clock follows the default")
+end)
+
 test("a PSET save writes its sixteen scenes beside it, an empty set too", function()
   local context, S = pset_session()
   local pset, base, side = pset_files(context, 1)
