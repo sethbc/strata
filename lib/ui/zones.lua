@@ -136,8 +136,8 @@ return function(S)
   -- The lowest is set before the highest, so neither param's action moves
   -- the other (lib/mpe.lua keeps low <= high). 3.9 (#900): nil is the MIDI
   -- module telling the owner it cleared the tap (a reset, cleanup): learn
-  -- ends. While another owner covers the editor (SEQ's step editor) it
-  -- takes no note, which plays as with no tap; uncovered, it takes them again
+  -- ends. Notes play normally while the norns menu or another modal owner
+  -- covers the editor. A pending learn resumes when the editor is visible.
   local owner
   function M.note(note)
     if note == nil then
@@ -147,7 +147,7 @@ return function(S)
     if not learning or not whole_in(note, ZONES_EDITOR.note_range[1], ZONES_EDITOR.note_range[2]) then
       return false
     end
-    if S.lib.ui_modal.top() ~= owner then return false end
+    if norns.menu.status() or S.lib.ui_modal.top() ~= owner then return false end
     local voice = learning.voice
     if learning.which == "low" then
       learning.which, learning.first = "high", note

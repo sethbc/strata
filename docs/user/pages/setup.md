@@ -55,7 +55,7 @@ K2:back E3:value
 - **E2** - Move to the next or previous row
 - **E3** - Change the value under the cursor
 - **K3** - On a voice row, move to the next column (zone, lowest, highest)
-- **ALT+K3** - On a voice row, learn its range: play two notes within 10 seconds, the lowest and the highest (in either order). The header says `learn v3 low`, then `learn v3 high`, and the column waiting reads `learn`. The two notes only set the range: neither plays. While SEQ's step editor is open over the editor (from a grid) a note is not learned and plays as usual; a learn waiting ends when the MIDI input resets (a change of port, channel mode or note off mode, or the device unplugged)
+- **ALT+K3** - On a voice row, learn its range: play two notes within 10 seconds, the lowest and the highest (in either order). The header says `learn v3 low`, then `learn v3 high`, and the column waiting reads `learn`. The two notes only set the range: neither plays. Notes play as usual while the norns menu or SEQ's step editor (opened from a grid) covers ZONES. Return within the same 10 seconds to finish learning. A MIDI input reset ends the learn (a change of port, channel mode or note off mode, or the device unplugged)
 - **K2** - Back to SETUP (a learn still waiting ends)
 
 ## Scale and tuning
