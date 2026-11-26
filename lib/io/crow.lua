@@ -579,6 +579,21 @@ return function(S)
     end
   end
 
+  local function change_source(n, key)
+    local previous = state.applied_source[n]
+    state.applied_source[n] = key
+    apply_output(n)
+    routes_changed(n, previous)
+  end
+
+  -- io_keyed has resolved the saved keys. A silent read skipped the actions.
+  S.register_pset_hook({name = "io_crow", read = function()
+    for n = 1, SPEC.outputs do
+      local key = S.lib.io_keyed.key(out_id(n, "source"))
+      if key ~= state.applied_source[n] then change_source(n, key) end
+    end
+  end})
+
   function M.add_params()
     build_sources()
     params:add_group("strata_crow", "crow", SPEC.param_count)
@@ -601,10 +616,7 @@ return function(S)
       local name = "out " .. n .. " "
       -- kept by key, so a source registered by a later release never moves a saved choice
       S.lib.io_keyed.add(out_id(n, "source"), name .. "source", state.source_keys, state.source_labels, function(key)
-        local previous = state.applied_source[n]
-        state.applied_source[n] = key
-        apply_output(n)
-        routes_changed(n, previous)
+        change_source(n, key)
       end)
       params:add_option(out_id(n, "range"), name .. "range", SPEC.output_ranges, 1)
       params:add_option(out_id(n, "div"), name .. "div", SPEC.divisions, SPEC.division_default)

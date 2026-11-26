@@ -34,6 +34,8 @@ Each output has a **source**, a **range** (`0..5`, `0..10` or `-5..5` V) and a *
 
 A PSET keeps each output's source by its name, so a later release that adds modulation sources still loads it on the same source; a source a PSET names that this Strata does not have leaves the output off until one that has it loads the PSET.
 
+Loading a PSET that turns off a sounding gate or assigns it to a silent voice lowers the jack to 0 V at recall, even on a silent PSET read.
+
 A voice's pitch and gate come from its steps and the notes you play on it, one note at a time: when the newest note ends and others still sound, the pitch goes back to the newest of them. A step's gate ends just before the next step, so consecutive steps retrigger; at very fast ratchets the low can fall in the same tick as the next high.
 
 ## norns' own crow clock
