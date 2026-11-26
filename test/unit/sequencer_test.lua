@@ -1442,6 +1442,90 @@ local function late_resume(voice_idx, seconds)
   end
 end
 
+-- #1100: two saved scenes, with a two-bar chain period. Make real PSETs so
+-- the read runs the param actions (unless silent), migration and side files.
+local function chain_psets(context, S)
+  local on, off = context.data_dir .. "strata-01.pset", context.data_dir .. "strata-02.pset"
+  for slot = 1, 2 do
+    S.patterns[1][1] = slot
+    capture_scene(slot)
+  end
+  params:set("seq_chain_bars", 2)
+  params:set("seq_chain_next", 50)
+  params:write(off)
+  params:set("seq_chain", 1)
+  params:write(on)
+  return on, off
+end
+
+for _, silent in ipairs({false, true}) do
+  local kind = silent and "silent" or "ordinary"
+  test("the " .. kind .. " PSET read enables the chain on the next bar and keeps its place on reread (#1100)", function()
+    local context, S = setup()
+    local on = chain_psets(context, S)
+    params:set("seq_chain", 0)
+    local draws, next_slot = 0, S.lib.scenes.next_slot
+    S.lib.scenes.next_slot = function(current, slots, chances)
+      return next_slot(current, slots, chances, function() draws = draws + 1; return 0.25 end)
+    end
+    pattern_clock_start()
+    context.clock.run_for(0.50)
+    params:read(on, silent)
+    context.clock.run_for(1.49)
+    assert_equal(S.lib.sequencer.chain_place(), nil, "no scene before the bar")
+    context.clock.run_for(0.02)
+    local slot, bars = S.lib.sequencer.chain_place()
+    assert_equal(slot, 1, "the first bar linked the first scene")
+    assert_equal(S.patterns[1][1], 1, "the first scene's steps loaded")
+    assert_equal(bars, 2, "the next link is two bars away")
+    params:read(on, silent)
+    params:read(on, silent)
+    assert_equal(S.lib.sequencer.chain_place(), 1, "rereading kept the linked scene")
+    context.clock.run_for(2)
+    assert_equal(S.lib.sequencer.chain_place(), 1, "the middle bar did not link")
+    assert_equal(draws, 0, "the first link and the reads needed no draw")
+    context.clock.run_for(2)
+    assert_equal(S.lib.sequencer.chain_place(), 2, "the scheduled link continued from scene 1")
+    assert_equal(draws, 1, "one draw at the scheduled link")
+    pattern_clock_stop()
+  end)
+
+  test("the " .. kind .. " PSET read disables a playing chain through a late wake (#1100)", function()
+    local context, S = setup()
+    local _, off = chain_psets(context, S)
+    pattern_clock_start()
+    assert_equal(S.lib.sequencer.chain_place(), 1, "the first scene plays")
+    context.clock.run_for(0.5)
+    params:read(off, silent)
+    local slot, bars = S.lib.sequencer.chain_place()
+    assert_equal(bars, nil, "the link deadline was removed")
+    assert_equal(slot, nil, "the chain has no place")
+    late_resume(1, 8.0)(context, S)
+    assert_equal(S.lib.sequencer.chain_place(), nil, "the late wake linked nothing")
+    assert_equal(S.patterns[1][1], 1, "the linked pattern kept playing")
+    pattern_clock_stop()
+  end)
+end
+
+test("a silent chain read while stopped takes effect at start, including a missing line (#1100)", function()
+  local context, S = setup()
+  local on, off = chain_psets(context, S)
+  params:set("seq_chain", 0)
+  params:read(on, true)
+  assert_equal(select(2, S.lib.sequencer.chain_place()), nil, "no deadline while stopped")
+  pattern_clock_start()
+  assert_equal(S.lib.sequencer.chain_place(), 1, "start uses the loaded switch")
+  pattern_clock_stop()
+  local old, count = h.file_text(off):gsub('"seq_chain": [^\n]*\n', '')
+  assert_equal(count, 1, "remove the chain line of the older preset")
+  h.write_text(off, old)
+  params:read(off, true)
+  pattern_clock_start()
+  context.clock.run_for(2.1)
+  assert_equal(select(2, S.lib.sequencer.chain_place()), nil, "the missing switch defaults to off")
+  pattern_clock_stop()
+end)
+
 test("a late wake past three chain periods links once, to scene 4 (probe, #1051)", function()
   local linked, slot = chain_run({1}, late_resume(1, 6.0))
   assert_equal(linked, "4", "one link, to the scene three periods on: scenes 2 and 3 never loaded")
