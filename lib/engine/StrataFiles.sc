@@ -365,7 +365,7 @@
     // those yields: false stops the check there and returns false, so a
     // load that something superseded reads no further (#375).
     // peaks (a FloatArray of waveformPoints, or nil): filled with the
-    // largest absolute sample of each bin across the channels, clipped to 1.
+    // largest absolute sample of each bin across the played channels, clipped to 1.
     // The reads are bin-aligned: at most loadCheckFrames, ending at the next
     // bin boundary, so no chunk spans two bins. A bin's peak is Signal's
     // peak, a C primitive: no array and no sclang function per sample
@@ -384,8 +384,9 @@
             areaState[\files][\decodeChunks] = (areaState[\files][\decodeChunks] ? 0) + 1;
             decoded = chunk.size div: channels;
             if (decoded > 0) {
+                chunk = this.playedLoadChunk(chunk, channels, decoded);
                 peaks[bin] = peaks[bin].max(chunk.peak.min(1.0));
-                if (snapshot.notNil and: { this.writeLoadChunk(snapshot, chunk, channels, decoded) == false }) {
+                if (snapshot.notNil and: { snapshot.writeData(chunk) == false }) {
                     Error("cannot write load snapshot").throw;
                 };
             };
@@ -405,16 +406,16 @@
         ^true
     }
 
-    // Snapshot the exact two channels the slot plays. Mono is read twice
-    // by the server. The input peak scan still sees every source channel.
-    writeLoadChunk { arg snapshot, chunk, channels, frames;
-        var keys, stereo, last = (frames - 1) * channels;
-        if (frames == 0 or: { channels <= 2 }) { ^snapshot.writeData(chunk) };
-        keys = this.interleaveKeys(frames);
-        stereo = FloatArray.newClear(frames * 2);
-        stereo.putEach(keys[0], chunk.at((0, channels .. last)));
-        stereo.putEach(keys[1], chunk.at((1, channels + 1 .. last + 1)));
-        ^snapshot.writeData(stereo)
+    // The two channels played from a multichannel file, interleaved for the
+    // snapshot and measured with Signal.peak on the very same samples.
+    playedLoadChunk { arg chunk, channels, frames;
+        var stereo, last;
+        if ((channels <= 2) or: { frames == 0 }) { ^chunk };
+        stereo = Signal.newClear(frames * 2);
+        last = (frames - 1) * channels;
+        stereo.putEach((0, 2 .. stereo.size - 2), chunk.at((0, channels .. last)));
+        stereo.putEach((1, 3 .. stereo.size - 1), chunk.at((1, channels + 1 .. last + 1)));
+        ^stereo
     }
 
     // The first frame after a load's bin (integers, so every frame is in

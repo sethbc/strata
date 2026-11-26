@@ -282,11 +282,11 @@ var checkLoadStagingFailure = {
 // Integer series at zero and one frame: never select a nonexistent
 // channel or lose the lone frame at a waveform bin boundary.
 var checkPackedLoadEdges = {
-    var samples, sink = (writeData: { arg self, data; samples = data });
-    engine.writeLoadChunk(sink, Signal.newClear(0), 3, 0);
+    var samples = engine.playedLoadChunk(Signal.newClear(0), 3, 0);
     check.(samples.notNil and: { samples.isEmpty }, "buffers: packing zero three-channel frames gives an empty stage chunk");
-    engine.writeLoadChunk(sink, Signal[0.25, -0.5, 0.75], 3, 1);
-    check.(samples == FloatArray[0.25, -0.5], "buffers: packing one three-channel frame keeps exactly its first stereo pair");
+    samples = engine.playedLoadChunk(Signal[0.25, -0.5, 0.75], 3, 1);
+    check.((samples.size == 2) and: { samples[0] == 0.25 } and: { samples[1] == -0.5 },
+        "buffers: packing one three-channel frame keeps exactly its first stereo pair");
 };
 // Without a language yield, all eight read pairs still own their private
 // input, even if the server has already completed some reads.
