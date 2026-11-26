@@ -4,7 +4,7 @@
 // writes to one path, a full 16 s take, a write that fails), stale .part
 // and temporary float files, which directories deleteStaleParts cleans, and
 // a 60 s save on a high engine of its own (commands still get in meanwhile).
-// Every save that ends is reported once on the bufferSaveResult poll (#127).
+// Every completed save has one initial bufferSaveResult poll (#127) and a bounded replay (#1091).
 { arg h;
 var engine = h.engine, server = h.server, context = h.context;
 var check = { arg condition, message; h.check(condition, message) };
@@ -1105,5 +1105,81 @@ checkLongSave.value;
     run.("reload", 1, true);
     h.freeEngine(delayed);
     "PATH".setenv(original);
+}.value;
+// #1091: the existing float wakes Lua; the session inode confirms what ended.
+{
+    var e = h.startEngine((settingsDir: scratchRoot +/+ "save-result-settings"));
+    var token = e.areaState[\files][\wavTag].copyRange(0, 23);
+    var root = e.saveReceiptRoot, alias = scratchRoot +/+ "shared-receipt-alias";
+    var path = root +/+ ("strata-save-" ++ token), header = "strata-save-v1 " ++ token;
+    var base = header.size + 5, reader, held, n, dst = scratchRoot +/+ "receipt-audio.wav";
+    var nextRequest = 0;
+    var save = { arg name, len;
+        nextRequest = nextRequest + 1;
+        h.commandTo(e, \saveBufferRequest, 0, name, 0, len, nextRequest, token)
+    };
+    var cell = { arg number;
+        // sclang buffers input; force a new read like Lua's unbuffered handle.
+        reader.seek(65536); reader.getInt8;
+        reader.seek(base + (((number - 1) % 4) * 8));
+        [reader.getInt32, reader.getInt32]
+    };
+    var ask = { arg slot, number; h.commandTo(e, \requestSaveResult, slot, number) };
+    ("ln -s " ++ root.shellQuote ++ " " ++ alias.shellQuote).systemCmd;
+    check.(e.saveReceiptRoot(alias) == root and: { e.wavPrivatePath(alias +/+ path.basename) },
+        "files: the shared directory's symlink resolves to the same protected receipt root");
+    File.delete(alias);
+    File.use(path, "wb", { arg f; f.write("unrelated") });
+    h.commandTo(e, \bindSaveResults, token);
+    check.(File.readAllString(path) == "unrelated" and: { e.areaState[\files][\receipt].isNil },
+        "files: a name with no session header is untouched");
+    File.use(path, "wb", { arg f; f.write(header ++ "\n"); f.write(Int8Array.newClear(4 + (8 * 4 * 8))) });
+    reader = File(path, "rb"); h.commandTo(e, \bindSaveResults, token);
+    held = e.areaState[\files][\receipt];
+    reader.seek(base - 4);
+    check.(held.notNil and: { reader.getInt32 == 1 }, "files: current engine binds fixed-size session inode");
+    File.delete(path);
+    h.commandTo(e, \loadBuffer, 0, stereoPath, 0); waitFor.({ e.bufferFrames[0] > 0 });
+    n = saveResults.value.size;
+    save.(dst, 1);
+    ask.(0, 1); ask.(1, 1); ask.(0, 99);
+    check.(waitFor.({ saveReportsAfter.(n) == [[0, 1, false]] }) and: { cell.(1) == [2, 2] },
+        "files: pending/unknown queries publish nothing; actual success reaches the unlinked inode (%, %)".format(saveReportsAfter.(n), cell.(1)));
+    n = saveResults.value.size; ask.(0, 1);
+    check.(waitFor.({ saveReportsAfter.(n) == [[0, 1, false]] }), "files: a lost success can be requested by full number");
+    n = saveResults.value.size;
+    4.do({ save.(dst, 0) });
+    check.(waitFor.({ saveReportsAfter.(n).size == 4 }) and: { cell.(5) == [11, 11] }
+        and: { e.areaState[\files][\saveResults][0].size == 4 },
+        "files: four terminal failures rotate the bounded ring with full numbers (%, %)".format(saveReportsAfter.(n), cell.(5)));
+    n = saveResults.value.size; ask.(0, 1); ask.(1, 5); ask.(0, 5);
+    check.(waitFor.({ saveReportsAfter.(n) == [[0, 5, true]] }),
+        "files: only the retained failure replays, never the overwritten success or wrong slot");
+    n = saveResults.value.size;
+    save.(dst, 1);  // 6 waits for the writer
+    4.do({ save.(dst ++ "-empty", 0) });
+    check.(waitFor.({ saveReportsAfter.(n).size == 5 }) and: { cell.(10) == [21, 21] },
+        "files: an over-window caller's late success 6 cannot overwrite failure 10 in the same cell");
+    n = saveResults.value.size; ask.(0, 6); ask.(0, 10);
+    check.(waitFor.({ saveReportsAfter.(n) == [[0, 10, true]] }),
+        "files: replay after the late completion reports only the live full number");
+    // Drop request 11 before it reaches SC. Two legacy callers use the
+    // same requested path, so neither their path nor ordinal proves a Lua save.
+    n = saveResults.value.size;
+    h.commandTo(e, \saveBuffer, 0, dst, 0, 0);
+    h.commandTo(e, \saveBuffer, 0, dst, 0, 0);
+    nextRequest = 11; save.(dst, 1);
+    check.(waitFor.({ saveReportsAfter.(n).size == 3 }) and: { cell.(11) != [23, 23] }
+        and: { cell.(12) == [24, 24] } and: { e.bufferSaves[0] == 13 },
+        "files: direct reports 11/12 cannot confirm dropped request 11; actual request 12 owns physical save 13");
+    n = saveResults.value.size;
+    h.commandTo(e, \saveBufferRequest, 0, dst, 0, 0, 13, token.reverse);
+    h.commandTo(e, \saveBufferRequest, 0, dst, 0, 0, 12, token);
+    ask.(0, 11); ask.(0, 12);
+    check.(waitFor.({ saveReportsAfter.(n) == [[0, 13, false]] }) and: { e.bufferSaves[0] == 13 },
+        "files: stale session and duplicate cannot write; exact request replays its true legacy report");
+    h.freeEngine(e);
+    check.(held.isOpen.not and: { File.exists(path).not }, "files: teardown closes the engine's anonymous receipt");
+    reader.close;
 }.value;
 }

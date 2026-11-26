@@ -1035,6 +1035,9 @@ local function engine_holds(calls)
       local text = type(arg) == "number" and string.format("%.9g", arg) or tostring(arg)
       if index <= (ENGINE_INDEX_ARGS[call.name] or 0) then key[#key + 1] = text else rest[#rest + 1] = text end
     end
+    -- Each fresh script owns a different temporary inode. Both starts must
+    -- still have bound one, independently of the param actions under test.
+    if call.name == "bindSaveResults" then rest[1] = "<session receipt>" end
     held[table.concat(key, " ")] = table.concat(rest, " ")
   end
   return held

@@ -13,6 +13,7 @@
             // interrupted by a crash or power cut left
             allocState: {
                 areaState[\files][\saves] = Array.fill(numBuffers, 0);
+                areaState[\files][\saveResults] = Array.fill(numBuffers, { Array.newClear(4) });
                 // the chunks fileDecodes has read since alloc (the check counts them)
                 areaState[\files][\decodeChunks] = 0;
                 areaState[\files][\renames] = Dictionary.new;
@@ -33,6 +34,18 @@
             this.areaCall(\saveSlot, msg[1], msg[2].asString, msg[3], msg[4]);
         });
 
+        // Lua carries its own number and session atomically with the audio
+        // request. Direct saveBuffer callers keep their original interface.
+        this.addCommand(\saveBufferRequest, "isffis", { arg msg;
+            this.areaCall(\saveSlot, msg[1], msg[2].asString, msg[3], msg[4], msg[5], msg[6].asString);
+        });
+        this.addCommand(\bindSaveResults, "s", { arg msg;
+            this.areaCall(\bindSaveResults, msg[1].asString);
+        });
+        this.addCommand(\requestSaveResult, "ii", { arg msg;
+            this.areaCall(\publishSaveResult, msg[1], msg[2]);
+        });
+
         // How a save ended: one message per saveBuffer whose write ends,
         // written or failed (bufferSaveResultValue: the slot, that slot's save
         // number and failed), so Lua confirms a save only once its file is in
@@ -47,8 +60,8 @@
 
     bufferSaveResultPoll { ^areaState[\files][\saveResultPoll] }
 
-    // Per slot: the saveBuffer commands received, counted from 1 (Lua's
-    // save_buffer counts the same), named in bufferSaveResult
+    // Per slot: the save commands received, counted from 1 (this
+    // includes both Lua requests and direct callers), named in bufferSaveResult
     bufferSaves { ^areaState[\files][\saves] }
 
     // Per path: the active WAV publication, or the count of an onsets rename.
@@ -76,6 +89,8 @@
     // filename grammars, including result markers and server staging WAVs.
     wavPrivatePath { arg path;
         var temp;
+        if ("^strata-save-[A-Za-z0-9]{24}$".matchRegexp(path.basename)
+            and: { File.realpath(path.dirname) == this.saveReceiptRoot }) { ^true };
         if (path.toLower.split($/).includesEqual(".strata-wav-writers")) { ^true };
         if ("(\\.[0-9]+-[0-9]+(-[0-9A-Fa-f]{32})?(\\.(ack|fail))?|(^|/)strata-peaks-mover\\.[0-9]+)\\.part(/|$)".matchRegexp(path)) { ^true };
         temp = File.realpath(Platform.defaultTempDir).withTrailingSlash;
@@ -213,6 +228,8 @@
 
     retireWavWrites {
         areaState[\files][\retired] = true;
+        areaState[\files][\receipt] !? { arg file; file.close };
+        areaState[\files][\receipt] = nil;
         writeGenerations !? { writeGenerations.clear };
         this.pathRenames !? {
             this.pathRenames.keys.asArray.do({ arg path;
@@ -235,17 +252,99 @@
         ^((((save * 2) + failed.binaryValue) * numBuffers) + index).asFloat
     }
 
+    // Match the shell's test -d even when /dev/shm or /tmp is a symlink.
+    saveReceiptRoot { arg shared = "/dev/shm", fallback = "/tmp";
+        var root = File.realpath(shared);
+        if (root.notNil and: { File.type(root) == \directory }) { ^root };
+        ^File.realpath(fallback)
+    }
+
+    // Lua owns this mktemp name and unlinks it once both handles are open.
+    // Check the basename, type, entire header and fixed length before writing.
+    bindSaveResults { arg token;
+        var state = areaState[\files], root, path, header, file, bound = false;
+        if (state[\retired] == true) { ^this };
+        if (state[\receipt].notNil) {
+            if (state[\receiptToken] == token) { this.confirmSaveReceipt };
+            ^this
+        };
+        if (token.size != 24 or: { "^[A-Za-z0-9]{24}$".matchRegexp(token).not }) { ^this };
+        root = this.saveReceiptRoot;
+        if (root.isNil) { ^this };
+        path = root +/+ ("strata-save-" ++ token);
+        header = "strata-save-v1 " ++ token;
+        if (File.type(path) != \regular) { ^this };
+        try {
+            file = File(path, "rb+");
+            if (file.isOpen and: { file.length == (header.size + 5 + (numBuffers * 4 * 8)) }
+                and: { file.getLine == header } and: { file.getInt32 == 0 }) {
+                state[\receiptStart] = header.size + 5;
+                state[\receipt] = file;
+                state[\receiptToken] = token;
+                bound = true;
+                this.confirmSaveReceipt;
+            };
+        } { arg error; ("strata: cannot bind save results: " ++ error).postln };
+        if (bound.not and: { file.notNil and: { file.isOpen } }) { file.close };
+    }
+
+    confirmSaveReceipt {
+        var state = areaState[\files], file = state[\receipt];
+        try {
+            file.seek(state[\receiptStart] - 4);
+            file.putInt32(1); file.flush;
+            this.bufferSaveResultPoll.update(0.0);
+        } { arg error; ("strata: cannot confirm save receipt: " ++ error).postln };
+    }
+
+    // A poll is only a hint: matron routes an already posted number through
+    // the latest poll registry. The full number twice in this session's
+    // preallocated inode also lets Lua reject a short/partial record.
+    publishSaveResult { arg index, number;
+        var state = areaState[\files], record, encoded, file;
+        if (state[\retired] == true or: { this.validBuffer(index).not } or: { number <= 0 }) { ^this };
+        record = state[\saveResults][index][(number - 1) % 4];
+        if (record.isNil or: { record[0] != number } or: { record[1].isNil }) { ^this };
+        file = state[\receipt];
+        if (file.notNil) {
+            encoded = number * 2 + record[1].binaryValue;
+            try {
+                file.seek(state[\receiptStart] + (((index * 4) + ((number - 1) % 4)) * 8));
+                file.putInt32(encoded); file.putInt32(encoded); file.flush;
+            } { arg error; ("strata: cannot publish save result: " ++ error).postln };
+        };
+        this.bufferSaveResultPoll.update(this.bufferSaveResultValue(index, record[2], record[1]));
+    }
+
     // saveBuffer: count the save and write the slot, reporting how the write
     // ended on bufferSaveResult (an abandoned write reports nothing)
-    saveSlot { arg index, path, start = 0, length = 1;
-        var save;
-        if (this.validBuffer(index).not) { ^this };
+    saveSlot { arg index, path, start = 0, length = 1, request, token;
+        var state = areaState[\files], save, entry, cell, previous;
+        if (this.validBuffer(index).not or: { state[\retired] == true }) { ^this };
+        if (request.notNil) {
+            if (request <= 0 or: { state[\receipt].isNil } or: { state[\receiptToken] != token }) { ^this };
+            cell = (request - 1) % 4;
+            previous = state[\saveResults][index][cell];
+            if (previous.notNil and: { previous[0] >= request }) { ^this };
+        };
         save = this.bufferSaves[index] + 1;
         this.bufferSaves[index] = save;
+        if (request.notNil) {
+            entry = [request, nil, save]; // request, terminal failure flag, legacy report number
+            state[\saveResults][index][cell] = entry;
+        };
         this.writeSlot(index, path, { arg written;
-            this.bufferSaveResultPoll.update(this.bufferSaveResultValue(index, save, written.not));
+            if (state[\retired] != true) {
+                if (entry.notNil and: { state[\saveResults][index][cell] === entry }) {
+                    entry[1] = written.not;
+                    this.publishSaveResult(index, request);
+                } {
+                    this.bufferSaveResultPoll.update(this.bufferSaveResultValue(index, save, written.not));
+                };
+            };
         }, start, length);
     }
+
 
     // true when libsndfile decodes the first `frames` frames of the open
     // file, or all but loadShortfallFrames of them. A damaged compressed file

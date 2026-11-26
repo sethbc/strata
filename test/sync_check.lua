@@ -261,7 +261,9 @@ function sync_check.check_sources(lua_sources, sc_source, pending)
   for _, name in ipairs(command_names) do
     if pending_names[name] then
       pending_count = pending_count + 1
-    elseif not lua_names[name] then
+    -- External controllers can still send the original four-argument save.
+    -- Strata itself sends saveBufferRequest with its session and request ID.
+    elseif not lua_names[name] and not (name == "saveBuffer" and commands[name] == "isff") then
       table.insert(problems, "engine command \\" .. name .. " is never called from the script's Lua files")
     end
   end

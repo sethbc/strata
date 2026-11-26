@@ -1341,7 +1341,7 @@ local function start_steps()
     { "tuning", {} },
     { "buffer polls", { "poll set bufferState", "poll started bufferState", "poll set bufferLoadFailed",
       "poll started bufferLoadFailed", "poll set bufferSaveResult", "poll started bufferSaveResult",
-      "poll set takeWriteFailed", "poll started takeWriteFailed" } },
+      "engine.bindSaveResults", "poll set takeWriteFailed", "poll started takeWriteFailed" } },
     { "samples load", { "file read samples.data" } },
     { "input level polls", { "poll set amp_in_l", "poll started amp_in_l", "poll set amp_in_r",
       "poll started amp_in_r" } },
