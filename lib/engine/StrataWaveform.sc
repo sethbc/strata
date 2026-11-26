@@ -99,7 +99,7 @@
     // as three lines, the .part, the path and an acknowledgment file; the
     // shell runs mv -f for each, in order, then creates the acknowledgment,
     // or, for a failed mv whose .part is still there, creates the failure
-    // file (moverFailPath) instead and then deletes the .part. sclang
+    // file (moverFailPath) instead, leaving the source for sclang. sclang
     // opens its end read-write ("r+": it holds a reader too, so a mover
     // that died never SIGPIPEs sclang) and close-on-exec ("e": no
     // later child holds it open, so the mover ends on EOF when free closes
@@ -141,18 +141,22 @@
         ^mover[\exited] or: { File.exists("/proc/self") and: { File.exists("/proc/" ++ mover[\pid]).not } }
     }
 
+    // The part and target are siblings. On Linux -T also rejects a
+    // directory installed at the target after the language checked it.
+    moverCommand { ^if (thisProcess.platform.name == \linux) { "mv -fT" } { "mv -f" } }
+
     startPeaksMover {
         var fifo = this.peaksMoverPath, file;
         var mover = (alive: false, exited: false, freed: false, pending: 0, pid: nil, file: nil);
         // a failed mv fails the write only if the .part is still there (one
         // a timed-out write renamed by subprocess is gone): the failure file
-        // first, then the .part goes, so a fallback that finds the .part
+        // first. The language handles cleanup, so a fallback that finds the .part
         // gone also finds the failure (or the poll has noted it). A failure
         // file that cannot be made leaves the .part, and the fallback's own
         // mv reports. The caller's finish posts a failure.
         var script = "rm -f -- \"$0\"; while IFS= read -r part && IFS= read -r path && IFS= read -r ack; do "
-            ++ "if mv -f -- \"$part\" \"$path\" 2>/dev/null || [ ! -e \"$part\" ]; then : > \"$ack\"; "
-            ++ "else : > \"${ack%.ack.part}.fail.part\" && rm -f -- \"$part\"; fi; done";
+            ++ "if " ++ this.moverCommand ++ " -- \"$part\" \"$path\" 2>/dev/null || [ ! -e \"$part\" ]; then : > \"$ack\" || exit 1; "
+            ++ "else : > \"${ack%.ack.part}.fail.part\" || exit 1; fi; done";
         areaState[\waveform][\mover] = mover;
         try { File.mkdir(fifo.dirname) };
         // a name left by an engine of an earlier sclang session (instanceTag
@@ -210,6 +214,19 @@
         mover[\file] = nil;
     }
 
+    // Inspection can fail temporarily (for example when the directory loses
+    // search permission). Only an observed result can settle a live request.
+    moverResult { arg ack, fail;
+        ^try {
+            var ackType = File.type(ack), failType = File.type(fail);
+            case
+            { ackType == \not_found and: { failType == \not_found } } { \waiting }
+            { ackType == \regular and: { failType == \not_found } } { \written }
+            { failType == \regular and: { ackType == \not_found } } { \failed }
+            { \malformed }
+        } { \inaccessible }
+    }
+
     // Rename partPath to path, then finish.(written), once: through the
     // mover when it is alive, holds fewer than peaksMoverBacklog renames
     // and no path holds a newline (the lines would split), else by a
@@ -220,32 +237,92 @@
     // until the mover acknowledges it (its late mv finds no .part and says
     // nothing), so a stuck mover fills the backlog and is skipped, and one
     // that catches up is used again. Only a mover that is gone stops its use.
-    renameIntoPlace { arg partPath, path, finish;
+    renameIntoPlace { arg partPath, path, finish, wav = false;
         var mover = areaState[\waveform][\mover], ackPath = this.peaksAckPath(partPath), started, finished = false;
-        // moverFailed: the poll consumed the mover's failure file, so a
-        // fallback that finds the .part gone knows the write was lost
-        var failPath = this.moverFailPath(partPath), moverFailed = false;
-        var partGone = { moverFailed.not and: { File.exists(failPath).not } };
+        var failPath = this.moverFailPath(partPath);
+        var enqueued = false, fifoDone = false, fifoWritten = false, failedFallback = false, delivered = false;
+        var complete = { arg written; if (delivered.not) { delivered = true; finish.(written) } };
+        var endPending = {
+            mover[\pending] = mover[\pending] - 1;
+            if (wav) { wavMoverPending = wavMoverPending - 1 };
+            fifoDone = true;
+        };
         var usable = mover.notNil and: { mover[\alive] } and: { mover[\pending] < this.peaksMoverBacklog }
+            and: { wav.not or: { wavMoverPending < this.wavWorkLimit } }
             and: { [partPath, path, ackPath].every({ arg each; each.includes($\n).not }) };
-        var bySubprocess = { if (finished.not) { finished = true; this.areaCall(\renameBySubprocess, partPath, path, finish, partGone) } };
+        var bySubprocess = {
+            if (finished.not) {
+                if (wav.not or: { this.reserveWavFallback }) {
+                    finished = true;
+                    try {
+                        this.areaCall(\renameBySubprocess, partPath, path, { arg written;
+                            var outcome;
+                            if (wav) { this.releaseWavFallback };
+                            if (written.not) {
+                                if (enqueued and: { fifoDone.not }) {
+                                    outcome = this.unlinkMoverPart(partPath);
+                                    if (outcome == \blocked) {
+                                        // Only the mover can still decide the result.
+                                        failedFallback = true;
+                                    } { complete.(outcome == \gone) };
+                                } {
+                                    if (fifoWritten.not) { File.delete(partPath) };
+                                    complete.(fifoWritten);
+                                };
+                            } { complete.(written) };
+                        })
+                    } { arg error;
+                        if (wav) { this.releaseWavFallback };
+                        if (enqueued and: { fifoDone.not }) {
+                            // No fallback started. The queued mover still owns
+                            // its part, its credit and the eventual result.
+                            failedFallback = true;
+                        } { error.throw };
+                    };
+                } {
+                    if (enqueued.not or: { fifoDone }) {
+                        finished = true;
+                        File.delete(partPath);
+                        complete.(false);
+                    };
+                };
+            };
+        };
         if (usable and: {
             try { mover[\file].write(partPath ++ "\n" ++ path ++ "\n" ++ ackPath ++ "\n"); mover[\file].flush; true } { false }
         }) {
+            enqueued = true;
+            if (wav) { wavMoverPending = wavMoverPending + 1 };
             mover[\pending] = mover[\pending] + 1;
             started = Main.elapsedTime;
             SystemClock.sched(this.peaksMoverPollStep, {
+                var result = this.moverResult(ackPath, failPath);
                 case
-                { mover[\freed] } { nil }  // the engine was freed: its actions are dropped
-                { File.exists(ackPath) or: { File.exists(failPath) } } {
-                    var written = File.exists(failPath).not;
-                    moverFailed = written.not;
+                { (result == \written) or: { result == \failed } } {
+                    var written = result == \written;
+                    fifoWritten = written;
+                    if (written.not and: { finished.not or: { failedFallback } }) { File.delete(partPath) };
                     try { File.delete(if (written) { ackPath } { failPath }) };
-                    mover[\pending] = mover[\pending] - 1;
-                    if (finished.not) { finished = true; finish.(written) };
+                    endPending.value;
+                    if ((finished.not or: { failedFallback }) and: { mover[\freed].not }) { finished = true; complete.(written) };
                     nil
                 }
-                { mover[\exited] } { mover[\pending] = mover[\pending] - 1; bySubprocess.value; nil }
+                { mover[\freed] } {
+                    if (mover[\exited]) { endPending.value; nil } { this.peaksMoverSlowPollStep }
+                }
+                { result == \inaccessible } { this.peaksMoverSlowPollStep }
+                { mover[\exited] } {
+                    // A killed shell can leave its mv child alive. On an
+                    // ambiguous failure, retain the credit until revocation
+                    // or the child's successful rename is observable.
+                    if (failedFallback and: { delivered.not }) {
+                        var outcome = this.unlinkMoverPart(partPath);
+                        if (outcome != \blocked) { complete.(outcome == \gone) };
+                    };
+                    if (finished.not and: { try { File.type(partPath) } == \not_found }) { complete.(true) };
+                    if (delivered) { endPending.value; nil } { bySubprocess.value; this.peaksMoverSlowPollStep }
+                }
+                { result == \malformed } { this.peaksMoverSlowPollStep }
                 { finished } { this.peaksMoverSlowPollStep }  // renamed by subprocess: waiting for the acknowledgment
                 { (Main.elapsedTime - started) >= this.peaksMoverTimeout } {
                     if (this.peaksMoverGone(mover)) { mover[\alive] = false };
@@ -259,21 +336,11 @@
         };
     }
 
-    // mv -f through unixCmd (asynchronous, but the fork holds sclang a few
-    // ms). A failed mv whose .part is gone means the mover took it first (a
-    // write that timed out on it): written is then partGone's answer
-    // (renameIntoPlace's: the mover left no failure file), true without one
-    renameBySubprocess { arg partPath, path, finish, partGone;
-        ("mv -f " ++ partPath.shellQuote ++ " " ++ path.shellQuote).unixCmd({ arg exitCode;
-            var written = exitCode == 0;
-            if (written.not) {
-                if (try { File.exists(partPath) } { true }) {
-                    try { File.delete(partPath) }
-                } {
-                    written = partGone.value ? true;
-                };
-            };
-            finish.(written);
+    // The subprocess reports only its own rename. Its caller also owns
+    // the FIFO result and resolves competing carriers against their source.
+    renameBySubprocess { arg partPath, path, finish;
+        (this.moverCommand ++ " " ++ partPath.shellQuote ++ " " ++ path.shellQuote).unixCmd({ arg exitCode;
+            finish.(exitCode == 0)
         }, false);
     }
 

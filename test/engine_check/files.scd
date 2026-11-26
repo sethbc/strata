@@ -687,7 +687,7 @@ checkLongSave.value;
     other.writeSlot(0, path, done.(older));
     waitFor.({ mover[\pending] == 1 });
     other.writeSlot(1, path, done.(middle));
-    middlePart = path ++ "." ++ other.instanceTag ++ "-" ++ other.writeGenerations[path] ++ ".part";
+    middlePart = path ++ "." ++ other.wavPartToken(other.writeGenerations[path]) ++ ".part";
     // the middle write has interleaved and waits on the older rename
     0.3.wait;
     other.writeSlot(0, path, done.(newest));
@@ -729,5 +729,382 @@ checkLongSave.value;
             result[\calls], result[\written], other.pathRenames[path], (dir +/+ "*.part").pathMatch));
     h.freeEngine(other);
     if (File.exists(path)) { File.delete(path) };
+}.value;
+// Pin the actual OS rename and check the registered save's poll and every
+// stereo sample after the older mover and/or fallback have both returned.
+{
+    var dir = scratchRoot +/+ "publication", bin = dir +/+ "bin", original = "PATH".getenv;
+    var delayed, path, noBoard = dir +/+ "no-model";
+    var read = { arg name;
+        var sf = SoundFile.openRead(name), result;
+        sf !? {
+            var samples = Signal.newClear(sf.numFrames * sf.numChannels);
+            sf.readData(samples); result = [sf.numFrames, samples]; sf.close
+        };
+        result
+    };
+    var run = { arg label, carriers = 1, reload = false;
+        var first, second, expected, observed, seen, calls, n = saveResults.value.size;
+        var entered = { (path ++ ".barrier/in.*").pathMatch.size };
+        var exited = { (path ++ ".barrier/out.*").pathMatch.size };
+        path = dir +/+ ("held-" ++ label ++ ".wav");
+        h.commandTo(delayed, \saveBuffer, 0, path, 0, 1);
+        first = delayed.bufferSaves[0];
+        check.(waitFor.({ entered.value == carriers }, 3), "files: % reaches % real OS carriers".format(label, carriers));
+        if (reload) {
+            h.freeEngine(delayed);
+            delayed = h.startEngine((settingsDir: dir, modelPath: noBoard));
+            h.commandTo(delayed, \loadBuffer, 0, h.monoPath, 0); h.awaitLoad(0, delayed);
+        };
+        h.commandTo(delayed, \saveBuffer, 0, path, 0, if (reload) { 1 } { 0.5 });
+        second = delayed.bufferSaves[0];
+        if (label == "early") {
+            0.1.wait
+        } {
+            check.(waitFor.({ saveReportsAfter.(n).includesEqual([0, second, false]) }, 5),
+                "files: % publishes the successor while the old OS carrier is held".format(label));
+        };
+        File.use(path ++ ".release", "w", { arg file; file.write("release") });
+        check.(waitFor.({ exited.value == carriers }, 3), "files: % releases every old carrier".format(label));
+        waitFor.({ saveReportsAfter.(n).includesEqual([0, second, false]) });
+        0.1.wait;
+        observed = read.(path);
+        expected = if (reload) { 4410 } { 5513 };
+        seen = saveReportsAfter.(n);
+        calls = if (["early", "ack"].includesEqual(label)) { [[0, first, false], [0, second, false]] } { [[0, second, false]] };
+        check.(observed.notNil and: { observed[0] == expected } and: {
+            var reference = if (reload) { h.repeating(expected * 2, [0.4, 0.4]) } { h.repeating(expected * 2, [0.5, -0.25]) };
+            (observed[1] - reference).peak < 0.00004
+        } and: { seen == calls } and: { (dir +/+ "*.part").pathMatch.isEmpty },
+            "files: % keeps % frames of selected stereo samples, reports exactly % (observed % frames, reports %) and retires its parts".format(
+                label, expected, calls, observed !? { observed[0] }, seen));
+    };
+    File.mkdir(bin);
+    File.copy(h.testDir +/+ "engine_check/fixtures/hold-wav-mv.sh", bin +/+ "mv");
+    ("chmod 700 " ++ (bin +/+ "mv").shellQuote).systemCmd;
+    "PATH".setenv(bin ++ ":" ++ original);
+    delayed = h.startEngine((settingsDir: dir, modelPath: noBoard));
+    h.commandTo(delayed, \loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0, delayed);
+    // All directory components are validated before mkdir, including when
+    // an existing parent is an alias for the server's temporary directory.
+    {
+        var names = ["unused.1000-2.ack.part", "unused.1000-2.fail.part",
+            "strata-peaks-mover.1234.part", "unused.1000-2.part"];
+        var alias = dir +/+ "temp-alias", serverName = "strata-buf1-%-2-L.wav".format(delayed.instanceTag), n, save;
+        ("ln -s " ++ Platform.defaultTempDir.shellQuote ++ " " ++ alias.shellQuote).systemCmd;
+        (names.collect({ arg name; dir +/+ name }) ++ [alias +/+ serverName]).do({ arg reserved;
+            n = saveResults.value.size;
+            h.commandTo(delayed, \saveBuffer, 0, reserved +/+ "new/out.wav", 0, 0.5);
+            save = delayed.bufferSaves[0];
+            check.(waitFor.({ saveReportsAfter.(n) == [[0, save, true]] }, 0.5) and: { File.exists(reserved).not },
+                "files: a reserved parent is refused before creating directories (%)".format(reserved.basename));
+            // Remove the test's own output from a failing run.
+            File.delete(reserved +/+ "new/out.wav"); File.delete(reserved +/+ "new"); File.delete(reserved);
+        });
+        {
+            var absent = dir +/+ "not-created", reserved = alias +/+ serverName;
+            n = saveResults.value.size;
+            h.commandTo(delayed, \saveBuffer, 0, absent +/+ "../temp-alias" +/+ serverName +/+ "new/out.wav", 0, 0.5);
+            save = delayed.bufferSaves[0];
+            check.(waitFor.({ saveReportsAfter.(n) == [[0, save, true]] }, 0.5)
+                and: { File.exists(reserved).not } and: { File.exists(absent).not },
+                "files: a missing directory followed by .. cannot hide an aliased private parent from validation");
+            File.delete(reserved +/+ "new/out.wav"); File.delete(reserved +/+ "new"); File.delete(reserved); File.delete(absent);
+            ("ln -s " ++ dir.shellQuote ++ " " ++ (dir +/+ "ordinary-alias").shellQuote).systemCmd;
+            n = saveResults.value.size;
+            h.commandTo(delayed, \saveBuffer, 0, absent +/+ "../ordinary-alias/ordinary.wav", 0, 0.5);
+            save = delayed.bufferSaves[0];
+            check.(waitFor.({ saveReportsAfter.(n) == [[0, save, false]] }) and: { read.(dir +/+ "ordinary.wav")[0] == 5513 },
+                "files: the same missing directory followed by .. permits a save through an ordinary directory alias");
+        }.value;
+        File.delete(alias);
+    }.value;
+    {
+        var ack = dir +/+ "marker-type", fail = dir +/+ "marker-type-failed";
+        File.mkdir(ack);
+        check.(delayed.moverResult(ack, fail) == \malformed,
+            "files: a directory cannot acknowledge a queued rename");
+        File.delete(ack); File.mkdir(fail);
+        check.(delayed.moverResult(ack, fail) == \malformed,
+            "files: a directory cannot report a failed rename");
+        File.delete(fail);
+    }.value;
+    // An already enqueued rename still owns one real FIFO entry if starting
+    // its fallback throws. A filename proxy injects that exception only at
+    // shellQuote, before unixCmd starts, and serializes normally on the FIFO.
+    {
+        var dst = dir +/+ "held-launch-fault.wav", target = dst.asSymbol;
+        var source = dst ++ ".1000-2.part", mover = delayed.areaState[\waveform][\mover];
+        var calls = List.new(2), attempted = false;
+        target.addUniqueMethod(\includes, { arg self, char; dst.includes(char) });
+        target.addUniqueMethod(\shellQuote, { attempted = true; Error("injected fallback launch failure").throw });
+        File.copy(h.monoPath, source);
+        delayed.renameIntoPlace(source, target, { arg ok; calls.add(ok) }, true);
+        waitFor.({ attempted }, 3);
+        check.(attempted and: { calls.isEmpty } and: { mover[\pending] == 1 },
+            "files: a fallback launch failure keeps the enqueued mover's result pending");
+        File.use(dst ++ ".release", "w", { arg f; f.write("release") });
+        check.(waitFor.({ mover[\pending] == 0 and: { calls.asArray == [true] } }, 1) and: { File.exists(dst) },
+            "files: the genuine late FIFO result releases its credit and reports once after a fallback cannot start");
+        target.removeUniqueMethods;
+    }.value;
+    // The first /b_write goes to a real server buffer. Removing only the
+    // second sender makes its call throw before the first reply is known.
+    {
+        var n = saveResults.value.size, e = delayed, right = e.buffersR[0], save, generation;
+        var target = dir +/+ "partial-send.wav", left, probe;
+        e.buffersR[0] = nil;
+        protect {
+            h.commandTo(e, \saveBuffer, 0, target, 0, 1);
+            save = e.bufferSaves[0];
+            generation = e.writeGenerations[target];
+        } { e.buffersR[0] = right };
+        h.server.sync;
+        waitFor.({ saveReportsAfter.(n).notEmpty });
+        probe = Platform.defaultTempDir +/+ ("strata-buf1-" ++ e.instanceTag ++ "-*-" ++ e.areaState[\files][\wavTag] ++ "-L.wav");
+        left = probe.pathMatch;
+        check.(generation.notNil and: { left.isEmpty } and: { saveReportsAfter.(n) == [[0, save, true]] }
+            and: { File.exists(target).not }, "files: a second send throwing drains the accepted first write before releasing its preparation (left %)".format(left));
+        left.do({ arg name; File.delete(name) }); // a failing regression run owns these files
+    }.value;
+    // The result files sit beside the WAV. Deny directory search only
+    // after the mover has read the request, then restore it under two lifetimes.
+    [false, true].do({ arg retire;
+        var denied = dir +/+ "denied", e = delayed, mover = e.areaState[\waveform][\mover];
+        var n = saveResults.value.size, save, source, ack, inaccessible, child;
+        File.mkdir(denied);
+        path = denied +/+ if (retire) { "held-retired.wav" } { "held-live.wav" };
+        h.commandTo(e, \saveBuffer, 0, path, 0, 1);
+        save = e.bufferSaves[0];
+        check.(waitFor.({ (path ++ ".barrier/in.*").pathMatch.notEmpty }), "files: the FIFO handed off the permission test's rename");
+        child = (path ++ ".barrier/in.*").pathMatch.first.basename.split($.).last.asInteger;
+        source = File.readAllString(path ++ ".barrier/source").stripWhiteSpace;
+        ack = e.peaksAckPath(source);
+        check.(ack.dirname == denied and: { e.moverFailPath(source).dirname == denied }, "files: the restricted directory owns both result paths");
+        ("chmod 000 " ++ denied.shellQuote).systemCmd;
+        inaccessible = try { File.exists(ack); false } { true };
+        0.12.wait; // the FIFO poll runs repeatedly while inspection is denied
+        if (retire) {
+            var right = e.buffersR[0], probe;
+            e.buffersR[0] = nil;
+            protect { h.commandTo(e, \saveBuffer, 0, dir +/+ "free-during-send.wav", 0, 1) } { e.buffersR[0] = right };
+            h.freeEngine(e);
+            h.server.sync;
+            probe = Platform.defaultTempDir +/+ ("strata-buf1-" ++ e.instanceTag ++ "-*-" ++ e.areaState[\files][\wavTag] ++ "-L.wav");
+            check.(waitFor.({ probe.pathMatch.isEmpty }) and: { saveReportsAfter.(n).isEmpty },
+                "files: free drains a partially sent preparation without a retired result or float file");
+            // The shell's exit action also waits for its child's output
+            // descriptor. End both while the result directory is inaccessible.
+            ("kill -KILL " ++ mover[\pid] ++ " " ++ child).systemCmd;
+            check.(waitFor.({ mover[\exited] and: { mover[\pending] == 0 } }),
+                "files: an exited retired mover releases its outstanding credit even with an inaccessible acknowledgment directory");
+        };
+        ("chmod 700 " ++ denied.shellQuote).systemCmd;
+        if (retire) {
+            delayed = h.startEngine((settingsDir: dir, modelPath: noBoard));
+            h.commandTo(delayed, \loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0, delayed);
+            h.commandTo(delayed, \saveBuffer, 0, path, 0, 0.5);
+            save = delayed.bufferSaves[0];
+            waitFor.({ saveReportsAfter.(n).includesEqual([0, save, false]) });
+        };
+        File.use(path ++ ".release", "w", { arg f; f.write("release") });
+        check.(waitFor.({ (retire or: { (path ++ ".barrier/out.*").pathMatch.notEmpty }) and: { mover[\pending] == 0 }
+            and: { saveReportsAfter.(n) == [[0, save, false]] } })
+            and: { read.(path)[0] == if (retire) { 5513 } { 11025 } },
+            "files: after search access returns, one real result and no pending credit (retired %, EACCES %)".format(retire, inaccessible));
+    });
+    // Commit the bytes, then make the mover's acknowledgment redirection
+    // fail. Its exit and the consumed source settle the original save.
+    {
+        var folder = dir +/+ "ack-fault", dst = folder +/+ "held-ack.wav";
+        var e = h.startEngine((settingsDir: folder, modelPath: noBoard)), mover = e.areaState[\waveform][\mover];
+        var n, save, source, ack;
+        h.commandTo(e, \loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0, e);
+        n = saveResults.value.size;
+        h.commandTo(e, \saveBuffer, 0, dst, 0, 0.5); save = e.bufferSaves[0];
+        check.(waitFor.({ (dst ++ ".barrier/in.*").pathMatch.notEmpty }), "files: the mover commits before the acknowledgment fault");
+        source = File.readAllString(dst ++ ".barrier/source").stripWhiteSpace;
+        ack = e.peaksAckPath(source);
+        File.mkdir(ack);
+        File.use(dst ++ ".release", "w", { arg f; f.write("release") });
+        check.(waitFor.({ mover[\pending] == 0 and: { saveReportsAfter.(n) == [[0, save, false]] } }, 3)
+            and: { read.(dst)[0] == 5513 }, "files: a failed marker write drains the FIFO credit and reports committed bytes once");
+        File.delete(ack);
+        h.freeEngine(e);
+    }.value;
+    // The same shell also carries peaks. A failed marker write must
+    // release its credit and the action that allows a load to finish.
+    {
+        var e = h.startEngine((settingsDir: dir +/+ "peaks-ack-fault", modelPath: noBoard));
+        var mover = e.areaState[\waveform][\mover], dst = e.peaksPath(0), calls = 0, part, ack;
+        ("kill -STOP " ++ mover[\pid]).systemCmd;
+        protect {
+            e.writeSlotPeaks(0, 123, { calls = calls + 1 });
+            part = (dst ++ ".*.part").pathMatch.first;
+            ack = e.peaksAckPath(part);
+            File.mkdir(ack);
+        } { ("kill -CONT " ++ mover[\pid]).systemCmd };
+        check.(waitFor.({ mover[\pending] == 0 and: { calls == 1 } }) and: { e.peaksUnchanged(0, 123) },
+            "files: a peaks rename whose shell cannot write its acknowledgment releases the credit and runs its action once");
+        File.delete(ack); h.freeEngine(e);
+    }.value;
+    {
+        var folder = dir +/+ "peaks-search-fault", e = h.startEngine((settingsDir: folder, modelPath: noBoard));
+        var mover = e.areaState[\waveform][\mover], calls = 0, dst = e.peaksPath(0), content, searchable;
+        ("chmod 000 " ++ folder.shellQuote).systemCmd;
+        searchable = ("test -x " ++ folder.shellQuote).systemCmd == 0;
+        ("chmod 700 " ++ folder.shellQuote).systemCmd;
+        e.writeSlotPeaks(0, 123, { calls = calls + 1 });
+        protect {
+            if (searchable) {
+                waitFor.({ calls == 1 });
+                check.(true, "(skipped: a directory without search permission is still searchable here, as root)");
+            } {
+                check.(waitFor.({ mover[\exited] }), "files: the peaks mover exits after committing the file and losing directory search");
+                0.15.wait;
+                check.(calls == 0 and: { mover[\pending] == 1 } and: { ("test -x " ++ folder.shellQuote).systemCmd != 0 },
+                    "files: a peaks result stays pending while its exited mover's source and markers cannot be inspected");
+            };
+        } { ("chmod 700 " ++ folder.shellQuote).systemCmd };
+        waitFor.({ mover[\pending] == 0 and: { calls == 1 } });
+        0.15.wait;
+        content = File.readAllString(dst);
+        check.(calls == 1 and: { mover[\pending] == 0 } and: { e.peaksUnchanged(0, 123) }
+            and: { content.find("frames 123\n").notNil } and: { (folder +/+ "*.part").pathMatch.isEmpty },
+            "files: restored search confirms the installed peaks, caches them and runs exactly one action");
+        h.freeEngine(e);
+    }.value;
+    if (thisProcess.platform.name == \linux) {
+        var dst = dir +/+ "held-directory.wav", n = saveResults.value.size, save;
+        h.commandTo(delayed, \saveBuffer, 0, dst, 0, 1); save = delayed.bufferSaves[0];
+        waitFor.({ (dst ++ ".barrier/in.*").pathMatch.notEmpty });
+        File.mkdir(dst);
+        File.use(dst ++ ".release", "w", { arg f; f.write("release") });
+        check.(waitFor.({ saveReportsAfter.(n) == [[0, save, true]] }, 1) and: { PathName(dst).entries.isEmpty },
+            "files: a directory installed after handoff stays empty and the rename reports failure");
+    };
+    run.("both", 2);
+    delayed.stopPeaksMover;
+    {
+        var n = saveResults.value.size, old, source, ack, oldDir, decoy, token, temp, rejected;
+        path = dir +/+ "held-names.wav";
+        h.commandTo(delayed, \saveBuffer, 0, path, 0, 1);
+        old = delayed.bufferSaves[0];
+        check.(waitFor.({ (path ++ ".barrier/in.*").pathMatch.notEmpty }), "files: source token is handed off before checking its private names");
+        source = File.readAllString(path ++ ".barrier/source").stripWhiteSpace;
+        ack = delayed.peaksAckPath(source);
+        token = source.drop(-5).basename.split($.).last;
+        temp = Platform.defaultTempDir +/+ ("strata-buf1-" ++ token ++ "-L.wav");
+        decoy = path ++ ".1000-2-00000000000000000000000000000000.part";
+        File.use(decoy, "w", { arg f; f.write("stale") });
+        ("touch -t 202001010000 " ++ source.shellQuote ++ " " ++ decoy.shellQuote).systemCmd;
+        oldDir = delayed.scratchDir; delayed.scratchDir = dir;
+        delayed.deleteStaleParts; delayed.scratchDir = oldDir;
+        check.(File.exists(source) and: { File.exists(decoy).not }, "files: the receipt protects its exact token and cleans another stale part of the same destination");
+        [source, ack, delayed.moverFailPath(source), temp, delayed.wavReceipt(path).dirname +/+ "private/child.wav"].do({ arg internal;
+            h.commandTo(delayed, \saveBuffer, 0, internal, 0, 0.5);
+            rejected = delayed.bufferSaves[0];
+            check.(waitFor.({ saveReportsAfter.(n).includesEqual([0, rejected, true]) }, 0.7),
+                "files: save refuses an internal writer pathname (%)".format(internal.basename));
+        });
+        check.(read.(source)[0] == 11025 and: { File.exists(ack).not } and: { File.exists(temp).not }
+            and: { File.exists(delayed.wavReceipt(path).dirname +/+ "private").not },
+            "files: an arbitrary save path cannot replace a handed-off source or forge a result marker");
+        File.use(path ++ ".release", "w", { arg f; f.write("release") });
+        check.(waitFor.({ saveReportsAfter.(n).includesEqual([0, old, false]) }) and: { read.(path)[0] == 11025 },
+            "files: the genuine held write still publishes its original samples");
+        [decoy, ack, delayed.moverFailPath(source), temp].do({ arg file; File.delete(file) });
+    }.value;
+    run.("early");
+    run.("late");
+    run.("ack");
+    {
+        var n = saveResults.value.size, save;
+        path = dir +/+ "held-failed.wav";
+        File.copy(h.monoPath, path);
+        h.commandTo(delayed, \saveBuffer, 0, path, 0, 1);
+        save = delayed.bufferSaves[0];
+        waitFor.({ (path ++ ".barrier/in.*").pathMatch.notEmpty });
+        File.use(path ++ ".release", "w", { arg file; file.write("release") });
+        check.(waitFor.({ saveReportsAfter.(n) == [[0, save, true]] })
+            and: { read.(path)[0] == 4410 } and: { (dir +/+ "*.part").pathMatch.isEmpty },
+            "files: the OS worker failing after handoff reports failed once and preserves the existing WAV");
+    }.value;
+    // A failed revocation cannot admit a successor. Make the old source
+    // unremovable as a file, then restore it and let its real carrier finish.
+    {
+        var n = saveResults.value.size, source, old, rejected;
+        path = dir +/+ "held-unremovable.wav";
+        File.copy(h.monoPath, path);
+        h.commandTo(delayed, \saveBuffer, 0, path, 0, 1);
+        old = delayed.bufferSaves[0];
+        waitFor.({ (path ++ ".barrier/in.*").pathMatch.notEmpty });
+        source = File.readAllString(path ++ ".barrier/source").stripWhiteSpace;
+        ("/bin/mv " ++ source.shellQuote ++ " " ++ (source ++ ".kept").shellQuote).systemCmd;
+        File.mkdir(source);
+        h.commandTo(delayed, \saveBuffer, 0, path, 0, 0.5);
+        rejected = delayed.bufferSaves[0];
+        check.(waitFor.({ saveReportsAfter.(n) == [[0, rejected, true]] }, 4)
+            and: { read.(path)[0] == 4410 }, "files: failure to revoke preserves the destination and fails the replacement");
+        File.delete(source);
+        ("/bin/mv " ++ (source ++ ".kept").shellQuote ++ " " ++ source.shellQuote).systemCmd;
+        File.use(path ++ ".release", "w", { arg file; file.write("release") });
+        check.(waitFor.({ saveReportsAfter.(n) == [[0, rejected, true], [0, old, false]] })
+            and: { read.(path)[0] == 11025 }, "files: the original writer still owns the failed revocation and reports once");
+    }.value;
+    {
+        var target = dir +/+ "existing.wav", receipt = delayed.wavReceipt(target), n, save;
+        var checkRefusal = { arg label;
+            n = saveResults.value.size;
+            h.commandTo(delayed, \saveBuffer, 0, target, 0, 1);
+            save = delayed.bufferSaves[0];
+            check.(waitFor.({ saveReportsAfter.(n) == [[0, save, true]] }) and: { read.(target)[0] == 4410 },
+                "files: % refuses the save and preserves the existing WAV".format(label));
+        };
+        File.copy(h.monoPath, target);
+        File.mkdir(receipt.dirname);
+        File.use(receipt, "w", { arg f; f.write("1000-33-01234567890123456789012345678901\nextra") });
+        checkRefusal.("a malformed receipt");
+        ("chmod 000 " ++ receipt.dirname.shellQuote).systemCmd;
+        if (try { File.mtime(receipt); false } { true }) { checkRefusal.("an unsearchable receipt directory") };
+        ("chmod 700 " ++ receipt.dirname.shellQuote).systemCmd;
+        File.delete(receipt);
+        File.delete(receipt.dirname);
+    }.value;
+    // One stopped fallback per unrelated path. On exhaustion refuse a new
+    // pathname without changing its contents; resuming returns all credits.
+    {
+        var limit = delayed.wavWorkLimit, paths = Array.fill(delayed.wavWorkLimit, { arg i;
+            dir +/+ ("held-full" ++ i ++ ".wav")
+        });
+        var n = saveResults.value.size, rejected, target = dir +/+ "at-capacity.wav";
+        File.copy(h.monoPath, target);
+        paths.do({ arg name;
+            h.commandTo(delayed, \saveBuffer, 0, name, 0, 1);
+        });
+        // No yield since the burst: all preparations still own their two
+        // temporary floats. The excess request must never enter the queue.
+        h.commandTo(delayed, \saveBuffer, 0, target, 0, 1);
+        rejected = delayed.bufferSaves[0];
+        check.(delayed.writeGenerations[target].isNil and: {
+            waitFor.({ saveReportsAfter.(n) == [[0, rejected, true]] })
+        } and: { read.(target)[0] == 4410 }, "files: the seventeenth simultaneous preparation stages no file and reports failed");
+        n = saveResults.value.size;
+        check.(waitFor.({ paths.every({ arg name; (name ++ ".barrier/in.*").pathMatch.notEmpty }) }, 4),
+            "files: independent destinations can use the available WAV carriers");
+        h.commandTo(delayed, \saveBuffer, 0, target, 0, 1);
+        rejected = delayed.bufferSaves[0];
+        check.(waitFor.({ saveReportsAfter.(n) == [[0, rejected, true]] }) and: { read.(target)[0] == 4410 },
+            "files: a full fallback budget refuses the extra write and preserves its file");
+        paths.do({ arg name; File.use(name ++ ".release", "w", { arg file; file.write("release") }) });
+        check.(waitFor.({ saveReportsAfter.(n).size == (limit + 1) }) and: { (dir +/+ "*.part").pathMatch.isEmpty },
+            "files: every accepted fallback finishes exactly once and clears its part");
+        h.commandTo(delayed, \saveBuffer, 0, target, 0, 1);
+        check.(waitFor.({ saveReportsAfter.(n).size == (limit + 2) }) and: { read.(target)[0] == 11025 },
+            "files: capacity returns when the children exit");
+    }.value;
+    run.("reload", 1, true);
+    h.freeEngine(delayed);
+    "PATH".setenv(original);
 }.value;
 }

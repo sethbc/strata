@@ -15,6 +15,9 @@ Engine_Strata : CroneEngine {
     // check sets them before it builds an engine
     classvar <>settingsDir, <>modelPath, <>meminfoPath;
 
+    // WAV work can outlive an instance. Release these budgets on actual completion.
+    classvar wavPreparations = 0, wavFallbacks = 0, wavMoverPending = 0;
+
     var <numVoices = 7;  // Must match NUM_VOICES in lib/constants.lua
     var <voiceSynthDefs;
     var <synths;

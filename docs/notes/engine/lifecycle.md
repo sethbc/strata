@@ -13,6 +13,8 @@
 - **A voice's extra notes are the notes area's, never its own synths** (3.5, `docs/notes/engine/notes.md`): a note synth is in no set of `synths`, `releasingSynths`, `fadingSynths` or `cuttingSynths`, is watched by `watchNoteSynth` (nothing restarts it) and is bounded by its slot (one live and one cutting synth). `releaseVoice` releases the voice's live extra notes with it (`releaseNotes`); `voiceOn` resets the own note (`resetOwnNote`), and every own synth started or re-gated takes `ownNotePairs`.
 - **Every grain start restarts the scan.** `gateVoice`'s re-gate of a releasing `\strataGrainBuf` carries `\t_scanReset, 1`, as a new grain synth starts its scan at 0; a `voiceOn` on a voice already running sends no reset (`docs/notes/engine/positions.md`).
 
+The files area retires WAV preparations and handed-off publications at engine free. A later engine can recover a failed retirement from the destination's receipt (files.md, File writes).
+
 ## The synth sets
 
 A voice's own synths are its voice synth (the synth source only), its grain synth and its mod synth, under `voiceKey`, `grainKey` and `modKey`. Each one is in exactly one of five sets at a time; whether the voice runs is derived (`voiceRunning`: a live voice or grain synth). A start the server has not yet confirmed (`unconfirmedStarts`, Watching, below) is a second fact beside the set, never a sixth set. The extra notes are the notes area's, in none of these sets (`docs/notes/engine/notes.md`).
