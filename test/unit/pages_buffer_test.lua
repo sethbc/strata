@@ -985,7 +985,7 @@ test("BUFFER lists its layout states", function()
   for _, state in ipairs(record.layout_states) do names[state.name] = true end
   for _, name in ipairs({ "slot 1", "slot 8", "field source", "field rec", "field dur", "field lvl", "field fb",
     "field loop", "field thr", "field sync", "field bm", "field start", "field fric", "field slices", "long names", "every slot recording",
-    "saving flash", "saving loop flash", "saved flash", "saved loop flash", "save failed flash", "busy flash", "empty flash",
+    "saving flash", "saving loop flash", "saved flash", "saved loop flash", "save failed flash", "save queue full flash", "busy flash", "empty flash",
     "load failed flash", "random file flash", "filled flash", "no files flash", "meter peak",
     "armed", "take recording", "take finishing", "dub recording", "loop recording", "len 16b max",
     "seven heads on one slot", "record head", "a long file's start", "a long file's start (high, 300 s)",
