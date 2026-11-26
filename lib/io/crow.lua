@@ -258,12 +258,16 @@ return function(S)
     return {}
   end
 
+  -- The division each running output clock captured when it started.
+  local clock_divisions = {}
+
   -- Stopped through S.lib.clocks (#870): retired, never canceled, while
   -- its resume may be posted; the cleanup step cancels (at_cleanup)
   local function stop_output_clock(n, at_cleanup)
     if state.clocks[n] then
       if at_cleanup then S.lib.clocks.cancel(state.clocks[n]) else S.lib.clocks.stop(state.clocks[n]) end
       state.clocks[n] = nil
+      clock_divisions[n] = nil
     end
   end
 
@@ -271,7 +275,8 @@ return function(S)
   -- of S.lib.clocks, its handle in state.clocks[n]
   local function start_output_clock(n)
     stop_output_clock(n)
-    local beats = SPEC.division_beats[param_value(out_id(n, "div")) or SPEC.division_default]
+    clock_divisions[n] = param_value(out_id(n, "div")) or SPEC.division_default
+    local beats = SPEC.division_beats[clock_divisions[n]]
     state.clocks[n] = S.lib.clocks.run(function(handle)
       while handle.sync(beats) do
         if not norns_output(n) then M.send_now("output[" .. n .. "]()") end
@@ -590,7 +595,11 @@ return function(S)
   S.register_pset_hook({name = "io_crow", read = function()
     for n = 1, SPEC.outputs do
       local key = S.lib.io_keyed.key(out_id(n, "source"))
-      if key ~= state.applied_source[n] then change_source(n, key) end
+      if key ~= state.applied_source[n] then
+        change_source(n, key)
+      elseif clock_divisions[n] and clock_divisions[n] ~= param_value(out_id(n, "div")) then
+        apply_output(n)
+      end
     end
   end})
 
