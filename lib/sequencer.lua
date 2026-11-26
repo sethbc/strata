@@ -1523,16 +1523,17 @@ return function(S)
   -- periods (#1051): the chain periods that passed, 1 but after a late
   -- wake; the place moves on a move a period, and the slot it reaches is
   -- linked once, unless every move was a repeat (those between never load).
-  -- True when it linked
+  -- Returns the last period that linked, or nil when all held the scene.
   local function chain_link(periods)
-    local place, linked = chain.current, false
-    for _ = 1, periods or 1 do
+    local place, last_link = chain.current, nil
+    for period = 1, periods or 1 do
       local slot, move = next_chain_scene(place)
       if not slot then break end
-      place, linked = slot, linked or move ~= "repeat"
+      place = slot
+      if move ~= "repeat" then last_link = period end
     end
-    if linked then load_chain_scene(place) end
-    return linked
+    if last_link then load_chain_scene(place) end
+    return last_link
   end
 
   -- 4b: every bar hook, in the order registered (first: the patterns'
@@ -1554,11 +1555,13 @@ return function(S)
   local function at_beat(beat)
     local linked_at = nil
     if chain.next_beat and beat >= chain.next_beat - SEQ.beat_tolerance then
+      local first_due = chain.next_beat
       local period, periods = params:get("seq_chain_bars") * SEQ.bar_beats, 0
       while beat >= chain.next_beat - SEQ.beat_tolerance do
         chain.next_beat, periods = chain.next_beat + period, periods + 1
       end
-      if chain_link(periods) then linked_at = chain.next_beat - period end
+      local last_link = chain_link(periods)
+      if last_link then linked_at = first_due + (last_link - 1) * period end
     end
     if play.next_bar and beat >= play.next_bar - SEQ.beat_tolerance then
       local bars = 0

@@ -682,6 +682,32 @@ test("a late wake past three chain links plays the linked order's first entry, a
   end), "A", "late: the bars before the link never move the linked order")
 end)
 
+test("a chain move followed by two repeats reaches the same letter after a late wake (#1075)", function()
+  for _, timing in ipairs({"on time", "late"}) do
+    chained_order(function(context, S)
+      params:set("seq_chain_next", 50)
+      local draws, count = {0.25, 0.75, 0.75}, 0  -- next, repeat, repeat
+      local next_slot = S.lib.scenes.next_slot
+      S.lib.scenes.next_slot = function(position, slots, chances)
+        return next_slot(position, slots, chances, function()
+          count = count + 1
+          return draws[count]
+        end)
+      end
+      if timing == "on time" then
+        context.clock.run_for(3 * BAR_SECONDS)
+      else
+        context.clock.advance_until(S.pattern_clocks[1], function() context.set_time(util.time() + 3 * BAR_SECONDS) end)
+        context.clock.run_for(0.01)
+      end
+      assert_equal(count, 3, timing .. ": one draw a period")
+      assert_equal(S.lib.sequencer.chain_place(), 2, timing .. ": scene 2")
+      assert_equal(S.lib.pattern_letters.current(1), "C", timing .. ": third bar of the scene")
+      assert_equal(S.patterns[1][1], LEVEL.C, timing .. ": C's step 1 plays")
+    end)
+  end
+end)
+
 test("a stop clears a wait", function()
   local context, S = setup()
   local letters = S.lib.pattern_letters
