@@ -2899,12 +2899,12 @@ end
 -- area must not change what the tests see); `environment` holds the run's
 -- own assignments
 local RUNNER_CALLER_SETTINGS = "unset STRATA_ENGINE_CHECK_AREAS STRATA_ENGINE_CHECK_ONE_SCLANG && "
-local function runner_command(root, checkout, environment, timeout)
+local function runner_command(root, checkout, environment, timeout, norns_dir)
   local shell_quote = h.shell_quote
   return "cd " .. shell_quote(checkout) .. " && " .. RUNNER_CALLER_SETTINGS,
     environment .. " PATH=" .. shell_quote(root .. "/bin") .. " SCLANG=" .. shell_quote(root .. "/sclang")
     .. " ENGINE_CHECK_TIMEOUT=" .. (timeout or 30) .. " TMPDIR=" .. shell_quote(root)
-    .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(root .. "/norns") .. " 2>&1"
+    .. " STRATA_SC_PORT=57399 /bin/sh test/run_engine_check.sh " .. shell_quote(norns_dir or (root .. "/norns")) .. " 2>&1"
 end
 
 -- The lines of a file, {} when there is none
@@ -3088,7 +3088,7 @@ local function run_fake_runner(name, options)
   local function quoted(file) return shell_quote(root .. "/" .. file) end
   h.write_text(root .. "/sclang", "#!/bin/sh\n" .. table.concat(options.body(root, quoted), "\n") .. "\n")
   os.execute("chmod +x " .. quoted("sclang"))
-  local setup, runner = runner_command(root, options.checkout or repo_root, options.environment or "")
+  local setup, runner = runner_command(root, options.checkout or repo_root, options.environment or "", nil, options.norns_dir)
   local run = setup .. runner .. "; echo exit=$?"
   if options.driver then
     run = setup .. "( " .. runner .. " & runner=$!; echo $runner > " .. quoted("runner.pid") .. "; "
@@ -3101,6 +3101,20 @@ local function run_fake_runner(name, options)
   h.remove_tree(root)
   return output, lines
 end
+
+test("the engine runner resolves a relative norns checkout before starting sclang (#1257)", function()
+  local checkout = runner_checkout("relative-norns")
+  os.execute("mkdir -p " .. h.shell_quote(checkout .. "/norns/sc/core"))
+  for i, norns_dir in ipairs({ checkout .. "/norns", "./norns" }) do
+    local output = run_fake_runner("norns-path-" .. i, { checkout = checkout, norns_dir = norns_dir,
+      environment = "STRATA_ENGINE_CHECK_AREAS=structure", body = function()
+        return { [[core=$(awk '/\/sc\/core$/ { sub(/^ *- /, ""); print }' "$2")]],
+          [[if [ -d "$core" ]; then echo "ENGINE CHECK PASSED"; else echo "FAIL missing $core"; exit 1; fi]] }
+      end })
+    assert_true(output:find("exit=0", 1, true), output)
+  end
+  h.remove_tree(checkout)
+end)
 
 -- The fake sclang records its areas (calls.txt) and whether two ran at
 -- once, and passes, or fails when its areas are `failing`
@@ -3830,6 +3844,20 @@ test("the Docker runner checks the log for failures even at status zero (#1193)"
     assert_true(output:find("exit=" .. case.status .. "\n", 1, true) ~= nil, case.line .. " exit status: " .. output)
   end
   h.remove_tree(root)
+end)
+
+test("the native engine runner requires a whole pass line and no failure diagnostics (#1255)", function()
+  for _, case in ipairs({
+    { "clean", "ok   a check", "ENGINE CHECK PASSED", 0 },
+    { "fail", "FAIL waveform: a 300 s load", "ENGINE CHECK PASSED", 1 },
+    { "startup", "ENGINE CHECK FAILED: JACK did not start", "ENGINE CHECK PASSED", 1 },
+    { "quoted", "ok   a check", "ok   expected ENGINE CHECK PASSED", 1 },
+  }) do
+    local output = run_fake_runner("verdict-" .. case[1], { environment = "STRATA_ENGINE_CHECK_ONE_SCLANG=1", body = function()
+      return { "echo " .. h.shell_quote(case[2]), "echo " .. h.shell_quote(case[3]) }
+    end })
+    assert_true(output:find("exit=" .. case[4] .. "\n", 1, true), output)
+  end
 end)
 
 test("the engine check runner surfaces a collector count error when sclang survives (#1082)", function()
