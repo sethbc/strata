@@ -1540,13 +1540,15 @@ return function(S)
   -- was written takes its default), encode as S.scenes (the file deleted,
   -- copied without the PSET or saved over elsewhere makes the mark stale,
   -- #766)
-  local function mark_holds_live()
+  local function mark_holds_live(snapshot)
     local mark = S.scene_file.pset
     if mark == nil then return false end
-    local held = S.lib.data_files.read(mark .. PSET_SCENES.side_suffix)
+    local validated = snapshot and snapshot.value
+    local held = S.lib.data_files.read(mark .. PSET_SCENES.side_suffix, snapshot)
     local data_files = S.lib.data_files
     return type(held) == "table" and held.version == SCENE_DATA_VERSION and type(held.scenes) == "table"
-      and scenes_problem(held.scenes) == nil and data_files.encode(held.scenes) == data_files.encode(S.scenes)
+      and (held == validated or scenes_problem(held.scenes) == nil)
+      and data_files.encode(held.scenes) == data_files.encode(S.scenes)
   end
 
   -- Before a PSET load replaces them: live scenes no PSET holds (no mark,
@@ -1554,8 +1556,8 @@ return function(S)
   -- named slot) are written to the live file, which is then set aside as a
   -- backup (scenes.data.bak, ...). True when nothing needed keeping or it
   -- was kept; else false and why
-  local function back_up_live()
-    if mark_holds_live() then return true end
+  local function back_up_live(snapshot)
+    if mark_holds_live(snapshot) then return true end
     S.scene_file.pset = nil
     local holds = false
     for i = 1, NUM_SCENES do
@@ -1581,7 +1583,7 @@ return function(S)
   -- the live file is rewritten naming the PSET. Nothing is recalled: the
   -- sound is the PSET's params. A silent read (params:read's) prints no
   -- scenes loaded line; a refusal's line and flash still show
-  local function load_pset_scenes(scene_table, path, silent)
+  local function load_pset_scenes(scene_table, path, silent, snapshot)
     local path_base = path:sub(1, #path - #PSET_SCENES.side_suffix)
     -- the read set its sound already: a running fade ends where it is,
     -- whatever the file holds, so no later step or landing of it puts the
@@ -1609,7 +1611,7 @@ return function(S)
       request_redraw()
       return
     end
-    local kept, why = back_up_live()
+    local kept, why = back_up_live(snapshot)
     if not kept then
       print("scenes from " .. path .. " not loaded: the scenes in no PSET could not be kept (" .. why
         .. "); the live scenes stay")
@@ -1628,6 +1630,9 @@ return function(S)
     key = "scenes", live_file = "scenes.data", side_suffix = PSET_SCENES.side_suffix,
     backup_suffix = PSET_SCENES.backup_suffix,
     capture = function() return S.scenes end, validate = scenes_problem, load = load_pset_scenes,
+    rechecks = function(path)
+      return S.scene_file.pset ~= nil and path == S.scene_file.pset .. PSET_SCENES.side_suffix
+    end,
   })
   -- A silent PSET read skips the switch's action. Once its scenes are
   -- loaded, take only the missing start or stop so a running hold keeps

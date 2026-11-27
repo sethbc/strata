@@ -372,7 +372,10 @@ return function(S)
 
   -- Only ENOENT means a missing file. Other open errors, like a read or
   -- decode failure, must reach the caller's unreadable-file handling.
-  local function read_value(path)
+  -- A caller that must recheck the same file during one operation can pass
+  -- an empty snapshot, then pass it again. Both reads check the file and
+  -- the size cap; only identical bytes reuse the first decoded table.
+  local function read_value(path, snapshot)
     local file, open_error, errno = io.open(path, "rb")
     if not file then
       if errno == ENOENT then return nil, "missing" end
@@ -387,12 +390,16 @@ return function(S)
     local text = file:read("*a")
     file:close()
     if type(text) ~= "string" then return nil, "unreadable", "cannot be read" end
+    if snapshot and snapshot.path == path and snapshot.text == text then return snapshot.value end
     local value, problem = M.decode(text)
     if value == nil then return nil, "unreadable", problem end
+    if snapshot and not snapshot.path then
+      snapshot.path, snapshot.text, snapshot.value = path, text, value
+    end
     return value
   end
-  function M.read(path)
-    local value, problem, why = read_value(path)
+  function M.read(path, snapshot)
+    local value, problem, why = read_value(path, snapshot)
     note_read(path, problem)
     return value, problem, why
   end
