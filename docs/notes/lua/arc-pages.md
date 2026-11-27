@@ -65,7 +65,7 @@ FX (`arc_fx_delta`/`arc_fx_redraw`, with ALT `arc_fx_alt_delta`/`arc_fx_alt_redr
 
 IO (`ARC_IO_RINGS`, `{param_id}` per ring; 3.6):
 - ring 1 `tapeloop_level`, ring 2 `tapeloop_rate`, ring 3 `tapeloop_feedback`, ring 4 `tapeloop_wear`, through `arc_sweep_param`;
-- each drawn at level 12 (`ARC_IO_LEVEL`) to `param_fraction(param_id)`. The tape's senders ignore a ring turn while the tape is off (the param still moves).
+- each drawn through `arc_ring_fill_param` at level 12. Tape speed fills clockwise for forward and counterclockwise for reverse. At zero only LED 1 lights, at level 3. The tape's senders ignore a ring turn while the tape is off (the param still moves).
 
 LFO:
 - Rings 1-3 (`ARC_LFO.depth_rings`): the depths (`strata_lfo<n>_depth`) of the LFO page's window of three, `S.lib.lfos.window(S.selected_lfo)` + ring - 1 (LFOs 1-3 with LFO 1 or 2 selected, 4-6 with 5 or 6), in whole percents. `arc_whole_steps("lfo:<ring>", ...)` accumulates `ARC_LFO.ticks_per_percent` = 10 ticks per percent per ring, keeping the remainder, so the one-percent control never holds a fraction.

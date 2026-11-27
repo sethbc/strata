@@ -25,7 +25,7 @@ return function(S)
 
   local function arc_io_redraw(arc_port)
     for n, ring in ipairs(ARC_IO_RINGS) do
-      arc_ring_fill(arc_port, n, param_fraction(ring.param_id), ARC_IO_LEVEL)
+      arc_ring_fill_param(arc_port, n, ring.param_id, ARC_IO_LEVEL)
     end
   end
 
