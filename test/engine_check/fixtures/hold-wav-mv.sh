@@ -19,7 +19,10 @@ early=no
 case $dest in */held-ack.wav) /bin/mv "$@" || exit $?; early=yes ;; esac
 touch "$dest.barrier/in.$$"
 i=0
-while [ ! -e "$dest.release" ] && [ "$i" -lt 1000 ]; do
+# The restart fixture boots another sclang before releasing its predecessor.
+limit=1000
+case $dest in */held-restart.wav) limit=8000 ;; esac
+while [ ! -e "$dest.release" ] && [ "$i" -lt "$limit" ]; do
   sleep 0.01
   i=$((i+1))
 done

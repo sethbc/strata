@@ -302,6 +302,14 @@ var checkSaveOntoFolder = {
 };
 var tempFilesBefore = tempFloatFiles.value;
 
+if (thisProcess.platform.name == \linux) {
+    var status, script = h.testDir +/+ "engine_check/fixtures/save-restart.py";
+    ("python3 " ++ script.shellQuote ++ " " ++ File.realpath("/proc/self/exe").shellQuote
+        ++ " " ++ (scratchRoot +/+ "restart").shellQuote).unixCmd({ arg code; status = code });
+    check.(waitFor.({ status.notNil }, 105) and: { status == 0 },
+        "files: after an abrupt sclang restart, every stereo frame survives the old fallback's rename attempt");
+};
+
 check.(engine.tryPerform(\bufferSaveResultValue, 3, 2, true) == (((2 * 2) + 1) * engine.numBuffers + 3).asFloat
     and: { engine.tryPerform(\bufferSaveResultValue, 0, 1, false) == (2 * engine.numBuffers).asFloat },
     "bufferSaveResultValue is (save * 2 + failed) * numBuffers + slot index, a float");
