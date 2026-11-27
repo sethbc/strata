@@ -117,17 +117,14 @@
         if (channel.notNil and: { this.envChannelUnwritten(channel) }) { this.zeroFastModChannels(channel, 1) };
     }
 
-    // setFastEnv: the route's node made if it has none; else set (a
-    // releasing one re-gated) with its new channel and shape, its old
-    // channel zeroed in the same bundle unless another envelope node writes
-    // it. Never more than one node per route: the one def needs no
-    // replacement, and a node whose release ended as it was re-gated is
-    // started again when its end reaches sclang (fastEnvEnded)
+    // Edits keep the active segment of a route from the same source.
+    // A new source gets a fresh generator, including when the old node
+    // is releasing. Only the source's own hits (or its loop) start it.
     setFastEnv { arg route, source, voice, destination, depth, attack, decay, sustain, release, curve, loop;
         var state = areaState[\envelopes], place = state[\routes][route], channel = this.fastModChannel(voice, 0, destination);
         var controls = [\out, channel, \depth, depth, \attack, attack, \decay, decay, \sustain, sustain, \release, release,
             \curve, curve, \loop, loop];
-        var oldChannel;
+        var oldChannel, sourceChanged;
         if (state[\stopped] or: { this.pastStop }) { ^this };
         if (place.isNil) {
             place = (source: source, channel: channel, controls: controls, running: true);
@@ -136,10 +133,23 @@
             ^this
         };
         oldChannel = place[\channel];
+        sourceChanged = place[\source] != source;
         place[\source] = source;
         place[\channel] = channel;
         place[\controls] = controls;
         place[\running] = true;
+        if (sourceChanged) {
+            context.server.makeBundle(nil, {
+                var old = place[\synth];
+                this.sendToSynth(old.freeMsg);
+                state[\nodeChannels].removeAt(old);
+                place[\synth] = this.areaCall(\startFastEnv, route, place);
+                if ((oldChannel != channel) and: { this.envChannelUnwritten(oldChannel) }) {
+                    this.zeroFastModChannels(oldChannel, 1);
+                };
+            });
+            ^this
+        };
         state[\nodeChannels][place[\synth]] = channel;
         this.sendToSynth(*([place[\synth].setMsg(\gate, 1, *controls)]
             ++ (if ((oldChannel != channel) and: { this.envChannelUnwritten(oldChannel) }) { [['/c_fill', oldChannel, 1, 0]] } { [] })));

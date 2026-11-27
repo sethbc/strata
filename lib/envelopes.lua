@@ -77,46 +77,58 @@ return function(S)
     return from + (to - from) * (1 - math.exp(curve * x)) / (1 - math.exp(curve))
   end
 
-  -- The level `elapsed` s after a hit that held `hold` s and found the
-  -- envelope at `from`: the attack from `from` to 1, the decay to the
-  -- sustain, the sustain for the hold, the release to 0; with sustain 0 the
-  -- hold and the release take no time. Loop on: from its end it starts
-  -- again from 0, the same shape and hold (the engine keeps the hit's hold
-  -- for every cycle). Pure
-  function M.shape(set, elapsed, hold, from)
-    from = from or 0
-    elapsed = math.max(elapsed or 0, 0)
-    local held = set.sustain > 0
-    local hold_time = held and math.max(hold or 0, 0) or 0
-    local release_time = held and set.release or 0
-    local total = set.attack + set.decay + hold_time + release_time
-    if set.loop and total > 0 and elapsed >= total then elapsed, from = elapsed % total, 0 end
-    local curve = set.curve
-    if elapsed < set.attack then return slope(from, 1, elapsed, set.attack, curve) end
-    elapsed = elapsed - set.attack
-    if elapsed < set.decay then return slope(1, set.sustain, elapsed, set.decay, curve) end
-    elapsed = elapsed - set.decay
-    if elapsed < hold_time then return set.sustain end
-    elapsed = elapsed - hold_time
-    if elapsed < release_time then return slope(set.sustain, 0, elapsed, release_time, curve) end
+  -- EnvGen takes a segment's destination, duration and curve when entering
+  -- it. Edits during the segment take effect at the next boundary (#1233).
+  local function latch(hit, segment, start, target, duration, curve)
+    hit.segment, hit.started = segment, start
+    hit.from, hit.target, hit.duration, hit.curve = hit.target, target, duration, curve
+  end
+
+  local function start_hit(set, now, from, hold)
+    local hit = {target = from, hold = hold, time = now}
+    latch(hit, "attack", now, 1, set.attack, set.curve)
+    return hit
+  end
+
+  local function advance(hit, set, now)
+    while not hit.ended do
+      local boundary = hit.started + hit.duration
+      if now < boundary then
+        return slope(hit.from, hit.target, now - hit.started, hit.duration, hit.curve)
+      end
+      if hit.segment == "attack" then
+        latch(hit, "decay", boundary, set.sustain, set.decay, set.curve)
+      elseif hit.segment == "decay" then
+        latch(hit, "hold", boundary, set.sustain, set.sustain > 0 and hit.hold or 0, set.curve)
+      elseif hit.segment == "hold" then
+        latch(hit, "release", boundary, 0, set.sustain > 0 and set.release or 0, set.curve)
+      elseif set.loop then
+        -- Every edit advances the old settings first. Whole cycles after
+        -- this boundary therefore share one shape, even after a long sleep.
+        local cycle = set.attack + set.decay + (set.sustain > 0 and (hit.hold + set.release) or 0)
+        if cycle <= 0 then hit.ended = true; return 0 end
+        hit.time = boundary + math.floor((now - boundary) / cycle) * cycle
+        latch(hit, "attack", hit.time, 1, set.attack, set.curve)
+      else
+        hit.ended = true
+      end
+    end
     return 0
   end
 
-  ---------------------------------------------------------------------------
-  -- The model: each voice's last hit
-  ---------------------------------------------------------------------------
+  -- Pure shape for a run whose settings stay fixed. The live model moves
+  -- the same segments forward in place and allocates nothing on a step.
+  function M.shape(set, elapsed, hold, from)
+    return advance(start_hit(set, 0, from or 0, math.max(hold or 0, 0)), set, math.max(elapsed or 0, 0))
+  end
 
-  -- Per voice: nil before its first hit, else {time, from, hold, ended}:
-  -- ended is set once its run (the loop off) is over at the settings then
-  -- (retire, #969), and the hit reads 0 until the next, as the engine's
-  -- done EnvGen holds its end
   local hits = {}
 
   function M.value(voice_idx)
     if not valid(voice_idx) then return 0 end
     local hit = hits[voice_idx]
     if not hit or hit.ended then return 0 end
-    return util.clamp(M.shape(settings(voice_idx), util.time() - hit.time, hit.hold, hit.from), 0, 1)
+    return util.clamp(advance(hit, settings(voice_idx), util.time()), 0, 1)
   end
 
   -- A hit's hold: its gate length when the caller knows it (a gated
@@ -136,49 +148,16 @@ return function(S)
   -- retrigger, a played extra note's start; a chord step is one)
   S.register_voice_hit({name = "envelopes", hit = function(voice_idx, info)
     if not valid(voice_idx) then return end
-    hits[voice_idx] = {time = util.time(), from = M.value(voice_idx), hold = hold_for(voice_idx, info)}
+    local from = M.value(voice_idx)
+    hits[voice_idx] = start_hit(settings(voice_idx), util.time(), from, hold_for(voice_idx, info))
   end})
 
-  -- How long voice v's last hit runs before it ends, loop aside
-  local function run_time(set, hit)
-    local held = set.sustain > 0
-    return set.attack + set.decay + (held and (math.max(hit.hold, 0) + set.release) or 0)
-  end
-
-  -- Voice v's hit marked ended when its run (the loop off) is over at the
-  -- settings stored now (#969). Every envelope param's action calls it
-  -- before the new value is stored, and the stored settings change only
-  -- there (a silent set stores nothing: the model reads the stored values),
-  -- so a run that ended under the settings it ran with stays ended
-  local function retire(voice_idx)
-    local hit = hits[voice_idx]
-    if not hit or hit.ended then return end
-    local set = settings(voice_idx)
-    if not set.loop and util.time() - hit.time >= run_time(set, hit) then hit.ended = true end
-  end
-
-  -- Whether each voice's loop is on, as its param's action last set it
-  local looping = {}
-
-  -- The loop turned on or off (the env_loop action; a set to the value it
-  -- has changes nothing). On: an envelope that is not running (no hit, or
-  -- its last one has ended) starts at once from 0, as the engine's does; a
-  -- running one runs on and then loops. Off: a looping envelope finishes
-  -- the cycle it is in, as the engine's does (EnvGen runs its segments to
-  -- their end), so its hit moves to that cycle's start, from 0 with the
-  -- same hold; in its first cycle the hit itself runs on
+  -- When loop turns off, the current cycle simply finishes. Turning it on
+  -- starts an idle envelope from zero, or repeats the current run at its end.
   local function loop_changed(voice_idx, on)
-    local was = looping[voice_idx] == true
-    looping[voice_idx] = on
-    if on == was then return end
-    local hit, now = hits[voice_idx], util.time()
-    local total = hit and run_time(settings(voice_idx), hit)
-    if on then
-      if hit and not hit.ended and now - hit.time < total then return end
-      hits[voice_idx] = {time = now, from = 0, hold = 0}
-    elseif hit and total > 0 and now - hit.time >= total then
-      local cycles = math.floor((now - hit.time) / total)
-      hits[voice_idx] = {time = hit.time + cycles * total, from = 0, hold = hit.hold}
+    local hit = hits[voice_idx]
+    if on and (not hit or hit.ended) then
+      hits[voice_idx] = start_hit(settings(voice_idx), util.time(), 0, 0)
     end
   end
 
@@ -341,12 +320,12 @@ return function(S)
           changed()
         end
         add(voice_idx, record, key, param)
-        -- the action add_voice_param made stores the value first: an ended
-        -- run is marked at the settings it ran with, before the store (#969)
+        -- Cross any elapsed boundaries with the settings in force then,
+        -- before add_voice_param stores the edit (#969, #1233).
         local added = params:lookup_param("v" .. voice_idx .. "_" .. key)
         local store = added.action
         added.action = function(value)
-          retire(voice_idx)
+          M.value(voice_idx)
           store(value)
         end
       end

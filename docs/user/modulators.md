@@ -58,6 +58,8 @@ Each voice has one envelope, **EN1** to **EN7**, fired by that voice's own hits:
 - A new hit starts the attack from the level the envelope is at, so quick hits never jump down to 0.
 - With the loop off, an envelope that has ended stays at 0 until its next hit: lengthening its times after it ended, by hand, from a scene or from a PSET, does not bring it back.
 
+Each stage takes its time, target level and curve when it starts. For example, changing attack during a note changes the next attack. Changing a fast routing’s envelope source ends the previous source’s tail on that routing.
+
 The envelope goes from 0 to 1: a routing's depth sets how far and in which direction it moves its destination.
 
 ### Fast and slow destinations

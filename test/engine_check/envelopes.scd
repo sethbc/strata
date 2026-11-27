@@ -22,7 +22,7 @@ var routes = 16;
 var nodeCounts, groupNodes, envNodes, channel, channelBus, readChannel, readAll, placeSynth, setEnv;
 var resetEnvelopes, withOffsetsPaused, tracker, sampleHit, gateVoice, restoreVoices;
 var checkState, checkCommands, checkPlaces, checkHits, checkShape, checkUngated, checkSustainZero, checkFromLevel;
-var checkLoop, checkDepth, checkSeries, checkZeroing, checkIgnored, checkLeft;
+var checkEdit, checkSourceChange, checkLoop, checkDepth, checkSeries, checkZeroing, checkIgnored, checkLeft;
 
 // [synths, groups] on the server, from one /status reply
 nodeCounts = {
@@ -246,6 +246,47 @@ checkShape = {
             times[0], times[1], times[2], times[3], values.round(0.001), linearExpected, linearTimes, linear.round(0.001)));
     restoreVoices.value;
     resetEnvelopes.value;
+};
+
+// The same checkpoints as the Lua model's mid-attack edit, timed on the server.
+checkEdit = {
+    var sampler = tracker.(\strataCheckEnvSampler, 4, 1, 8, [\times, [0.75, 1.75] ++ (0 ! 6)]), values;
+    setEnv.(0, 4, 4, 1, attack: 1.0, decay: 0.1, sustain: 0, curve: 0);
+    server.sync;
+    server.makeBundle(0.1, { command.(\retrigger, 4, 1.0); sampler[0].set(\t_start, 1) });
+    server.makeBundle(0.6, { setEnv.(0, 4, 4, 1, attack: 8.0, decay: 0.1, sustain: 0, curve: 0) });
+    server.makeBundle(1.35, { command.(\retrigger, 4, 1.0) });
+    1.95.wait; server.sync;
+    values = h.readBus(sampler[1]).keep(2);
+    check.(((values[0] - 0.75).abs < 0.02) and: { (values[1] - 0.0625).abs < 0.01 },
+        "envelopes: editing the attack mid-hit leaves its segment running; the next hit takes the new attack (levels %)".format(values));
+    sampler[0].free; sampler[1].free;
+    resetEnvelopes.value;
+};
+
+checkSourceChange = {
+    var set = { arg route, source; setEnv.(route, source, 4, route, attack: 0.01, decay: 5.0, sustain: 0, curve: 0) };
+    [false, true].do({ arg releasing;
+        var before, after, control, fired, nodes;
+        set.(0, 2);
+        server.sync;
+        command.(\retrigger, 2, 1.0);
+        0.08.wait; server.sync;
+        before = readChannel.(4, 0);
+        server.makeBundle(nil, {
+            if (releasing) { command.(\stopFastEnv, 0) };
+            set.(0, 3); set.(1, 3);
+        });
+        0.08.wait; server.sync;
+        after = readChannel.(4, 0); control = readChannel.(4, 1);
+        command.(\retrigger, 3, 1.0);
+        0.08.wait; server.sync;
+        fired = readChannel.(4, 0); nodes = envNodes.value.size;
+        check.((before > 0.5) and: { after == 0 } and: { control == 0 } and: { fired > 0.5 } and: { nodes == 2 },
+            "envelopes: changing a route's source drops the old tail and takes the new source's hits (releasing %, before %, after %, fresh %, hit %, nodes %)"
+                .format(releasing, before, after, control, fired, nodes));
+        resetEnvelopes.value;
+    });
 };
 
 // A voice that is not gated holds nothing, whatever its gateSeconds: the
@@ -507,6 +548,8 @@ if (area.isNil or: { state.isNil }) {
     checkPlaces.value;
     checkHits.value;
     checkShape.value;
+    checkEdit.value;
+    checkSourceChange.value;
     checkUngated.value;
     checkSustainZero.value;
     checkFromLevel.value;

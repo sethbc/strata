@@ -108,6 +108,36 @@ test("the modulation model's compare names where the engine differs from what th
   assert_true(contains(problems, "route 8"), "the route is named: " .. table.concat(problems, "; "))
 end)
 
+test("the modulation walk distinguishes a latched segment from a revived envelope", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local model = require("modulation_model").new(S.constants, h.engine_spec)
+  local calls, call = call_list()
+  context.set_time(100)
+  params:set("v3_env_attack", 2)
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  call("retrigger", 2, 1)
+  model:feed(calls)
+  context.set_time(101)
+  params:set("v3_env_attack", 0.01)
+  local problems = {}
+  model:compare_envelopes(S, problems)
+  assert_equal(#problems, 0, "the attack that started at the old time still runs")
+  context.set_time(103)
+  model:compare_envelopes(S, problems)
+  assert_true(model.ended[3], "the level reached zero after its run")
+  S.lib.envelopes.value = function() return 0.25 end
+  model:compare_envelopes(S, problems)
+  assert_true(contains(problems, "ended and runs again"), "a later rise without a hit is a failure")
+  call("retrigger", 2, 1)
+  model:feed(calls)
+  context.set_time(140)
+  problems = {}
+  model:compare_envelopes(S, problems)
+  assert_true(#problems > 0, "a non-looping envelope above zero past every possible duration fails")
+end)
+
 -- The guards are the engine's own numbers (h.engine_spec, read from its
 -- source): a note slot is ignored past fastModNoteSlots - 1, not past 0
 test("the modulation model guards a channel's note slot by the engine's fastModNoteSlots", function()
