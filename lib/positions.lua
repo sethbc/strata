@@ -765,21 +765,30 @@ return function(S)
     return LEVELS.slice
   end
 
-  -- The LED level of cell `cell` of a voice's row of `cells` cells (0 for a
-  -- voice that is not a buffer voice, or whose slot is empty); a slice
-  -- row's at the port's bank
-  function M.grid_level(voice_idx, cell, cells, port)
-    if not valid_voice(voice_idx) or type(cells) ~= "number" or cells < 1 or cells % 1 ~= 0 then return 0 end
-    if type(cell) ~= "number" or cell < 1 or cell > cells or cell % 1 ~= 0 then return 0 end
-    if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then return slice_level(slice_context(voice_idx, port), cell) end
-    local context = row_context(voice_idx, cells)
-    if not context then return 0 end
-    -- the cell a waiting jump or loop was pressed on blinks once its key
-    -- is up (#876; held, it shows the hold)
-    if M.waiting_cell(voice_idx) == cell and not context.held_cells[cell] then
-      return S.lib.grid_core.waiting_level()
+  local function dark_cell() return 0 end
+
+  -- Read the head, held keys and slice bank once for this row's redraw.
+  -- The returned reader is used synchronously for cells 1..cells.
+  function M.row_levels(voice_idx, cells, port)
+    if not valid_voice(voice_idx) or type(cells) ~= "number" or cells < 1 or cells % 1 ~= 0 then return dark_cell end
+    if cells == SLICE_ROW.bank_size and M.slice_row(voice_idx) then
+      local context = slice_context(voice_idx, port)
+      return function(cell) return slice_level(context, cell) end
     end
-    return cell_level(context, cell)
+    local context = row_context(voice_idx, cells)
+    if not context then return dark_cell end
+    local waiting = M.waiting_cell(voice_idx)
+    local blink = waiting and S.lib.grid_core.waiting_level()
+    return function(cell)
+      if cell == waiting and not context.held_cells[cell] then return blink end
+      return cell_level(context, cell)
+    end
+  end
+
+  -- Read a single cell outside a page redraw.
+  function M.grid_level(voice_idx, cell, cells, port)
+    if type(cells) ~= "number" or type(cell) ~= "number" or cell < 1 or cell > cells or cell % 1 ~= 0 then return 0 end
+    return M.row_levels(voice_idx, cells, port)(cell)
   end
 
   -- The LED level of one of a voice's strip keys (1-4, "store", "hold",

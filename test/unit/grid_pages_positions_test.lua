@@ -1009,15 +1009,19 @@ test("a freeze wait with no pane on voices repaints no grid", function()
 end)
 
 -- #1094: real grid events, slice regions and allocator records.
-local function slice_panes()
-  local context = load_strata(); finish_startup(context)
-  local S = buffer_voices(context)
+local function make_slices(S, count)
   assert_true(S.lib.samples.set(1, "frames", 16 * 48000))
   assert_true(S.lib.samples.set(1, "rate", 48000))
   assert_true(S.lib.samples.set(1, "mode", 2))
-  assert_true(S.lib.samples.set(1, "count", 32))
+  assert_true(S.lib.samples.set(1, "count", count))
   assert_true(S.lib.slices.make(1))
   params:set("v1_slices", 3)
+end
+
+local function slice_panes()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  make_slices(S, 32)
   params:set("v1_note_cap", 3)
   context.clock.run_for(0.1) -- let the buffer bind settle before playing
   local top = grid_pane(context, "256 top")
@@ -1036,6 +1040,49 @@ end
 local function playing(S)
   return table.concat(S.lib.slices.playing(1), ",")
 end
+
+test("a Positions frame reads each row once and paints its port and half", function()
+  local context = load_strata(); finish_startup(context)
+  local S = buffer_voices(context)
+  make_slices(S, 20)
+  params:set("v4_source", 3)  -- empty slot 2
+  for _, v in ipairs({2, 3}) do
+    params:set("v" .. v .. "_buf_pos", 0.5)
+    params:set("v" .. v .. "_buf_scan", 0)
+  end
+  context.clock.run_for(0.1)
+  local page = S.constants.GRID_PAGES.positions
+  local wide = grid_pane(context, "128h")
+  wide.show(page, 2); wide.tap(2, 1); wide.show(page) -- show slices 17 to 20
+  local half = grid_pane(context, "64 right", {port = 2})
+  half.show(page); half.press(10, 1, 1) -- play slice 10 in bank 1
+  params:set("quantize_actions", 3)
+  wide.tap(12, 3)      -- a released jump still waits
+  wide.press(11, 2, 1) -- a held jump overrides the waiting blink
+
+  local reads, slices = 0, 0
+  local position, playing = S.lib.playheads.position, S.lib.slices.playing
+  S.lib.playheads.position = function(v) reads = reads + 1; return position(v) end
+  S.lib.slices.playing = function(v) slices = slices + 1; return playing(v) end
+  grid_redraw()
+  S.lib.playheads.position, S.lib.slices.playing = position, playing
+
+  local blink = S.lib.grid_core.waiting_level()
+  for _, pane in ipairs({wide, half}) do
+    local first, last = shown_columns(pane)
+    for x = first, last do
+      local slice = pane == wide and (x <= 4 and 9 or 0) or (x == 10 and 15 or 9)
+      assert_equal(pane.led(x, 1), slice, "slice at column " .. x)
+      assert_equal(pane.led(x, 2), x == 9 and 15 or x == 11 and 11 or 4, "held jump at " .. x)
+      assert_equal(pane.led(x, 3), x == 9 and 15 or x == 12 and blink or 4, "waiting jump at " .. x)
+      for v = 4, 7 do assert_equal(pane.led(x, v), 0, "empty slot or synth on row " .. v) end
+    end
+  end
+  assert_equal(reads, 4, "two waveform rows on two panes")
+  assert_equal(slices, 2, "one slice row on each pane")
+  half.press(10, 1, 0)
+  wide.press(11, 2, 0)
+end)
 
 for _, bottom_first in ipairs({false, true}) do
   local order = bottom_first and "bottom first" or "top first"
