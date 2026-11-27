@@ -1,0 +1,53 @@
+return function(h)
+  local function fresh()
+    local c=h.load_strata()
+    h.finish_startup(c)
+    return c,h.local_value("S")
+  end
+  for _,silent in ipairs({false,true}) do
+    for _,mode in ipairs({0,1}) do
+      h.test("PSET reload scene transport "..mode.." silent="..tostring(silent),function()
+        local c,S=fresh()
+        local path=c.data_dir.."strata-01.pset"
+        params:set("scene_sequencer_enabled",mode)
+        params:write(path,"transport")
+        params:set("scene_sequencer_enabled",1-mode)
+        params:read(path,silent)
+        print("SCENE",mode,silent,params:get("scene_sequencer_enabled"),S.scene_sequencer_enabled,S.scene_sequencer_clock~=nil)
+        h.assert_equal(S.scene_sequencer_enabled,mode==1)
+      end)
+      h.test("PSET reload chain "..mode.." silent="..tostring(silent),function()
+        local c,S=fresh()
+        local path=c.data_dir.."strata-01.pset"
+        capture_scene(1)
+        params:set("seq_chain_bars",1)
+        params:set("seq_chain",mode)
+        params:write(path,"chain")
+        params:set("seq_chain",1-mode)
+        pattern_clock_start()
+        params:read(path,silent)
+        c.clock.run_for(2.1)
+        local slot,bars=S.lib.sequencer.chain_place()
+        print("CHAIN",mode,silent,params:get("seq_chain"),slot,bars)
+        h.assert_equal(bars~=nil,mode==1)
+      end)
+    end
+    h.test("division clocks at silent="..tostring(silent),function()
+      local c,S=fresh()
+      local path=c.data_dir.."strata-01.pset"
+      local function index(s)
+        for i,v in ipairs(S.constants.DIVISIONS.names) do if v==s then return i end end
+      end
+      params:set("rseq1_clock",index("1 bar"))
+      params:write(path,"clock")
+      params:set("rseq1_clock",index("1/4"))
+      clock.set_beat(8.5)
+      c.clock.advance_until(S.lfo_clock)
+      local before=S.lib.random_sequences.position(1)
+      params:read(path,silent)
+      c.clock.advance_until(S.lfo_clock)
+      print("RSEQ",silent,before,S.lib.random_sequences.position(1))
+      h.assert_equal(S.lib.random_sequences.position(1),before)
+    end)
+  end
+end

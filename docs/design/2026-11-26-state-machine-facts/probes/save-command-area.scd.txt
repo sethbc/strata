@@ -1,0 +1,52 @@
+{ arg h;
+    var e = h.engine, path, frames, n, expectedOld, expectedNew, checkCase, readFrames;
+    readFrames = {
+        var f = SoundFile.openRead(path), result;
+        if (f.notNil) { result = f.numFrames; f.close };
+        result
+    };
+    h.command(\loadBuffer, 0, h.stereoPath, 0); h.awaitLoad(0);
+    frames = e.bufferFrames[0];
+    h.check(frames == 11025, "probe source loads through loadBuffer");
+    path = h.tempDir +/+ "healthy.wav";
+    n = h.pollValues(\bufferSaveResult).size;
+    h.command(\saveBuffer, 0, path, 0, 1);
+    h.waitFor({ h.pollValues(\bufferSaveResult).size > n });
+    h.check(readFrames.value == frames, "control: healthy mover saves the expected stereo WAV");
+    e.stopPeaksMover;
+    "PATH".setenv("STRATA_SAVE_PROBE_BIN".getenv ++ ":" ++ "PATH".getenv);
+    checkCase = { arg label, holdPastDeadline;
+        var landed, block, final, observation, calls;
+        path = h.tempDir +/+ (label ++ ".wav");
+        "STRATA_SAVE_PROBE_PATH".setenv(path);
+        n = h.pollValues(\bufferSaveResult).size;
+        h.command(\saveBuffer, 0, path, 0, 1);
+        expectedOld = e.bufferSaveResultValue(0, e.bufferSaves[0], false);
+        block = h.waitFor({ File.exists(path ++ ".first-mv") }, 3);
+        h.check(block, label ++ ": first OS rename reached the barrier");
+        h.command(\saveBuffer, 0, path, 0, 0.5);
+        expectedNew = e.bufferSaveResultValue(0, e.bufferSaves[0], false);
+        if (holdPastDeadline) {
+            h.waitFor({ h.pollValues(\bufferSaveResult).includes(expectedNew) }, 5);
+            observation = readFrames.value;
+        } {
+            0.1.wait;
+            observation = File.exists(path);
+        };
+        File.use(path ++ ".release","w",{arg f; f.write("release")});
+        h.waitFor({ h.pollValues(\bufferSaveResult).includes(expectedNew) and: { h.pollValues(\bufferSaveResult).includes(expectedOld) } }, 5);
+        calls = h.pollValues(\bufferSaveResult).copyToEnd(n).asArray;
+        final = readFrames.value;
+        ("WAV_COMMAND_PROBE " ++ label ++ " while old blocked %, final frames %, polls %, wanted old %, wanted new %")
+            .format(observation,final,calls,expectedOld,expectedNew).postln;
+        if (holdPastDeadline) {
+            h.check((observation == ((frames * 0.5).round.asInteger)) and: { final == frames } and: { calls == [expectedNew,expectedOld] },
+                "late rename replaced a confirmed newer WAV with the confirmed older WAV (while blocked %, final %, reports %)".format(observation,final,calls))
+        } {
+            h.check(observation == false and: { final == ((frames * 0.5).round.asInteger) } and: { calls == [expectedOld,expectedNew] },
+                "control: admitted older rename ends before deadline, latest WAV wins (while blocked %, final %, reports %)".format(observation,final,calls))
+        }
+    };
+    checkCase.("released-before-deadline", false);
+    checkCase.("released-after-new-report", true);
+}

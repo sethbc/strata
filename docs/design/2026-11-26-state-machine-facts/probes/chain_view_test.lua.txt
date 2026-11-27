@@ -1,0 +1,16 @@
+return function(h)
+  for _,cycled in ipairs({false,true}) do
+    h.test("empty range display while already linked, switch cycled="..tostring(cycled),function()
+      local c=h.load_strata();h.finish_startup(c)
+      local S=h.local_value("S")
+      capture_scene(1)
+      params:set("seq_chain_from",1); params:set("seq_chain_scenes",1); params:set("seq_chain_bars",1)
+      params:set("seq_chain",1); pattern_clock_start()
+      params:set("seq_chain_from",2)
+      if cycled then params:set("seq_chain",0); params:set("seq_chain",1) end
+      c.clock.run_for(2.1)
+      h.assert_equal(#S.lib.scenes.playable_slots(2,1),0)
+      h.assert_equal(S.lib.pages_seq.status_text(),"chain [none]")
+    end)
+  end
+end

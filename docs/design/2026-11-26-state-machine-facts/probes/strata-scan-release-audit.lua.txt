@@ -1,0 +1,30 @@
+arg[0]="test/run.lua"
+package.path="test/?.lua;"..package.path
+local h=require("helpers")
+for _,fault in ipairs{false,true} do
+  local c=h.load_strata()
+  h.finish_startup(c)
+  local S=h.local_value("S")
+  S.buffers[1].seconds=16
+  params:set("v1_source",S.constants.SOURCE_SYNTH+1)
+  c.grid.plug(1,16,16)
+  S.lib.grid_core.set_page(1,5)
+  local p=S.lib.positions
+  p.strip_key(1,1,"hold",1)
+  c.clear_engine_calls()
+  if fault then
+    local advance=S.lib.playheads.advance
+    S.lib.playheads.advance=function(v)
+      if v==1 then error("audit estimate") end
+      return advance(v)
+    end
+  end
+  local ok=pcall(function() c.grid.unplug(1) end)
+  c.clock.run_for(0.3)
+  local offs=0
+  for _,call in ipairs(c.calls_named("setGrainParam")) do
+    if call.args[2]=="scanHold" and call.args[3]==0 then offs=offs+1 end
+  end
+  h.real_print("fault",fault,"unplug returned",ok,"held",p.scan_held(1),"holder",p.holds_scan(1,"grid:1"),"offs",offs)
+end
+h.remove_tree(h.data_root)
