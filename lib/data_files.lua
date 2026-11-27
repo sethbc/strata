@@ -386,10 +386,18 @@ return function(S)
       file:close()
       return nil, "unreadable", "larger than " .. DATA_FILES.max_bytes .. " bytes"
     end
-    file:seek("set", 0)
-    local text = file:read("*a")
+    if not file:seek("set", 0) then
+      file:close()
+      return nil, "unreadable", "cannot seek to beginning"
+    end
+    -- Another writer may have appended after the seek. Read only the
+    -- measured length and probe one byte for EOF before trusting it.
+    local text, read_error = file:read(size)
+    local extra, probe_error = file:read(1)
     file:close()
-    if type(text) ~= "string" then return nil, "unreadable", "cannot be read" end
+    if read_error or probe_error then return nil, "unreadable", "cannot be read" end
+    text = text or ""  -- a counted read at EOF can return nil even for a zero-byte file
+    if #text ~= size or extra then return nil, "unreadable", "size changed during read" end
     if snapshot and snapshot.path == path and snapshot.text == text then return snapshot.value end
     local value, problem = M.decode(text)
     if value == nil then return nil, "unreadable", problem end

@@ -240,6 +240,10 @@ test("read says a file is missing, too large or damaged; read_text gives a file'
   value, outcome, why = data_files.read(path)
   assert_equal(value, nil); assert_equal(outcome, "unreadable")
   assert_true(tostring(why):find(tostring(max_bytes), 1, true) ~= nil, "why names the limit: " .. tostring(why))
+  write_text(path, "")
+  value, outcome, why = data_files.read(path)
+  assert_equal(value, nil); assert_equal(outcome, "unreadable")
+  assert_true(tostring(why):find("at byte 1", 1, true) ~= nil, "an empty file reaches the parser at byte 1")
   -- damaged: why names the byte
   write_text(path, good:sub(1, 30))
   value, outcome, why = data_files.read(path)
@@ -249,6 +253,36 @@ test("read says a file is missing, too large or damaged; read_text gives a file'
   write_text(path, "a\r\n\0b")
   assert_equal(data_files.read_text(path), "a\r\n\0b")
   assert_equal(data_files.read_text(context.data_dir .. "no_such.data"), nil)
+end)
+
+test("read bounds the bytes requested when a file grows after its size check (#1272)", function()
+  local context = load_strata()
+  local files = local_value("S").lib.data_files
+  local path = context.data_dir .. "growing.data"
+  local initial = files.encode({version = 1})
+  write_text(path, initial .. "   ")  -- still valid if a reader consumed the changed file
+  local open, requested = io.open, 0
+  io.open = function(name, mode)
+    if name ~= path or mode ~= "rb" then return open(name, mode) end
+    local descriptor = assert(open(path, mode))
+    return {
+      seek = function(_, whence, offset)
+        local position = descriptor:seek(whence, offset)
+        if whence == "end" then return #initial end  -- the size before the append
+        return position
+      end,
+      read = function(_, count)
+        requested = requested + (tonumber(count) or math.huge)
+        return descriptor:read(count)
+      end,
+      close = function() return descriptor:close() end,
+    }
+  end
+  local value, outcome = files.read(path)
+  io.open = open
+  assert_equal(outcome, "unreadable", "an append during this read requires a fresh read")
+  assert_equal(value, nil)
+  assert_true(requested <= #initial + 1, "read at most the measured length and one extra byte")
 end)
 
 test("scenes.data and buffers.data that hold code run none of it at start and are kept as .bak (#464)", function()
