@@ -202,7 +202,7 @@ return function(S)
   end
 
   local function relative_of(record)
-    local relative = {bend = record.bend, pressure = record.pressure}
+    local relative = {bend = bend_value(record.bend), pressure = record.pressure}
     if record.slide ~= nil then relative.slide = util.clamp(record.slide - record.reference, -1, 1) end
     return relative
   end
@@ -235,7 +235,7 @@ return function(S)
     local record = find_record(voice, owner, key) or new_record(voice, slot, owner, key)
     clear_pending(voice, owner, key)  -- the record now holds what first_touch kept
     if record.latched then return false end
-    if finite(raw.bend) then record.bend = bend_value(raw.bend) end
+    if finite(raw.bend) and raw.bend > 0 then record.bend = raw.bend end
     if finite(raw.pressure) then
       local pressure = util.clamp(raw.pressure, 0, 1)
       record.pressure = pressure
@@ -290,12 +290,12 @@ return function(S)
   -- 3.6 (build ruling 8): a played note's first values, kept from its note
   -- on (the MIDI package's, before S.lib.notes.play, whose started hooks
   -- reach the targets) until its first update makes its record: raw's bend
-  -- (through bend_value), pressure and slide (each clamped as update
+  -- (a positive ratio), pressure and slide (each clamped as update
   -- clamps them, kept only when finite). It touches no record, calls
   -- nothing in S.lib.notes and sends nothing
   function M.first_touch(voice, owner, key, raw)
     if not valid_voice(voice) or type(raw) ~= "table" then return end
-    local first = {bend = bend_value(raw.bend)}
+    local first = {bend = finite(raw.bend) and raw.bend > 0 and raw.bend or 1}
     if finite(raw.pressure) then first.pressure = util.clamp(raw.pressure, 0, 1) end
     if finite(raw.slide) then first.slide = util.clamp(raw.slide, 0, 1) end
     pending[voice][owner] = pending[voice][owner] or {}

@@ -465,6 +465,19 @@ test("the section shows the settings, the faders' marks and the device's state",
   assert_equal(strip, "|" .. string.rep(".", 14) .. "|", "the picked-up faders")
 end)
 
+test("the E16 decodes each ring's low seven bits (#1265)", function()
+  local e16 = require("stub_e16")()
+  e16.run("extras/lib/e16/strata.lua")
+  local frame = {0xF0, 0x7D, 0x53, 0x54, 1}
+  for encoder = 1, 16 do
+    frame[#frame + 1] = 64
+    frame[#frame + 1] = encoder
+  end
+  frame[#frame + 1] = 0xF7
+  e16.sysex(frame)
+  for encoder = 1, 16 do assert_equal(e16.leds[encoder].value, 8192 + encoder) end
+end)
+
 test("the E16 script draws rings, labels and the title from Strata's frames", function()
   -- checks.md section 2: leds.update and slots.update count encoders from 1,
   -- so the script adds 1 to the 0-based index byte of Strata's label frame

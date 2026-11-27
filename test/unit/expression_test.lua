@@ -614,7 +614,7 @@ test("first_touch keeps only finite values, clamped as update clamps them", func
   assert_equal(raw.slide, 0.5)
   expression.first_touch(1, "midi", 2, { bend = 100, pressure = 1.5, slide = -0.2 })
   raw = expression.raw(1, "midi", 2)
-  assert_equal(raw.bend, 16, "the allocator's bend range"); assert_equal(raw.pressure, 1); assert_equal(raw.slide, 0)
+  assert_equal(raw.bend, 100, "the original controller ratio for external targets"); assert_equal(raw.pressure, 1); assert_equal(raw.slide, 0)
   expression.first_touch(1, "midi", 3, { bend = 1, slide = 0 / 0 })
   assert_equal(expression.raw(1, "midi", 3).slide, nil, "a slide that is not finite is not kept")
 end)

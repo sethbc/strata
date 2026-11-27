@@ -39,7 +39,7 @@ return function(S)
   S.midi_device = nil     -- the MIDI vport (S.lib.io_ports.out) Strata listens to
   S.midi_state = {
     bend = {},                -- per voice: current pitchbend ratio (transient; never a param or in scenes)
-    held = {},                -- per voice: set of the keys down on it (channel * 128 + note)
+    held = {},                -- per voice/key: true in this run, "retired" until key-up after a stop
     note_voice = {},          -- per channel: note -> the list of voices its note on played
     started = {},             -- voice -> true: a MIDI note started it (a panic CC stops these)
   }
@@ -226,6 +226,15 @@ return function(S)
     if told then S.lib.ui_frame.contained_call(tap_errors, 2, "midi note tap's owner told", told, nil) end
   end
 
+  -- A stopped run keeps its physical key routes until their lifts arrive.
+  -- Only a key played in this run can sustain or stop the voice.
+  local function has_current_key(voice)
+    for _, run in pairs(S.midi_state.held[voice]) do
+      if run == true then return true end
+    end
+    return false
+  end
+
   -- Release every MIDI note: the keys and the plain pressures forgotten,
   -- S.lib.mpe's channel values reset (the master channels' bend ranges stay, #688). A
   -- voice whose keys were down stops in release mode (the mode read after
@@ -242,7 +251,7 @@ return function(S)
     local release_mode = M.note_off_mode() == "release"
     local to_stop = {}
     for i = 1, NUM_VOICES do
-      local wanted = next(S.midi_state.held[i]) ~= nil and (release_mode or stop_all)
+      local wanted = has_current_key(i) and (release_mode or stop_all)
       -- a panic also stops a voice a released key started and left running
       if stop_all and S.midi_state.started[i] then wanted = true end
       if wanted and S.voices[i].active then
@@ -343,8 +352,10 @@ return function(S)
   local stop_pending = {}
 
   local function end_key(voice_idx, key)
+    local current = S.midi_state.held[voice_idx][key] == true
     S.midi_state.held[voice_idx][key] = nil
-    local last = next(S.midi_state.held[voice_idx]) == nil and S.voices[voice_idx].active
+    if not current then return end
+    local last = not has_current_key(voice_idx) and S.voices[voice_idx].active
     if M.note_off_mode() ~= "release" then
       S.lib.expression.latch(voice_idx, MIDI.owner, key)
     elseif last and not S.lib.notes.plays_to_end(voice_idx) then
@@ -391,7 +402,7 @@ return function(S)
     if next(stop_pending) == nil then return end
     for voice_idx in pairs(stop_pending) do
       if not (S.voices[voice_idx].active and M.note_off_mode() == "release"
-          and next(S.midi_state.held[voice_idx]) == nil) then
+          and not has_current_key(voice_idx)) then
         stop_pending[voice_idx] = nil
       elseif not S.lib.notes.plays_to_end(voice_idx) then
         stop_pending[voice_idx] = nil
@@ -399,7 +410,10 @@ return function(S)
       end
     end
   end)
-  S.register_voice_stop(function(voice_idx) stop_pending[voice_idx] = nil end)
+  S.register_voice_stop(function(voice_idx)
+    stop_pending[voice_idx] = nil
+    for key in pairs(S.midi_state.held[voice_idx]) do S.midi_state.held[voice_idx][key] = "retired" end
+  end)
   S.register_grain_restart(function(voice_idx, reason)
     if reason == "start" then stop_pending[voice_idx] = nil end
   end)
@@ -446,7 +460,7 @@ return function(S)
     S.midi_state.note_voice[channel] = next(channel_notes) ~= nil and channel_notes or nil
     local raw = raw_values(channel, note)
     for _, voice_idx in ipairs(targets) do
-      if next(S.midi_state.held[voice_idx]) == nil then S.lib.notes.release_owner(voice_idx, MIDI.owner) end
+      if not has_current_key(voice_idx) then S.lib.notes.release_owner(voice_idx, MIDI.owner) end
       S.midi_state.held[voice_idx][key] = true
       stop_pending[voice_idx] = nil  -- a key down: its own lift decides again
       midi_note_on(voice_idx, note, velocity, channel, raw)
@@ -474,6 +488,16 @@ return function(S)
     for note, voices in pairs(channel_notes) do
       local raw = raw_of(note)
       for _, voice_idx in ipairs(voices) do S.lib.expression.update(voice_idx, MIDI.owner, key_of(channel, note), raw) end
+    end
+  end
+
+  function M.refresh_mpe(channels)
+    if not S.lib.mpe.active() then return end
+    for _, channel in ipairs(channels) do
+      if S.midi_state.note_voice[channel] then
+        local raw = S.lib.mpe.values(channel)
+        express_channel(channel, function() return raw end)
+      end
     end
   end
 
@@ -520,10 +544,7 @@ return function(S)
     elseif S.lib.mpe.active() then
       -- MPE's bend, pressure, slide and RPNs: each changed channel's notes
       -- take its values
-      for _, channel in ipairs(S.lib.mpe.control(msg) or {}) do
-        local raw = S.lib.mpe.values(channel)
-        express_channel(channel, function() return raw end)
-      end
+      M.refresh_mpe(S.lib.mpe.control(msg) or {})
     elseif msg.type == "pitchbend" then
       local voice_idx = midi_target_voice(msg.ch)
       if voice_idx then midi_pitchbend(voice_idx, msg.val) end
@@ -604,7 +625,7 @@ return function(S)
     if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then return false end
     local own = S.lib.notes.slots(voice_idx)[1]
     if not (own and own.slot == 1 and own.held and own.owner == MIDI.owner) then return false end
-    if S.midi_state.held[voice_idx][own.key] then return true end
+    if S.midi_state.held[voice_idx][own.key] == true then return true end
     S.lib.notes.forget(voice_idx, MIDI.owner, own.key)
     S.lib.expression.forget(voice_idx, MIDI.owner, own.key)
     return false
@@ -615,7 +636,7 @@ return function(S)
   -- engine re-gates the releasing synths).
   function midi_note_off_for(voice_idx)
     if M.note_off_mode() ~= "release" or not S.voices[voice_idx].active then return end
-    if next(S.midi_state.held[voice_idx]) ~= nil then return end
+    if has_current_key(voice_idx) then return end
     S.midi_state.started[voice_idx] = nil
     toggle_voice(voice_idx)
   end
@@ -685,14 +706,14 @@ return function(S)
   -- voice for that note: held[voice][channel * 128 + note] is set exactly
   -- when note_voice[channel][note] holds the voice; each list holds valid
   -- voices, once each, and is never empty. 3.9 (#913): a held-back stop
-  -- (stop_pending) marks only a running voice with no key down on it
+  -- (stop_pending) marks only a running voice with no current-run key down
   S.register_invariant("midi notes", function()
     for voice_idx, flag in pairs(stop_pending) do
       if flag ~= true or not S.voices[voice_idx] then
         return "the held-back stop has a bad entry for " .. tostring(voice_idx)
       end
       if not S.voices[voice_idx].active then return "the held-back stop marks stopped voice " .. voice_idx end
-      if next(S.midi_state.held[voice_idx]) ~= nil then
+      if has_current_key(voice_idx) then
         return "the held-back stop marks voice " .. voice_idx .. ", which a key is down on"
       end
     end

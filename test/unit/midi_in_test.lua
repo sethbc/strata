@@ -1415,6 +1415,34 @@ local function master_bend_ratio(context, S, port)
   context.midi.send(port or 1, { type = "pitchbend", val = 8192, ch = 1 })
   return ratio
 end
+for _, change in ipairs({"menu", "silent PSET", "zone reset"}) do
+  test("a held MPE note follows a bend range change by " .. change .. " (#1236)", function()
+    local c = load_strata(); finish_startup(c)
+    params:set("midi_channel_mode", 3)
+    local pset = c.data_dir .. "bend.pset"
+    if change == "silent PSET" then
+      params:set("mpe_bend_range", 12); params:write(pset); params:set("mpe_bend_range", 48)
+    end
+    local master = change == "zone reset"
+    if master then set_master_range(c, 48) end
+    c.midi.send(1, {type = "pitchbend", ch = master and 1 or 2, val = 12288})
+    note_on(c, 2, 60)
+    lfo_step(c, 2)
+    local S = local_value("S")
+    assert_near(S.lib.notes.expression(1, 1).bend, 4, 1e-9)
+    c.clear_engine_calls()
+    if master then
+      c.midi.send(1, {type = "cc", ch = 1, cc = 100, val = 6})
+      c.midi.send(1, {type = "cc", ch = 1, cc = 6, val = params:get("mpe_lower_members")})
+    elseif change == "silent PSET" then params:read(pset, true)
+    else params:set("mpe_bend_range", 12) end
+    lfo_step(c, 2)
+    local sent = expressions(c, 1, 1)
+    assert_true(#sent > 0, "the held note receives its new bend")
+    assert_near(sent[#sent].bend, 2 ^ ((master and 2 or 12) / 24), 1e-9)
+  end)
+end
+
 local function full_up(range) return 2 ^ ((16383 - 8192) / 8192 * range / 12) end
 
 test("a silent PSET change of port, mode and zone resets the previous controller's range (#1104)", function()
@@ -1621,6 +1649,28 @@ test("RPN 6 with notes held releases them mid-handler and leaves the key state a
     assert_equal(#context.engine_calls, 0, name .. ": the lifts send nothing")
     note_on(context, 2, 62)
     assert_equal(S.lib.notes.find(1, "midi", key_of(2, 62)), 1, name .. ": the next key plays slot 1")
+  end
+end)
+
+test("a retired key cannot stop or sustain a new voice run (#1234)", function()
+  for _, fresh in ipairs({false, true}) do
+    local c = load_strata(); finish_startup(c)
+    local S = local_value("S")
+    params:set("midi_note_off", 2)
+    note_on(c, 3, 60)
+    toggle_voice(3)
+    toggle_voice(3)
+    assert_equal(S.midi_state.note_voice[3][60][1], 3, "physical key-up retains its route")
+    if fresh then
+      note_on(c, 3, 64); note_off(c, 3, 64)
+      assert_true(not S.voices[3].active, "the current run's final key stops it")
+      toggle_voice(3)
+    end
+    c.clear_engine_calls()
+    note_off(c, 3, 60)
+    assert_true(S.voices[3].active, "the old key cannot stop the restarted voice")
+    assert_equal(#c.engine_calls, 0)
+    assert_equal(S.midi_state.note_voice[3], nil)
   end
 end)
 

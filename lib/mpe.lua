@@ -173,14 +173,15 @@ return function(S)
       state.master_range[name] = MPE.master_bend
       params:set(name == "lower" and "mpe_lower_members" or "mpe_upper_members", count)
       if S.lib.ui_flash then S.lib.ui_flash.start("header", "MPE " .. name .. " " .. count) end
-      return {}
+      return zone_channels(name)
     elseif own.rpn_lsb == MPE.rpn_bend_range then
       if not zone then return {} end
       if master then
         state.master_range[zone] = util.clamp(value, 0, 96)
         return zone_channels(zone)
       end
-      params:set("mpe_bend_range", util.clamp(value, 1, 96))
+      -- MIDI dispatch refreshes the returned channels, as it does for a master bend.
+      params:set("mpe_bend_range", util.clamp(value, 1, 96), true)
       return all_members()
     end
     return {}
@@ -269,6 +270,7 @@ return function(S)
       end
     end
     if needs_release and layout_differs() then layout_changed() else remember_layout() end
+    S.lib.midi_in.refresh_mpe(all_members())
   end})
 
   -- The member counts never overlap: while both are above 0, setting one
@@ -290,7 +292,8 @@ return function(S)
       max = MPE.max_members, default = 0, action = function() keep_apart("mpe_upper_members", "mpe_lower_members") end}
     applied_layout.mpe_lower_members = params:get("mpe_lower_members")
     applied_layout.mpe_upper_members = params:get("mpe_upper_members")
-    params:add{type = "number", id = "mpe_bend_range", name = "mpe bend range", min = 1, max = 96, default = 48}
+    params:add{type = "number", id = "mpe_bend_range", name = "mpe bend range", min = 1, max = 96, default = 48,
+      action = function() S.lib.midi_in.refresh_mpe(all_members()) end}
   end
 
   -- The group strata_zones: per voice a zone and its lowest and highest note
