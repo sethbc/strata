@@ -29,13 +29,13 @@ end
 
 -- A started script with the doubles, BUFFER shown, slot 1 holding 2 s
 -- (96000 frames) cut at {0, 12000, 24000, 48000} in equal mode
-local function loaded()
+local function loaded(seconds)
   local context = load_strata()
   finish_startup(context)
   local fake = plug_doubles()
   local S = local_value("S")
   show_page("BUFFER")
-  with_audio(context, 1, 2)
+  with_audio(context, 1, seconds or 2)
   S.lib.samples.settings(1).mode = 2
   S.lib.samples.settings(1).count = 4
   fake.markers[1] = { 0, 12000, 24000, 48000 }
@@ -255,7 +255,7 @@ test("turning the amount after a hand edit remakes the slices and says edits dro
 end)
 
 test("mode, tempo, bars, key and norm edit the file's settings", function()
-  local context, S, fake, editor = loaded()
+  local context, S, fake, editor = loaded(8)
   local settings = S.lib.samples.settings(1)
   settings.mode = 1
   editor.open(1)
@@ -284,7 +284,6 @@ test("mode, tempo, bars, key and norm edit the file's settings", function()
   enc(3, 5)
   assert_equal(settings.tempo, 300, "at most 300")
   -- bars, on an 8 s slot
-  with_audio(context, 1, 8)
   settings.tempo = 30
   pick_row(editor, "bars")
   redraw(); assert_true(screen_has(context, "bars") and screen_has(context, "1"), "8 s at 30 BPM: one bar")
@@ -528,6 +527,104 @@ test("the editor lays out in each mode, with 1, 12 and 64 markers, and with each
       key(1, 0)
     end
   end
+end)
+
+-- These cases use the actual per-file records and the same load and MIDI
+-- entry points as PARAMETERS, so a write through the previous binding shows on disk.
+local function bound_file()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local old, replacement = context.audio_dir .. "first.wav", context.audio_dir .. "second.wav"
+  local function report(number, seconds)
+    context.polls.fire("bufferState", context.polls.buffer_state_value(1, number, seconds))
+  end
+  params:set("buf1_file", old)
+  report(1, 2)
+  S.lib.samples.set(1, "key", 45)
+  show_page("BUFFER")
+  to_field(12)
+  return context, S.lib.ui_slice_editor, report, old, replacement
+end
+
+local function saved_key(context, path)
+  local files = context.tab.load(context.data_dir .. "strata/samples.data").files
+  for _, entry in ipairs(files) do
+    if entry.path == path then return entry.settings.key end
+  end
+  error("missing sample record for " .. path)
+end
+
+test("BUFFER refuses slice edits while a replacement is loading and edits the confirmed file", function()
+  local c, editor, report, old, replacement = bound_file()
+  params:set("buf1_file", replacement)
+  tap(3)
+  redraw()
+  assert_equal(hint_text(c), "buf 1 loading")
+  assert_true(not editor.is_open())
+  report(2, 0)
+  report(2, 1)
+  tap(3)
+  assert_true(editor.is_open())
+  pick_row(editor, "key")
+  enc(3, 1)
+  c.clock.run_for(0.15)
+  assert_equal(saved_key(c, old), 45, "original key preserved on disk")
+  assert_equal(saved_key(c, replacement), 60, "the confirmed replacement received the edit")
+end)
+
+test("a replacement closes only its slot's editor and a failed load allows editing the restored file", function()
+  local c, editor, _, old, replacement = bound_file()
+  tap(3)
+  pick_row(editor, "key")
+  params:set("buf2_file", replacement)
+  assert_true(editor.is_open(), "loading another slot keeps this editor")
+  params:set("buf1_file", replacement)
+  enc(3, 1)
+  c.clock.run_for(0.15)
+  assert_equal(saved_key(c, old), 45, "turning the encoder during replacement changed the old key")
+  assert_true(not editor.is_open())
+  c.polls.fire("bufferLoadFailed", 2 * 2 * local_value("S").constants.NUM_BUFFERS)
+  tap(3)
+  assert_true(editor.is_open(), "rollback returns the confirmed original")
+  pick_row(editor, "key")
+  enc(3, 1)
+  c.clock.run_for(0.15)
+  assert_equal(saved_key(c, old), 46, "the restored file received the edit")
+end)
+
+test("reloading a different start of the same file changes the slice editing target", function()
+  local c, editor, report, old = bound_file()
+  tap(3)
+  pick_row(editor, "key")
+  load_buffer(1, old, 0.5)
+  assert_true(not editor.is_open(), "another region of the same file is a different record")
+  assert_true(not editor.open(1))
+  report(2, 0)
+  report(2, 1)
+  assert_true(editor.open(1))
+  assert_equal(local_value("S").lib.samples.settings(1).key, nil, "the new start has independent settings")
+end)
+
+test("a MIDI key heard before the load cannot reach the replacement before the next step", function()
+  local c, editor, report, old, replacement = bound_file()
+  assert_true(local_value("S").lib.samples.store_file(replacement, {key = 72}))
+  local function note(pitch)
+    c.midi.send(1, {type = "note_on", note = pitch, vel = 100, ch = 1})
+    c.midi.send(1, {type = "note_off", note = pitch, vel = 0, ch = 1})
+  end
+  tap(3)
+  pick_row(editor, "key")
+  note(50)
+  c.clock.run_for(0.15)
+  assert_equal(saved_key(c, old), 50, "the focused original learned a key")
+  note(63)
+  params:set("buf1_file", replacement)
+  report(2, 0)
+  report(2, 1)
+  c.clock.run_for(0.15)
+  assert_equal(saved_key(c, old), 50)
+  assert_equal(saved_key(c, replacement), 72, "the replacement retains its own key")
 end)
 
 test("the slot emptied under the editor closes it", function()

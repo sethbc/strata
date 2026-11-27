@@ -772,7 +772,7 @@ return function(S)
     if texts then return held >= PAGE.hold_seconds and texts[2] or texts[1] end
     if alt_held then return "K2:rnd/fill K3:sv/trim" end
     if cursor_field().name == "slices" then
-      -- an empty slot has no slices to edit: K3 only flashes so
+      -- an empty or loading slot has no slices to edit
       local none = S.lib.ui_slice_editor.slot_text(cursor_slot()) == S.lib.ui_slice_editor.EDITOR.none_text
       return none and "K2:ld/clr" or "K2:ld/clr K3:edit"
     end
@@ -810,10 +810,11 @@ return function(S)
   end
 
   -- K3 on the slices field opens the slice editor for the cursor slot
-  -- (design 3.7 §3.7, decision 14); a slot with no audio says so
+  -- (design 3.7 §3.7, decision 14); a loading or empty slot says so
   local function open_slice_editor()
     local slot = cursor_slot()
-    if not S.lib.ui_slice_editor.open(slot) then buffer_page_flash("buf " .. slot .. " empty") end
+    local opened, reason = S.lib.ui_slice_editor.open(slot)
+    if not opened then buffer_page_flash("buf " .. slot .. " " .. reason) end
   end
 
   -- K2's press does nothing (key() notes its time; it acts on release); K3
