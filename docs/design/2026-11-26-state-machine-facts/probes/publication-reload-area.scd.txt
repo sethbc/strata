@@ -1,0 +1,22 @@
+{ arg h;
+    var path=h.tempDir +/+ "reload-output.wav", older, newer, readFrames, before, after;
+    var oldSettings=h.tempDir +/+ "old-settings", newSettings=h.tempDir +/+ "new-settings";
+    var noBoard=h.tempDir +/+ "no-board";
+    readFrames={ var f = SoundFile.openRead(path), count; if (f.notNil) {count=f.numFrames; f.close}; count };
+    older=h.startEngine((settingsDir: oldSettings,modelPath:noBoard));
+    h.commandTo(older,\loadBuffer,0,h.stereoPath,0); h.awaitLoad(0,older);
+    older.stopPeaksMover;
+    "PATH".setenv("STRATA_SAVE_PROBE_BIN".getenv ++ ":" ++ "PATH".getenv);
+    "STRATA_SAVE_PROBE_PATH".setenv(path);
+    h.commandTo(older,\saveBuffer,0,path,0,1);
+    h.check(h.waitFor({File.exists(path ++ ".first-mv")},3),"old engine handed off its WAV before free");
+    h.freeEngine(older);
+    newer=h.startEngine((settingsDir:newSettings,modelPath:noBoard));
+    h.commandTo(newer,\loadBuffer,0,h.monoPath,0); h.awaitLoad(0,newer);
+    h.commandTo(newer,\saveBuffer,0,path,0,1);
+    before=h.waitFor({File.exists(path) and: {readFrames.value == 4410}},4);
+    File.use(path ++ ".release","w",{arg f; f.write("release")});
+    after=h.waitFor({File.exists(path) and: {readFrames.value == 11025}},4);
+    h.check(before and:{after},"engine free/new allocation: new 4410-frame WAV published, retired engine's subprocess later replaced it with 11025 frames");
+    h.freeEngine(newer);
+}

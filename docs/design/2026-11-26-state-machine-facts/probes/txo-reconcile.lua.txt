@@ -1,0 +1,61 @@
+-- Run from the repository root. Probe only, intercepting one call in the comparison case.
+arg[0] = "test/run.lua"
+package.path = "test/?.lua;" .. package.path
+local h = require("helpers")
+
+local function boot()
+  local c = h.load_strata()
+  h.finish_startup(c)
+  local S = h.local_value("S")
+  c.crow.plug()
+  assert(S.lib.io_rig.set("ii_bus", "strata"))
+  params:set("v1_out_txo", 3)
+  return c, S
+end
+
+local function drain(c,S)
+  for _ = 1, 65 do c.clock.advance_until(S.lfo_clock) end
+end
+
+local function env(c)
+  local values = {}
+  for _, line in ipairs(c.crow.sent) do
+    local bit = line:match("^ii%.txo%.env_act%(3, ([01])%)$")
+    if bit then values[#values + 1] = bit end
+  end
+  return table.concat(values, ",")
+end
+
+for _, silent in ipairs({false, true}) do
+  local c, S = boot()
+  local path = c.data_dir .. "strata-01.pset"
+  params:write(path, "pitch")
+  params:set("v1_out_txo_cv", 2)
+  drain(c, S)
+  params:read(path, silent)
+  drain(c, S)
+  io.write("PSET silent=", tostring(silent), " requested mode=", params:get("v1_out_txo_cv"), " env_act=", env(c), "\n")
+end
+
+for _, change_to_off_api in ipairs({false,true}) do
+  local c, S = boot()
+  local ii = S.lib.io_ii
+  if change_to_off_api then
+    local send = ii.send
+    ii.send = function(device, command, output, value, ...)
+      if device == "txo" and command == "env_act" and value == 0 then
+        return ii.send_off(device, command, output, value)
+      end
+      return send(device, command, output, value, ...)
+    end
+  end
+  params:set("v1_out_txo_cv", 2)
+  drain(c, S)
+  params:set("v1_out_txo_cv", 1)
+  c.crow.unplug()
+  params:set("v1_out_txo_cv", 2)
+  c.crow.plug()
+  drain(c, S)
+  io.write("substituted send_off=", tostring(change_to_off_api), " requested mode=", params:get("v1_out_txo_cv"), " env_act=",env(c),"\n")
+end
+h.remove_tree(h.data_root)

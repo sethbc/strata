@@ -1,0 +1,104 @@
+-- Run from the v3.9.0 source root as described in the reproduction guide.
+arg[0]="test/run.lua"
+package.path="test/?.lua;"..package.path
+local h=require("helpers")
+local function boot()
+  local c=h.load_strata()
+  h.finish_startup(c)
+  return c,h.local_value("S")
+end
+for _,mode in ipairs({"normal","full","unplug","leave"}) do
+  local c,S=boot()
+  c.crow.plug()
+  assert(S.lib.io_rig.set("ii_bus","strata"))
+  local ii=S.lib.io_ii
+  local function drain() for k=1,60 do c.clock.advance_until(S.lfo_clock) end end
+  params:set("v1_out_txo",3)
+  params:set("v1_out_txo_cv",2)
+  drain()
+  if mode=="full" then for k=1,60 do ii.send("filler","full",k) end end
+  local size, before=ii.queued(),ii.dropped()
+  params:set("v1_out_txo_cv",1)
+  io.write(mode,": queue before ",size,", after ",ii.queued(),", new drops ",ii.dropped()-before,"; ")
+  if mode=="unplug" then c.crow.unplug(); c.crow.plug() end
+  if mode=="leave" then S.lib.io_rig.set("ii_bus","off"); S.lib.io_rig.set("ii_bus","strata") end
+  drain()
+  params:set("v2_out_txo",7)
+  drain()
+  S.lib.io_rig.set("ii_bus","off")
+  for _,line in ipairs(c.crow.sent) do if line:find("ii.txo.env_act(3, ",1,true)==1 then io.write(line," ") end end
+  io.write("\n")
+end
+for _,cell in ipairs({8,7}) do
+  local c,S=boot()
+  S.buffers[1].seconds,S.buffers[1].loaded=16,true
+  S.lib.samples.bind(1)
+  params:set("v1_source", S.constants.SOURCE_SYNTH+1)
+  local pane=h.grid_pane(c,"128h")
+  local P=S.constants.GRID_PAGES
+  pane.show(P.positions,2)
+  pane.press(7,1,1) -- HD
+  assert(S.lib.positions.scan_held(1))
+  pane.tap(2+P.voices,8)
+  pane.press(7,1,0) -- real release on voices
+  pane.tap(2+P.positions,8) -- positions side 1 now shows jump cells
+  assert(S.lib.grid_core.side(1,1)==1)
+  pane.press(cell,1,1)
+  c.clock.run_for(0.5)
+  io.write("positions jump cell ",cell,", scan held after half a second=",tostring(S.lib.positions.scan_held(1)),"\n")
+  pane.press(cell,1,0)
+  c.clock.run_for(0.2)
+end
+for _,early in ipairs({false,true}) do
+  local c,S=boot()
+  S.buffers[1].seconds,S.buffers[1].loaded=16,true
+  S.lib.samples.bind(1)
+  params:set("v1_source",S.constants.SOURCE_SYNTH+1)
+  params:set("v1_loop_length",1);params:set("v1_loop_start",0)
+  local top=h.grid_pane(c,"256 top")
+  local bottom=h.grid_pane(c,"256 bottom")
+  top.show(S.constants.GRID_PAGES.positions,1)
+  bottom.show(S.constants.GRID_PAGES.positions,1)
+  if early then top.press(4,1,1) end
+  bottom.press(4,1,1)
+  if early then top.press(4,1,0) end
+  bottom.press(9,1,1)
+  io.write("duplicate anchor older release=",tostring(early),"; loop start ",params:get("v1_loop_start"),", length ",params:get("v1_loop_length"),", pos ",params:get("v1_buf_pos"),"\n")
+end
+for _,cell in ipairs({5,4}) do
+  local c,S=boot()
+  local function report(seconds)
+    c.polls.fire("bufferState", c.polls.buffer_state_value(1,S.buffers[1].loads_sent,seconds))
+  end
+  load_buffer(1,c.audio_dir.."loop.wav")
+  if S.buffers[1].awaiting_zero then report(0) end
+  report(2)
+  local dir=S.lib.scenes.scene_data_dir
+  util.make_dir(dir)
+  local f=assert(io.open(dir.."buf1.peaks","w"))
+  f:write("strata-peaks 1\nslot 1\nframes 96000\nrate 48000\ngeneration 1\npeaks "..("0.500 "):rep(63).."0.500\n")
+  f:close()
+  c.clock.run_for(0.1)
+  params:set("v1_source",S.constants.SOURCE_SYNTH+1)
+  S.lib.samples.set(1,"mode",2)
+  S.lib.samples.set(1,"count",32)
+  S.lib.slices.make(1)
+  params:set("v1_slices",3)
+  params:set("v1_note_cap",3)
+  assert(S.lib.slices.count(1)==32)
+  local top=h.grid_pane(c,"256 top")
+  local bottom=h.grid_pane(c,"256 bottom")
+  top.show(S.constants.GRID_PAGES.positions,1)
+  bottom.show(S.constants.GRID_PAGES.positions,2)
+  top.press(4,1,1)
+  bottom.tap(2,1) -- bank 2
+  bottom.tap(2+S.constants.GRID_PAGES.positions,8) -- return to cells
+  bottom.press(cell,1,1)
+  io.write("slice cell ",cell,": both down ",table.concat(S.lib.slices.playing(1),","),"; ")
+  top.press(4,1,0)
+  io.write("older released ",table.concat(S.lib.slices.playing(1),","),"; ")
+  bottom.press(cell,1,0)
+  io.write("both released ",table.concat(S.lib.slices.playing(1),","),"\n")
+end
+
+h.remove_tree(h.data_root)

@@ -1,0 +1,25 @@
+return function(h)
+  for _,silent in ipairs({false,true}) do
+    for _,id in ipairs({"midi_device","midi_channel_mode","midi_note_off"}) do
+      h.test("PSET MIDI "..id.." silent="..tostring(silent),function()
+        local c=h.load_strata()
+        h.finish_startup(c)
+        local S=h.local_value("S")
+        c.midi.plug(1,"keys"); c.midi.plug(2,"pads")
+        local path=c.data_dir.."strata-01.pset"
+        params:set(id,2)
+        params:write(path,"midi")
+        params:set(id,1)
+        c.midi.send(1,{type="note_on",note=60,vel=64,ch=3})
+        local key=3*128+60
+        h.assert_true(S.lib.notes.find(3,"midi",key)~=nil)
+        params:read(path,silent)
+        if id=="midi_device" then
+          c.midi.send(2,{type="note_on",note=66,vel=64,ch=4})
+          h.assert_true(S.lib.notes.find(4,"midi",4*128+66)~=nil,"new port plays")
+        end
+        h.assert_equal(S.lib.notes.find(3,"midi",key),nil,"old ownership released")
+      end)
+    end
+  end
+end

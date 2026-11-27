@@ -1,16 +1,16 @@
 # Strata development status
 
-Last updated 2026-11-27, after the release review. This file is the hand-off between machines and sessions: what is open, and the limits to plan around. Keep it to that, and update it at the end of each piece of work: a pull request that closes an open item removes its line, and a release updates the first section.
+Last updated 2026-11-27, after the November review fixes and save regression tests. This file is the hand-off between machines and sessions: what is open, and the limits to plan around. Keep it to that, and update it at the end of each piece of work: a pull request that closes an open item removes its line, and a release updates the first section.
 
 ## Where things are
 
 - **Released:** 3.9.0, what 3.8 delayed: the state machines made explicit, the grid's sequencer reworked and the high tier's reverb freeze. CHANGELOG.md has every change of every release; `docs/history.md` has each release in a paragraph and how it was built.
-- **Plans:** none is open (a plan lives under docs/superpowers/plans/ while its release is open; `docs/workflow.md`).
+- **Post-3.9 review:** The [November 26 audit and follow-up](design/2026-11-26-state-machine-audit.md) record the failures reproduced on v3.9.0 and the fixes that landed on main.
 - **Closed in 3.9:** #819 (the high tier's reverb freeze, cut from 3.8); #864-#949 (the state machines' audits' 86 findings; #939, a failed voice start that leaves a voice silent while it shows as running, closed into a line of #6's section 14); #951-#1040 (the 70 the state machines' build found, CI's among them); #1047, #1050, #1051 and #1054 (the sequencer's rework: a held value that masked a set not made by hand, a fade's released voice that took the scene's pattern, the chain's burst after a late wake, the final review's leftovers); and #1059 (the delay's freeze table, run by no test).
 
 ## Open items
 
-- **Pre-4.0 review.** Track the remaining work in the [release board issues](https://github.com/sethbc/strata/issues?q=is%3Aopen%20label%3Areview-2026-11-27-board) and the [additional test, code quality and performance issues](https://github.com/sethbc/strata/issues?q=is%3Aopen%20label%3Areview-2026-11-27-specialists). The four release blockers covered file parameter handling, rejected slice insertions, the file being edited during a replacement and preset files whose backups failed. Hardware checks and factory sounds are scheduled for 4.0.
+- **Pre-4.0 review.** All 57 [release-board issues](https://github.com/sethbc/strata/issues?q=is%3Aissue%20label%3Areview-2026-11-27-board) are closed. The two [open specialist issues](https://github.com/sethbc/strata/issues?q=is%3Aopen%20label%3Areview-2026-11-27-specialists) are the device measurements below. Hardware checks and factory sounds are scheduled for 4.0.
 - **Device measurements from the November reviews.** [#1272](https://github.com/sethbc/strata/issues/1272) tracks peak memory and preset reload latency on a physical norns. [#1276](https://github.com/sethbc/strata/issues/1276) tracks WAV receipt latency, OSC response time and audio underruns with one to four simultaneous saves on both tiers. The shipped interleave wait remains 1 ms.
 - [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on norns** (milestone 4.0): run once, on the 4.0 build; it gates no 3.x release. Its body is the essential list, with a section for each release's additions (3.2's sound features, then 3.3 to 3.7, 3.8's as §13, and 3.9's in three: the state machines as §14, the sequencer's rework as §15 and the reverb freeze as §16), each item saying what passing looks like. **Nothing added since 3.2 has run on a device:** every integration of 3.6 was built from its device's documents and sources (`docs/design/3.6-facts/`), and 3.7's to 3.9's features were checked against stubs and a silent scsynth.
 

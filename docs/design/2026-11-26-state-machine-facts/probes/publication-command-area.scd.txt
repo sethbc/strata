@@ -1,0 +1,44 @@
+{ arg h;
+    var e = h.engine, frames = 24000, rate = h.server.sampleRate, slot = 2;
+    var oldPath = h.tempDir +/+ "old-source.wav", newPath = h.tempDir +/+ "new-source.wav";
+    var output, textAt, seen, after, oldCount, newCount, failed, ok, counts;
+    var writeClick = { arg path, click, level;
+        var mono = Signal.newClear(frames), file = SoundFile.openWrite(path, "WAV", "float", 2, rate);
+        mono[click] = level; file.writeData(h.stereoOf(mono,mono)); file.close
+    };
+    var loadFile = { arg file; h.command(\loadBuffer,slot,file,0); h.awaitLoad(slot) };
+    var haltFirst = { arg path; "STRATA_SAVE_PROBE_PATH".setenv(path) };
+    var reached = { arg path; h.check(h.waitFor({ File.exists(path ++ ".first-mv") }, 3), "first OS rename reached " ++ path.basename) };
+    var release = { arg path; File.use(path ++ ".release","w",{arg f; f.write("release")}) };
+    textAt = { if (File.exists(output)) { File.readAllString(output) } { "" } };
+    writeClick.(oldPath,4096,0.25); writeClick.(newPath,8192,0.75);
+    e.bufferOnsetsPoll.start;
+    loadFile.(oldPath);
+    output = e.onsetsPath(slot).standardizePath;
+    h.command(\analyzeBuffer,slot);
+    h.check(h.waitFor({ textAt.value.contains("onsets 4096\n") }), "control: healthy mover publishes source marker 4096");
+    e.stopPeaksMover;
+    "PATH".setenv("STRATA_SAVE_PROBE_BIN".getenv ++ ":" ++ "PATH".getenv);
+    haltFirst.(output);
+    h.command(\analyzeBuffer,slot); oldCount=e.areaState[\onsets][\analyses][slot];
+    reached.(output);
+    loadFile.(newPath);
+    h.command(\analyzeBuffer,slot); newCount=e.areaState[\onsets][\analyses][slot];
+    ok=e.bufferOnsetsValue(slot,newCount,false); failed=e.bufferOnsetsValue(slot,oldCount,true);
+    seen=h.waitFor({ h.pollValues(\bufferOnsets).includes(ok) and: { textAt.value.contains("onsets 8192\n") } },5);
+    release.(output);
+    after=h.waitFor({ h.pollValues(\bufferOnsets).includes(failed) and: { textAt.value.contains("onsets 4096\n") } },4);
+    counts=h.pollValues(\bufferOnsets);
+    h.check(seen and: { after }, "command probe: marker 8192 after new success, then 4096 after old reports FAILED (polls %, newest success %, old failure %)".format(counts,ok,failed));
+    output=e.peaksPath(slot).standardizePath;
+    haltFirst.(output);
+    h.command(\loadBuffer,slot,oldPath,0);
+    reached.(output);
+    loadFile.(newPath);
+    seen=textAt.value.contains("0.750");
+    release.(output);
+    after=h.waitFor({textAt.value.contains("0.250")},3);
+    h.check(seen and: { after } and: { (h.bufferSample(e.buffersL[slot],8192) - 0.75).abs < 0.001 },
+        "command probe: same-length load publishes new 0.750, old 0.250 later replaces its peaks while the new 0.750 remains in audio");
+    e.bufferOnsetsPoll.stop;
+}

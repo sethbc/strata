@@ -1,0 +1,19 @@
+arg[0]="test/run.lua"
+package.path="test/?.lua;"..package.path
+local h=require("helpers")
+local ctx=h.load_strata()
+h.finish_startup(ctx)
+local S=h.local_value("S")
+local old_date=os.date
+os.date=function(fmt,...) if fmt=="%Y%m%d-%H%M%S" then return "20261126-120000" end return old_date(fmt,...) end
+ctx.polls.fire("bufferState",ctx.polls.buffer_state_value(2,0,4))
+local snapshots,stored=0,0
+S.lib.samples.snapshot=function() snapshots=snapshots+1; return {gain=snapshots} end
+S.lib.samples.store_file=function() stored=stored+1 end
+for i=1,6 do assert(save_buffer(2)) end
+local calls=ctx.calls_named("saveBuffer")
+for i,c in ipairs(calls) do h.real_print(i,c.args[2]:match("[^/]+$")) end
+for i=1,6 do ctx.polls.fire("bufferSaveResult",i*16+1) end
+h.real_print("snapshots taken",snapshots,"success reports",6,"settings forwarded",stored)
+os.date=old_date
+h.remove_tree(h.data_root)

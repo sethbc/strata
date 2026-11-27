@@ -1,0 +1,24 @@
+-- Both panes of the physical 256. Keep the store modifier down in the top pane.
+arg[0] = "test/run.lua"
+package.path = "test/?.lua;" .. package.path
+local h = require("helpers")
+for _, lost in ipairs({false,true}) do
+  local c = h.load_strata()
+  h.finish_startup(c)
+  local S = h.local_value("S")
+  S.buffers[1].seconds, S.buffers[1].loaded = 16, true
+  S.lib.samples.bind(1)
+  params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+  local top, bottom = h.grid_pane(c,"256 top"), h.grid_pane(c,"256 bottom")
+  local P = S.constants.GRID_PAGES
+  top.show(P.positions,2)
+  bottom.show(P.positions,2)
+  top.press(6,1,1)
+  bottom.press(2,1,1)
+  local down = top.led(2,1)
+  if lost then bottom.tap(2 + P.voices,8) end
+  bottom.press(2,1,0)
+  c.clock.run_for(0.5)
+  io.write("release under other page=", tostring(lost), " bookmark down=", down, " after release top LED=", top.led(2,1), " store=",top.led(6,1),"\n")
+end
+h.remove_tree(h.data_root)

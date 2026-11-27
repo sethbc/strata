@@ -1,0 +1,56 @@
+arg[0] = "test/run.lua"
+package.path = "test/?.lua;" .. package.path
+local h = require("helpers")
+for _, device in ipairs({"er301","txo","jf","wsyn","crow","nb","midi"}) do
+  for _, silent in ipairs({false,true}) do
+    local c = h.load_strata({before_load=function(context)
+      context.nb.add_player("alpha",{"note_on","note_off","active","inactive","stop_all","add_params"})
+    end})
+    h.finish_startup(c)
+    local S = h.local_value("S")
+    c.crow.plug()
+    c.midi.plug(1,"keys")
+    c.midi.plug(2,"sound")
+    params:set("midi_note_off",2)
+    assert(S.lib.io_rig.set("ii_bus","strata"))
+    local id = "v1_out_" .. device
+    local on = 1
+    if device == "crow" then
+      id = "crow_out2_source"
+      for i,label in ipairs(params:lookup_param(id).options) do if label == "v1 gate" then on = i end end
+      assert(on > 1)
+    elseif device == "nb" then id, on = "v1_out_nb_key", "alpha"
+    elseif device == "midi" then id, on = "v1_out_port", 2 end
+    local p = c.data_dir .. "strata-01.pset"
+    params:write(p, "off")
+    params:set(id, on)
+    c.clock.run_for(0.2)
+    c.midi.send(1,{type="note_on",note=60,vel=64,ch=1})
+    local function drain() for _ = 1,16 do c.clock.advance_until(S.lfo_clock) end end
+    local function sounding()
+      local count=0
+      for _,r in pairs(S.lib.io_targets.sounding(1)) do
+        for _,name in ipairs(r.targets) do if name==device then count=count+1 end end
+      end
+      return count
+    end
+    drain()
+    assert(sounding()==1)
+    params:read(p,silent)
+    drain()
+    local after = sounding()
+    local lines={}
+    for _,line in ipairs(c.crow.sent) do if line:find("ii."..device..".tr(",1,true) or (device=="crow" and line:find("output[2].volts",1,true)) then lines[#lines+1]=line end end
+    c.midi.send(1,{type="note_off",note=60,vel=0,ch=1})
+    drain()
+    local after_up = sounding()
+    local last_gate = "-"
+    for _,line in ipairs(c.crow.sent) do
+      if line:find("ii."..device..".tr(",1,true) or (device=="crow" and line:find("output[2].volts",1,true)) then last_gate=line end
+    end
+    c.midi.send(1,{type="note_on",note=65,vel=64,ch=1})
+    drain()
+    io.write(device, " silent=",tostring(silent)," route=",params:get(id)," ledger after load=",after," ledger after MIDI up=",after_up," last gate after up=",last_gate," next routed=",sounding(), " gates at load=",table.concat(lines,";"),"\n")
+  end
+end
+h.remove_tree(h.data_root)
