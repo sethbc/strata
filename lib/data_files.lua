@@ -451,8 +451,10 @@ return function(S)
     return same
   end
 
-  function M.write(path, value)
-    local text = M.encode(value)
+  -- A caller that just encoded value for comparison can publish those
+  -- same bytes. Ordinary callers give only the table to encode.
+  function M.write(path, value, encoded)
+    local text = encoded or M.encode(value)
     if holds_text(path, text) then
       note_write(path, true)
       return true, "unchanged"
