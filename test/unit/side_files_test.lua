@@ -554,6 +554,31 @@ test("the writer: save_now writes nothing while the file may not be written; a f
   assert_equal(tostring(state.reports[1]):match("^false "), "false ", "reported as failed: " .. tostring(state.reports[1]))
 end)
 
+test("the timed writer retries the same edited data after a failed publication (#1273)", function()
+  local context, S = loaded()
+  local path = context.data_dir .. "strata/retry.data"
+  local writer, state = probe_writer(S, path)
+  state.n = 1
+  writer.save()
+  context.clock.run_for(0.2)
+  local original = file_text(path)
+  assert_equal(state.holder.text, original)
+  state.n = 2
+  local restore = h.watch_writes(path .. ".part", {at = "flush"})
+  local ok, err = pcall(function()
+    writer.save()
+    context.clock.run_for(0.2)
+  end)
+  restore()
+  assert_true(ok, tostring(err))
+  assert_equal(file_text(path), original, "failed publication leaves the saved data intact")
+  assert_equal(state.holder.text, original, "cache still identifies the last saved bytes")
+  writer.save()
+  context.clock.run_for(0.2)
+  assert_equal(S.lib.data_files.read(path).n, 2, "the same change can be retried")
+  assert_equal(state.holder.text, file_text(path), "cache advances only after successful publication")
+end)
+
 test("the writer: a spec is checked when it is made", function()
   local _, S = loaded()
   for _, field in ipairs({ "name", "path", "value", "holder", "clock_field", "may_write" }) do

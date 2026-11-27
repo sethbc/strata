@@ -111,16 +111,20 @@ return function(S)
       return text_field ~= nil and S.lib.data_files.encode(spec.value()) == holder[text_field]
     end
 
-    function writer.write()
+    local function write(only_changed)
+      local value = spec.value()
+      local text = text_field and S.lib.data_files.encode(value)
+      if only_changed and text and text == holder[text_field] then return end
       local path = type(spec.path) == "function" and spec.path() or spec.path
       local folder = path:match("^(.*/)")
       if folder and util.file_exists(folder) == false then util.make_dir(folder) end
-      local value = spec.value()
-      local written, detail = S.lib.data_files.write(path, value)
-      if written and text_field then holder[text_field] = S.lib.data_files.encode(value) end
+      local written, detail = S.lib.data_files.write(path, value, text)
+      if written and text_field then holder[text_field] = text end
       if spec.report then spec.report(written, detail, path) end
       return written, detail
     end
+
+    function writer.write() return write(false) end
 
     function writer.save()
       if not spec.save_delay then error("side_files: " .. spec.name .. " has no timed write", 2) end
@@ -128,7 +132,7 @@ return function(S)
       holder[clock_field] = clock.run(function()
         clock.sleep(spec.save_delay)
         holder[clock_field] = nil
-        if spec.may_write() and not unchanged() then writer.write() end
+        if spec.may_write() then write(true) end
       end)
     end
 

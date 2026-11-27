@@ -83,6 +83,24 @@ local function samples_file(context)
   return context.tab.load(context.data_dir .. "strata/samples.data")
 end
 
+test("a burst of sample edits encodes once at the first change and once to save the latest data (#1273)", function()
+  local context = load_strata(); finish_startup(context)
+  settle_load(context, 1, context.audio_dir .. "chords.wav", 4)
+  context.clock.run_for(0.2)
+  local data_files = local_value("S").lib.data_files
+  local encode, encodes = data_files.encode, 0
+  data_files.encode = function(value)
+    if value.files then encodes = encodes + 1 end
+    return encode(value)
+  end
+  assert_true(samples().set(1, "tempo", 90))
+  assert_true(samples().set(1, "tempo", 95))
+  assert_equal(encodes, 1, "a pending change shares the first edit's clock")
+  context.clock.run_for(0.2)
+  assert_equal(samples_file(context).files[1].settings.tempo, 95, "published the latest tempo")
+  assert_equal(encodes, 2, "one more encoding at publication, reused for the cache")
+end)
+
 test("a file's settings come back when it is loaded into another slot", function()
   local context = load_strata(); finish_startup(context)
   local file = context.audio_dir .. "a.wav"
