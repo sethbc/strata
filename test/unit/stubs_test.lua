@@ -370,6 +370,36 @@ test("control sets update the map and echo its scaled CC even on a silent or unc
   end
 end)
 
+test("number and option sets echo the mapped value after the action (#1254)", function()
+  local context = load_strata()
+  local device = context.midi.plug(3, "controller")
+  params:add_number("echo_number", "number", 1, 3, 1)
+  params:add_option("echo_option", "option", { "one", "two", "three" }, 1)
+  for _, id in ipairs({ "echo_number", "echo_option" }) do
+    norns.pmap.new(id)
+    norns.pmap.assign(id, 3, 5, 19)
+    local map = norns.pmap.data[id]
+    map.echo, map.out_lo, map.out_hi = true, 1, 3
+    local actions = 0
+    params:set_action(id, function()
+      actions = actions + 1
+      assert_equal(map.value, 64, id .. " action sees the map before the set")
+    end)
+    local before = #device.sent
+    params:set(id, 2, true)
+    params:set(id, 2)
+    assert_equal(map.value, 64, id)
+    assert_equal(actions, 0, id .. " silent and unchanged sets skip the action")
+    assert_equal(#device.sent, before + 2, id .. " each set echoes")
+    for n = before + 1, before + 2 do assert_equal(table.concat(device.sent[n], ","), "180,19,64") end
+    map.echo = false
+    params:set(id, 3)
+    assert_equal(actions, 1)
+    assert_equal(map.value, 127)
+    assert_equal(#device.sent, before + 2)
+  end
+end)
+
 test("stub params:write and params:read follow lua/core/paramset.lua", function()
   local context = load_strata()
   local pset_path = context.data_dir .. "stub.pset"
@@ -1150,6 +1180,15 @@ test("stub fileselect, musicutil, polls and audio path", function()
   assert_equal(values[2], 3)
   local number_type = math.type or function() return "float" end
   assert_equal(number_type(values[2]), "float", "a whole poll value arrives as a float")
+end)
+
+test("a numeric poll arrives with OSC float32 precision (#1258)", function()
+  local context = load_strata()
+  local heard
+  local entry = poll.set("bufferState", function(value) heard = value end)
+  entry:start()
+  context.polls.fire("bufferState", 61299.99)
+  assert_equal(heard, 61299.98828125)
 end)
 
 -- lib/fileselect.lua's fs.enter (#985): from play mode it keeps the globals
