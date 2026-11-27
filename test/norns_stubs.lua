@@ -606,6 +606,19 @@ local DOCUMENTED_LIMITS = {
   setModSpeed = { argument = 2, name = "speed", param_id = function(args) return ("v%d_mod_speed"):format(args[1] + 1) end },
 }
 
+-- an OSC float's value, float32, on a command or a poll:
+-- string.pack on Lua 5.3, an ffi float on LuaJIT (which has no string.pack)
+local float32
+-- each fallback is in the name's own expression, the form the #119 scan
+-- (structure_test.lua) accepts; the if below picks the ffi on LuaJIT
+local pack_string, unpack_string = string.pack or false, string.unpack or false
+if pack_string then
+  float32 = function(value) return (unpack_string("f", pack_string("f", value))) end
+else
+  local float_box = require("ffi").new("float[1]")
+  float32 = function(value) float_box[0] = value; return tonumber(float_box[0]) end
+end
+
 -- Per-command checks of argument values (after the type checks): each
 -- returns an error message, or nil when the arguments are valid. Every
 -- engine command needs an entry, so a new command gets its limits checked.
@@ -623,18 +636,6 @@ local function engine_argument_checks(spec, lookup_param, buffer_seconds)
   -- the tuning set the last valid setTuning began (3.8) and its last tone
   -- has not closed: {count, period, tones (by index + 1), received}
   local tuning_set = nil
-  -- an OSC float's value, float32, as the engine hears an "f" argument:
-  -- string.pack on Lua 5.3, an ffi float on LuaJIT (which has no string.pack)
-  local float32
-  -- each fallback is in the name's own expression, the form the #119 scan
-  -- (structure_test.lua) accepts; the if below picks the ffi on LuaJIT
-  local pack_string, unpack_string = string.pack or false, string.unpack or false
-  if pack_string then
-    float32 = function(value) return (unpack_string("f", pack_string("f", value))) end
-  else
-    local float_box = require("ffi").new("float[1]")
-    float32 = function(value) float_box[0] = value; return tonumber(float_box[0]) end
-  end
   -- a problem with a float32 value names what Lua sent too, when it differs
   local function heard(sent, problem)
     if problem and float32(sent) ~= sent then
@@ -1393,6 +1394,14 @@ local function make_params(util, controlspec)
     end
   end
 
+  local function update_midi_map(param, value)
+    local map = norns.pmap.data[param.id]
+    if map then
+      map.value = util.round(util.linlin(map.out_lo, map.out_hi, map.in_lo, map.in_hi, value))
+      if map.echo then midi.vports[map.dev]:cc(map.cc, map.value, map.ch) end
+    end
+  end
+
   -- each type follows its lua/core/params/*.lua set(): actions fire only on a
   -- change, except triggers (and trigger-behavior binaries), which always fire
   function ParamSet:set(id, value, silent)
@@ -1436,6 +1445,11 @@ local function make_params(util, controlspec)
       if param.text ~= value then param.text = value; changed = true end
     end
     if changed and not silent then bang(param) end
+    if param.t == tNUMBER then
+      update_midi_map(param, param.value)
+    elseif param.t == tOPTION then
+      update_midi_map(param, param.selected)
+    end
   end
 
   -- lua/core/params/control.lua (control params only; norns has no
@@ -1467,11 +1481,7 @@ local function make_params(util, controlspec)
       param.raw = raw
       if not silent then bang(param) end
     end
-    local map = norns.pmap.data[param.id]
-    if map then
-      map.value = util.round(util.linlin(map.out_lo, map.out_hi, map.in_lo, map.in_hi, param.raw))
-      if map.echo then midi.vports[map.dev]:cc(map.cc, map.value, map.ch) end
-    end
+    update_midi_map(param, param.raw)
   end
 
   -- core/paramset.lua: params:delta is the param object's own delta
@@ -2835,14 +2845,12 @@ local function make_poll(engine_polls, engine_spec)
     return entry
   end
 
-  -- test helper: deliver a value the way a running poll does. matron pushes
-  -- every poll value with lua_pushnumber (weaver.cc, w_handle_poll_value): a
-  -- float, also for a whole number, so tests pass whole numbers and the
-  -- handler sees what a norns sends (#300)
+  -- matron receives an OSC float32 and pushes it with lua_pushnumber
+  -- (weaver.cc, w_handle_poll_value), even for a whole number (#300, #1258).
   function poll.fire(name, value)
     local entry = poll.polls[name]
     assert(entry, "no poll named " .. tostring(name))
-    if type(value) == "number" then value = value + 0.0 end
+    if type(value) == "number" then value = float32(value) end
     if entry.running and entry.callback then entry.callback(value) end
   end
 
