@@ -68,6 +68,7 @@ return function(S)
   local reader = {clock = nil, poll = nil}
   -- the binds the next LFO step acts on: per slot, true, and whether to analyze
   local due_binds = {}
+  local pending_equal = {}  -- explicit cuts awaiting waveform metadata
 
   local function settings(slot)
     return valid_slot(slot) and S.lib.samples.settings(slot) or nil
@@ -99,6 +100,8 @@ return function(S)
     end
     return list, frames
   end
+
+  M.playable_markers = usable
 
   -- How many slices the slot has (0: none)
   function M.count(slot)
@@ -138,10 +141,22 @@ return function(S)
     local gap = math.ceil(SLICES.min_seconds * (rate or SLICES.default_rate))
     local kept = {}
     for _, frame in ipairs(sorted) do
-      if #kept == 0 or (frame - kept[#kept] >= gap and #kept < SLICES.max) then kept[#kept + 1] = frame end
+      if #kept == 0 or (frame - kept[#kept] >= gap and frames - frame >= gap and #kept < SLICES.max) then
+        kept[#kept + 1] = frame
+      end
     end
-    -- A hand insertion must keep every existing cut as well as the new one.
-    if minimum_count and #kept < minimum_count then return false end
+    -- Hand edits affect only visible cuts. The rest belong to the longer file.
+    if minimum_count then
+      local hidden = false
+      for _, frame in ipairs(record.markers or {}) do
+        if frame >= frames then
+          kept[#kept + 1] = frame
+          hidden = true
+        end
+      end
+      if #kept < minimum_count then return false end
+      if hidden then frames, rate = record.frames, record.rate end
+    end
     S.lib.samples.set(slot, "markers", kept)
     S.lib.samples.set(slot, "frames", frames)
     S.lib.samples.set(slot, "rate", rate)
@@ -205,9 +220,13 @@ return function(S)
   function M.make(slot)
     local record = settings(slot)
     if not record then return false end
+    pending_equal[slot] = nil
     if record.mode == SLICES.equal then
       local frames = slot_frames(slot, record)
-      if not frames then return false end
+      if not frames then
+        pending_equal[slot] = {record = record, markers = record.markers, load = S.buffers[slot].loads_sent}
+        return false
+      end
       local list = {}
       for k = 1, record.count do list[k] = math.floor((k - 1) * frames / record.count) end
       return M.set_markers(slot, list, false)
@@ -226,6 +245,15 @@ return function(S)
     return true
   end
 
+  S.lib.waveforms.on_read(function(slot)
+    local pending = pending_equal[slot]
+    if not pending then return end
+    pending_equal[slot] = nil
+    local record = settings(slot)
+    if record == pending.record and record.mode == SLICES.equal and record.markers == pending.markers
+      and S.buffers[slot].loads_sent == pending.load then M.make(slot) end
+  end)
+
   -- Hand edits (design §3.2): each through set_markers, marked edited
   -- An add: false at max markers, or where set_markers keeps none more
   -- (past the frames, too near another)
@@ -239,8 +267,10 @@ return function(S)
   function M.delete_marker(slot, index)
     local list = M.markers(slot)
     if not list or not whole_in(index, 2, #list) then return false end
+    local total = slot_frames(slot)
+    if not total or list[index] >= total then return false end
     table.remove(list, index)
-    return M.set_markers(slot, list, true)
+    return set_markers(slot, list, true, #list)
   end
 
   -- Move marker index (never the first) by frames, stopping min_seconds
@@ -249,13 +279,13 @@ return function(S)
     local list = M.markers(slot)
     if not list or not whole_in(index, 2, #list) or not finite(frames) then return false end
     local total, rate = slot_frames(slot)
-    if not total then return false end
+    if not total or list[index] >= total then return false end
     local gap = math.ceil(SLICES.min_seconds * (rate or SLICES.default_rate))
     local low = list[index - 1] + gap
-    local high = (list[index + 1] or total) - gap
+    local high = math.min(list[index + 1] or total, total) - gap
     if low > high then return false end
     list[index] = util.clamp(math.floor(list[index] + frames + 0.5), low, high)
-    return M.set_markers(slot, list, true)
+    return set_markers(slot, list, true, #list)
   end
 
   ---------------------------------------------------------------------------
@@ -382,6 +412,7 @@ return function(S)
   -- overdub ended (a recording since the slot's last bind) on a transients
   -- slot, analyzes it
   S.lib.samples.on_bind(function(slot)
+    pending_equal[slot] = nil
     generations[slot] = generations[slot] + 1
     candidates[slot] = nil
     awaited[slot] = nil

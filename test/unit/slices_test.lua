@@ -424,6 +424,131 @@ for _, seconds in ipairs({2, 1}) do
   end)
 end
 
+-- Exercise the editor and physical controls against the actual marker store.
+for _, control in ipairs({"E3", "arc"}) do
+  test(control .. " keeps nudging the selected cut after hitting its neighbor", function()
+    local context, S = sliced(2, 4)
+    h.show_page("BUFFER")
+    context.arc.plug(1)
+    assert_true(S.lib.ui_slice_editor.open(1))
+    enc(2, 1)
+    local function turn(delta)
+      if control == "E3" then enc(3, delta) else context.arc.turn(1, 2, delta) end
+    end
+    turn(600)
+    assert_equal(S.lib.slices.markers(1)[2], 47520)
+    turn(-1)
+    assert_equal(list_text(S.lib.slices.markers(1)), "{0, 47472, 48000, 72000}")
+    assert_equal(S.lib.ui_slice_editor.state().marker, 2)
+  end)
+end
+
+test("the editor and arc select only playable cuts after a shorter load", function()
+  local context, S = sliced(2, 4)
+  local editor, path = S.lib.ui_slice_editor, context.audio_dir .. "loop.wav"
+  h.show_page("BUFFER")
+  settle_load(context, 1, path, 1)
+  write_peaks(1, 1); tick(context)
+  assert_true(editor.open(1))
+  enc(2, 10)
+  assert_equal(editor.state().marker, 2)
+  assert_equal(editor.ring_fractions().position, 0.5)
+  local starts = editor.starts(1)
+  assert_equal(#starts, 2); assert_equal(starts[1], 0); assert_equal(starts[2], 0.5)
+  enc(3, 1)
+  assert_true(S.lib.slices.add_marker(1, 12000))
+  assert_true(S.lib.slices.delete_marker(1, 2))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 24048, 48000, 72000}", "hidden cuts survive hand edits")
+  settle_load(context, 1, path, 2)
+  write_peaks(1, 2); tick(context)
+  assert_true(editor.open(1))
+  enc(2, 10)
+  assert_equal(editor.state().marker, 4)
+  assert_equal(editor.ring_fractions().position, 0.75)
+end)
+
+test("a hand or generated cut leaves at least ten milliseconds at the end", function()
+  local context, S = sliced(2, 2)
+  assert_equal(S.lib.slices.add_marker(1, 95521), false)
+  assert_true(S.lib.slices.add_marker(1, 95520))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 48000, 95520}")
+  S.lib.samples.set(1, "mode", 3)
+  S.lib.slices.make(1)
+  answer(context, 1, 1, onsets_text(1, 96000, {95521}, {"1.0"}))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0}")
+  S.lib.slices.analyze(1)
+  answer(context, 1, 2, onsets_text(1, 96000, {95520}, {"1.0"}))
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 95520}")
+end)
+
+test("selecting Equal while peaks are pending cuts the confirmed file when they arrive", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local path = context.audio_dir .. "late.wav"
+  settle_load(context, 1, path, 2)
+  assert_true(S.lib.ui_slice_editor.open(1))
+  S.lib.ui_slice_editor.turn_row("mode", 1)
+  assert_equal(S.lib.slices.count(1), 0, "metadata pending")
+  write_peaks(1, 2); tick(context)
+  assert_equal(S.lib.slices.count(1), 8, "equal slices after the peaks")
+  assert_equal(S.lib.slices.region(1, 8)[1], 0.875)
+end)
+
+test("a deferred Equal request cannot recut a newer file or a later manual edit", function()
+  local context = load_strata(); finish_startup(context)
+  local S, old, new = local_value("S"), context.audio_dir .. "old.wav", context.audio_dir .. "new.wav"
+  settle_load(context, 1, old, 2)
+  S.lib.samples.set(1, "mode", 2)
+  S.lib.slices.make(1)
+  settle_load(context, 1, new, 2)
+  S.lib.samples.set(1, "mode", 2)
+  write_peaks(1, 2); tick(context)
+  assert_equal(S.lib.slices.count(1), 0, "a replacement inherits no request")
+  -- Slot 2 can edit the same file before slot 1 receives its own waveform.
+  assert(os.remove(S.lib.scenes.scene_data_dir .. "buf1.peaks"))
+  settle_load(context, 1, old, 2)
+  S.lib.slices.make(1)
+  assert_equal(S.lib.waveforms.frames(1), nil)
+  settle_load(context, 2, old, 2)
+  write_peaks(2, 2); tick(context)
+  assert_true(S.lib.slices.add_marker(2, 10000))
+  write_peaks(1, 2); S.lib.waveforms.changed(1); tick(context)
+  assert_equal(S.lib.waveforms.frames(1), 96000)
+  assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10000}")
+  assert_true(S.lib.samples.settings(1).edited)
+end)
+
+test("switching off cancels pending Equal cuts", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  settle_load(context, 1, context.audio_dir .. "late.wav", 2)
+  assert_true(S.lib.ui_slice_editor.open(1))
+  S.lib.ui_slice_editor.turn_row("mode", 1)
+  S.lib.ui_slice_editor.turn_row("mode", -1)
+  write_peaks(1, 2); tick(context)
+  assert_equal(S.lib.slices.count(1), 0)
+  assert_equal(S.lib.samples.settings(1).markers, nil)
+end)
+
+for _, back in ipairs({false, true}) do
+  test("ring 3 discards partial steps after " .. (back and "a round trip" or "a change") .. " of slice mode", function()
+    local context, S = sliced(2, 4)
+    h.show_page("BUFFER")
+    context.arc.plug(1)
+    local editor = S.lib.ui_slice_editor
+    assert_true(editor.open(1))
+    context.arc.turn(1, 3, 15)
+    editor.turn_row("mode", 1)
+    if back then editor.turn_row("mode", -1) end
+    local field = back and "count" or "sensitivity"
+    local expected = back and 4 or 50
+    context.arc.turn(1, 3, 2)
+    assert_equal(S.lib.samples.settings(1)[field], expected)
+    context.arc.turn(1, 3, back and 15 or 9)
+    assert_equal(S.lib.samples.settings(1)[field], expected + 1)
+  end)
+end
+
 -------------------------------------------------------------------------------
 -- Playing them
 -------------------------------------------------------------------------------
