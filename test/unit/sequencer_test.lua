@@ -6639,4 +6639,41 @@ test("replay_hit plays the voice's last hit again through every output, at its l
   pattern_clock_stop()
 end)
 
+for _, first in ipairs({"A", "B"}) do
+  test("starting a chain keeps live pattern edits undoable when its order begins on " .. first, function()
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    local seq, letters = S.lib.sequencer, S.lib.pattern_letters
+    seq.set_level(1, 1, 8)
+    letters.switch_now(1, "B")
+    seq.set_level(1, 1, 9)
+    letters.switch_now(1, "A")
+    letters.set_order(1, {first, "A"})
+    capture_scene(1)
+    letters.set_order_on(1, false)
+    seq.set_level(1, 1, 15)
+    params:set("seq_chain", 1)
+    pattern_clock_start()
+    assert_equal(S.patterns[1][1], first == "A" and 8 or 9)
+    assert_true(S.lib.mutation.undo(), "undo is available immediately")
+    assert_equal(S.patterns[1][1], 15)
+  end)
+end
+
+test("an empty chain creates no undo for the live order's first bar", function()
+  local context = load_strata()
+  finish_startup(context)
+  local S = local_value("S")
+  local seq, letters = S.lib.sequencer, S.lib.pattern_letters
+  letters.switch_now(1, "B")
+  seq.set_level(1, 1, 9)
+  letters.switch_now(1, "A")
+  letters.set_order(1, {"B"})
+  params:set("seq_chain", 1)
+  pattern_clock_start()
+  assert_equal(S.patterns[1][1], 9)
+  assert_equal(S.lib.mutation.undo(), false, "no scene replaced the live patterns")
+end)
+
 end

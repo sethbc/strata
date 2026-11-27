@@ -2183,14 +2183,15 @@ return function(S)
     -- review round 1): an error stops the patterns (guarded) and is raised
     -- again, never leaving them marked playing with no clock
     guarded(function() end, function()
-      if params:get("seq_chain") == 1 then
-        S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, chain_link)
-        chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
-      end
-      -- 4b (ruling 4b-2): the start's own bar, after its chain link and
-      -- before the voices' clocks play their first steps
       play.next_bar = beat + SEQ.bar_beats
-      play.run_bar_hooks(true, 1)
+      if params:get("seq_chain") == 1 then
+        S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, function()
+          chain_link()
+          chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
+          if chain.current then play.run_bar_hooks(true, 1) end  -- the linked order's first letter
+        end)
+      end
+      if not chain.current then play.run_bar_hooks(true, 1) end  -- the live order, no link to undo
     end)
     for voice_idx = 1, NUM_VOICES do M.restart_voice(voice_idx, beat) end
     S.pattern_clock = clock.run(transport_clock, beat)
