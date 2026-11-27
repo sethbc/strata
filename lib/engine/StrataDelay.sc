@@ -138,12 +138,10 @@
             var oldestTap = delayTime.max(Delay1.kr(delayTime));
             var refill = Latch.kr(delayTime, t_clear).max(oldestTap) + this.delayClearMargin;
             var open = uncleared.max(age >= refill);
-            var closing = age < (this.delayClearFade + ControlDur.ir);
             // Both shimmer heads may use the complete ring until the first
-            // Clear. After it, exclude the initial return fade, a clock block
-            // and the oldest two frames of their cubic reads.
+            // Clear. After it, allow one clock block and two cubic-read frames.
             var freshFrames = Select.kr(uncleared, [
-                ((age - this.delayClearMargin - ControlDur.ir) * SampleRate.ir) - 2, this.shimmerRingFrames
+                ((age - ControlDur.ir) * SampleRate.ir) - 2, this.shimmerRingFrames
             ]);
             var delayed = BufDelayC.ar([bufL, bufR], [
                 input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
@@ -151,11 +149,16 @@
             ], delayTime);
             // Select switches the whole block. Multiplication by a control-rate
             // guard interpolates it and leaks old samples on a fast sweep.
-            var tap = Select.ar(open.max(closing), [DC.ar(0), delayed]);
+            var silence = DC.ar(0), tap = Select.ar(open, [silence, delayed]);
+            // Fade only the last safe sample when a moving tap crosses back
+            // into discarded history. The feedback and shimmer get silence.
+            var returnTap = Gate.ar(tap, open);
             var shifted = this.shimmerShift(tap, [shiftL, shiftR], shimmerRatio.clip(0.5, 4), freshFrames);
             var fed = tap + ((shifted - tap) * shimmer.clip(0, 1).lag(this.fxMixLag));
-            LocalOut.ar(fed * feedback.clip(0, 0.95).max(hold) * this.delayClearGain(open, ControlRate.ir));
-            Out.ar(out, tap * this.delayClearGain(open, 1 / this.delayClearFade)
+            var feedbackGain = feedback.clip(0, 0.95).max(hold) * this.delayClearGain(open, ControlRate.ir);
+            // A shimmer head can still be playing on the block that closes.
+            LocalOut.ar(Select.ar(open, [silence, fed]) * feedbackGain);
+            Out.ar(out, returnTap * this.delayClearGain(open, 1 / this.delayClearFade)
                 * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
     }
