@@ -216,7 +216,9 @@ return function(S)
     -- nothing loads. Returns whether path may be written over: false only
     -- for a file that could not be used and could not be set aside
     function files.read(path, silent)
-      local loaded, problem, detail = S.lib.data_files.read(path)
+      -- Keep the first read only for a loader that will recheck this path.
+      local snapshot = not reading_only and spec.rechecks and spec.rechecks(path) and {} or nil
+      local loaded, problem, detail = S.lib.data_files.read(path, snapshot)
       local why
       if loaded == nil and problem ~= "missing" then
         why = tostring(detail)
@@ -244,7 +246,7 @@ return function(S)
         writable = backup ~= nil
       end
       if not reading_only then needs_backup[path] = not writable or nil end
-      spec.load(loaded and loaded[spec.key] or nil, path, silent)
+      spec.load(loaded and loaded[spec.key] or nil, path, silent, loaded and snapshot or nil)
       return writable
     end
 
