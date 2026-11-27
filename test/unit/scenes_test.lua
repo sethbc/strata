@@ -4925,35 +4925,37 @@ test("reloading the marked PSET decodes and validates its unchanged scenes once 
     "the matching scenes load without a backup")
 end)
 
-test("a marked side file replaced between the two reads preserves the live scenes (#1272)", function()
-  local context, S = pset_session()
-  local pset, _, side = pset_files(context, 1)
-  capture_scene(1)
-  params:write(pset)
-  local files = S.lib.data_files
-  local marked = assert(files.read(side))
-  marked.scenes[1].name = "newer"
-  local replacement = files.encode(marked)
-  local read, reads = files.read, 0
-  local validate, replacement_checks = validate_scene, 0
-  validate_scene = function(scene)
-    if scene and scene.name == "newer" then replacement_checks = replacement_checks + 1 end
-    return validate(scene)
-  end
-  files.read = function(path, ...)
-    if path == side then
-      reads = reads + 1
-      if reads == 2 then h.write_text(side, replacement) end
+for _, case in ipairs({"changed", "empty"}) do
+  test("a marked side file replaced between reads keeps the live scenes: " .. case .. " (#1272)", function()
+    local context, S = pset_session()
+    local pset, _, side = pset_files(context, 1)
+    capture_scene(1)
+    params:write(pset)
+    local files = S.lib.data_files
+    local marked = assert(files.read(side))
+    marked.scenes[1].name = "newer"
+    local replacement = case == "changed" and files.encode(marked) or ""
+    local read, reads = files.read, 0
+    local validate, replacement_checks = validate_scene, 0
+    validate_scene = function(scene)
+      if scene and scene.name == "newer" then replacement_checks = replacement_checks + 1 end
+      return validate(scene)
     end
-    return read(path, ...)
-  end
-  params:read(pset)
-  files.read, validate_scene = read, validate
-  assert_equal(replacement_checks, 1, "the second read validates the replacement")
-  local backup = assert(read(live_scenes_path(context) .. ".bak"), "the changed mark requires a backup")
-  assert_true(backup.scenes[1].populated and backup.scenes[1].name == "", "the backup holds the original live scene")
-  assert_equal(h.file_text(side), replacement, "the externally written preset is preserved")
-end)
+    files.read = function(path, ...)
+      if path == side then
+        reads = reads + 1
+        if reads == 2 then h.write_text(side, replacement) end
+      end
+      return read(path, ...)
+    end
+    params:read(pset)
+    files.read, validate_scene = read, validate
+    if case == "changed" then assert_equal(replacement_checks, 1, "the second read validates the replacement") end
+    local backup = assert(read(live_scenes_path(context) .. ".bak"), "the changed mark requires a backup")
+    assert_true(backup.scenes[1].populated and backup.scenes[1].name == "", "the backup holds the original live scene")
+    assert_equal(h.file_text(side), replacement, "the externally written preset is preserved")
+  end)
+end
 
 test("a mark whose PSET holds other scenes than the live ones counts as no PSET (#766)", function()
   local context, S = pset_session()
