@@ -107,12 +107,15 @@ return function(S)
 
   -- Armed: the confirmation was asked for on the cursor's slot and has not
   -- lapsed. Only then does the hint row ask and a second ALT+K3 save
+  local armed_prompt  -- each arming has its own identity, even on the same slot
   local function armed()
     local state = S.scenes_page
-    return state.armed_slot == S.cursors.scene and util.time() < state.armed_until
+    return armed_prompt ~= nil and state.armed_slot == S.cursors.scene and util.time() < state.armed_until
+      and armed_prompt.revision == S.lib.scenes.revision(state.armed_slot)
   end
 
   local function disarm()
+    armed_prompt = nil
     S.scenes_page.armed_slot = nil
     S.scenes_page.armed_until = 0
   end
@@ -208,7 +211,7 @@ return function(S)
   -- nothing (naming and saving it do), and ALT+K2 and ALT+K3 on a field
   -- return at once
   local function scenes_hints(alt_held)
-    if armed() then return overwrite_prompt(S.scenes_page.armed_slot, alt_held) end
+    if armed() then return overwrite_prompt(S.scenes_page.armed_slot, alt_held), armed_prompt end
     local cursor = S.cursors.scene
     if cursor > NUM_SCENES then return "E2:move E3:edit" end
     if alt_held then return "K2:name K3:save" end
@@ -316,7 +319,9 @@ return function(S)
     local slot = S.cursors.scene
     if n ~= 3 or slot > NUM_SCENES then return end
     local state = S.scenes_page
-    if S.scenes[slot].populated and not (armed() and S.lib.ui_flash.text("hints") == nil) then
+    local confirmed = armed() and S.displayed_hint_token == armed_prompt and S.lib.ui_flash.text("hints") == nil
+    if S.scenes[slot].populated and not confirmed then
+      armed_prompt = {revision = S.lib.scenes.revision(slot)}
       state.armed_slot = slot
       state.armed_until = util.time() + params:get("scene_confirm_seconds")
       request_redraw()

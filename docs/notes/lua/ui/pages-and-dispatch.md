@@ -63,7 +63,7 @@ Page records. Each page lives in its own file and creates one record at `S.regis
 - Nothing before init's first start step (`S.started`).
 - Except while the BUFFER page's file selector is open (`S.BUFFER_PAGE.file_selector_open`): then it calls `fileselect.redraw()` and returns, so neither norns' own `redraw()` calls nor Strata's frame clock draw the page over the file list (`docs/notes/lua/pages/buffer.md`).
 - While a modal owner is pushed (after the file selector's check): the header, then `owner.draw()` and `draw_hints(owner.hints(S.alt_held))` (no hints function: an empty hint row), in the same contained function as the page's; no flash replaces the owner's hints.
-- The hint row (`draw_hints(text)`: level 7, x=0, y=62) is drawn once, by `redraw()`: the "hints" flash while one shows (only on its owning page), else the record's hints.
+- The hint row (`draw_hints(text)`: level 7, x=0, y=62) is drawn once, by `redraw()`: the "hints" flash while one shows (only on its owning page), else the record's hints. When the page's hints return a second value, `redraw()` publishes it as `S.displayed_hint_token` only after `screen.update()` succeeds. Starting another redraw or forgetting page key presses clears it. Flashes, modal owners and draw-error frames publish no token.
 
 ## The modal owner
 
