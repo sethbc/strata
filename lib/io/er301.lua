@@ -85,25 +85,21 @@ return function(S)
       local port = port_of(voice)
       if port <= 0 then return end
       end_note(voice, id)
-      local notes = lines[port] or {}
-      local note = {voice = voice, id = id, pitch = pitch}
-      table.insert(notes, note)
-      lines[port] = notes
-      -- the core records a target for a note only when this returned, so a
-      -- send that raises must leave the line as it was
-      local ok, err = pcall(function()
+      local notes = lines[port]
+      local ok, trigger = pcall(function()
         send_pitch(port, pitch)
-        bus().send("er301", "tr", port, 1)
+        return bus().send("er301", "tr", port, 1)
       end)
       if not ok then
-        table.remove(notes)
-        local empty = #notes == 0
-        if empty then lines[port] = nil end
-        -- best effort, protected (the first error is the one raised again):
-        -- the newest left gets its cv back. No trigger repair exists: the
-        -- trigger is sent last, and one whose own send raised was not sent
-        if not empty then pcall(send_pitch, port, notes[#notes].pitch) end
-        error(err, 0)
+        -- The core will get no off for this note. Restore the old CV best
+        -- effort and propagate the original send error.
+        if notes then pcall(send_pitch, port, notes[#notes].pitch) end
+        error(trigger, 0)
+      end
+      if trigger then
+        notes = notes or {}
+        table.insert(notes, {voice = voice, id = id, pitch = pitch})
+        lines[port] = notes
       end
     end,
     note_off = function(voice, id)

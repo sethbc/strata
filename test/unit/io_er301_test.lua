@@ -18,11 +18,12 @@ local function install_ii(state)
   local S = local_value("S")
   local function recorder(kind, only_leading)
     return function(...)
-      if only_leading and not state.leading then return end
+      if only_leading and not state.leading then return false end
       state.attempts = (state.attempts or 0) + 1
       if state.fail_next then state.fail_next = nil; error("send failed", 0) end
       if state.fail_at and state.fail_at[state.attempts] then error("send failed #" .. state.attempts, 0) end
       state.calls[#state.calls + 1] = {kind, ...}
+      return true
     end
   end
   S.lib.io_ii = {
