@@ -900,7 +900,7 @@ var checkCheckedLoadNumbers = { arg other, path60, damaged;
         clear
     };
     // [load number, seconds] of a bufferState value, as Lua decodes it
-    decode = { arg value; var cell = (value / 1000).floor.asInteger; [cell div: 9, ((value - (cell * 1000)) * 100).round / 100] };
+    decode = { arg value; var cell = (value.abs / 1000).floor.asInteger; [cell div: 9, ((value.abs % 1000) * 100).round / 100] };
     // the slot's reports since `since`, in arrival order: [\state, load
     // number, seconds] or [\failed, load number]. The default engine's
     // periodic poll, which the high engine's reports share, also reports
@@ -911,7 +911,7 @@ var checkCheckedLoadNumbers = { arg other, path60, damaged;
         h.pollMessages.array.copyRange(since, h.pollMessages.size - 1).do({ arg msg;
             var value = msg[2], whole = value.round.asInteger;
             case
-            { (msg[1] == stateIndex) and: { ((value / 1000).floor.asInteger % 9) == slot }
+            { (msg[1] == stateIndex) and: { ((value.abs / 1000).floor.asInteger % 9) == slot }
                 and: { (value - idle).abs > 0.004 } } { found.add([\state] ++ decode.(value)) }
             { (msg[1] == failedIndex) and: { (whole % other.numBuffers) == slot } } {
                 found.add([\failed, (whole div: other.numBuffers) div: 2]) };
@@ -1321,13 +1321,13 @@ checkLongSlots.value;
         var found = List.new(16);
         h.pollMessages.array.copyRange(since, h.pollMessages.size - 1).do({ arg msg;
             var value = msg[2];
-            if ((msg[1] == poll.index) and: { ((value / 1000).floor.asInteger % 9) == slot }
+            if ((msg[1] == poll.index) and: { ((value.abs / 1000).floor.asInteger % 9) == slot }
                 and: { found.isEmpty or: { found.last != value } }) { found.add(value) };
         });
         found.asArray
     };
     // [load number, seconds] of a value, as Lua decodes it (the hundredths rounded)
-    var decode = { arg value; var cell = (value / 1000).floor.asInteger; [cell div: 9, ((value - (cell * 1000)) * 100).round / 100] };
+    var decode = { arg value; var cell = (value.abs / 1000).floor.asInteger; [cell div: 9, ((value.abs % 1000) * 100).round / 100] };
     // true when each decoded value names the load and the hundredth wanted
     var decodes = { arg got, wanted; (got.size == wanted.size) and: { got.every({ arg value, index;
         var pair = decode.(value); (pair[0] == wanted[index][0]) and: { (pair[1] - wanted[index][1]).abs < 1e-9 } }) } };
@@ -1352,7 +1352,7 @@ checkLongSlots.value;
     // a failed load: the slot's next periodic report names it (Lua counted it too)
     command.(\loadBuffer, slot, missing, 0);
     server.sync;
-    periodic = cycle.value.detect({ arg value; ((value / 1000).floor.asInteger % 9) == slot });
+    periodic = cycle.value.detect({ arg value; ((value.abs / 1000).floor.asInteger % 9) == slot });
     check.(periodic.notNil and: { (periodic - 33000.1).abs < 0.004 },
         "buffers: after a failed third load the periodic report names load 3 with the slot's 0.1 s (#578; got %)".format(periodic));
     // a clear, then a replace take: each report names the slot's load (3)

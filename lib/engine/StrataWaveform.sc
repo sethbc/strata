@@ -27,6 +27,7 @@
         // per slot: what the peaks file this engine last wrote holds
         // (peaksContent: frames, rate, the values as written), nil before one
         state[\written] = Array.newClear(numBuffers);
+        state[\writeFailed] = Array.fill(numBuffers, false);
         state[\pendingActions] = Array.newClear(numBuffers);
         state[\generation] = 0;
         this.startPeaksMover;
@@ -85,6 +86,14 @@
             if (state[\pendingActions][index] === pending) {
                 state[\pendingActions][index] = nil;
                 if (valid.value) {
+                    var changed = state[\writeFailed][index] != written.not;
+                    var announced = areaState[\buffers][\announced][index];
+                    state[\writeFailed][index] = written.not;
+                    // A playable take's refresh or end can change readiness
+                    // without a length change. Send it before the take's action.
+                    if (changed and: { announced > 0 } and: { announced == this.bufferStateSeconds(index) }) {
+                        bufferStatePoll.update(this.announcedBufferState(index));
+                    };
                     if (written.not) { postln("strata: cannot write " ++ path) };
                     state[\written][index] = if (written) { content };
                 };

@@ -96,11 +96,10 @@ test("buffer triggers call the engine and track recording state", function()
   state_report(context, 8, 0, 16); assert_near(local_value("buffers")[8].seconds, 16, 1e-9)
   state_report(context, 1, 0, 0); assert_near(local_value("buffers")[1].seconds, 0, 1e-9)
   -- slot 1 with load number bufferStateLoads (never sent: the numbers run
-  -- 0 .. bufferStateLoads - 1), built from the stub's engine spec, and a
-  -- negative value: ignored
+  -- 0 .. bufferStateLoads - 1) is ignored for both publication outcomes.
   local spec = h.engine_spec
   local never_sent = (spec.buffer_state_loads * (spec.num_buffers + 1) + 0) * spec.buffer_state_stride + 50
-  for _, value in ipairs({ never_sent, -1 }) do context.polls.fire("bufferState", value) end
+  for _, value in ipairs({ never_sent, -never_sent }) do context.polls.fire("bufferState", value) end
   assert_near(local_value("buffers")[1].seconds, 0, 1e-9, "slot 1 keeps its 0 s")
   -- an empty path or norns' "-" (no file chosen) loads nothing
   context.clear_engine_calls()
@@ -1248,7 +1247,9 @@ test("bufferState poll ignores NaN, infinities and out-of-range slots", function
   local buffers = local_value("buffers")
   state_report(context, 4, 0, 4)   -- slot 4 holds 4 s
   local before = deep_copy(buffers)
-  for _, value in ipairs({ 0 / 0, math.huge, -math.huge, -1, context.polls.buffer_state_value(9, 0, 0) }) do
+  -- The capacity cell (8) can never name load 1, under either sign.
+  local invalid_capacity = (9 + 8) * 1000 + 1
+  for _, value in ipairs({ 0 / 0, math.huge, -math.huge, -invalid_capacity, context.polls.buffer_state_value(9, 0, 0) }) do
     local ok, message = pcall(context.polls.fire, "bufferState", value)
     assert_true(ok, "poll value " .. tostring(value) .. " raises no error: " .. tostring(message))
     for slot = 1, 8 do

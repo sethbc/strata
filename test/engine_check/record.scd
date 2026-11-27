@@ -21,7 +21,7 @@ var settle = { arg time = 0.05; time.wait; server.sync };
 // bufferState (#578): the slot index a value names, ((loads % bufferStateLoads)
 // * (numBuffers + 1) + slot index) being its thousands, and a slot's
 // thousands now, which its reports carry until its next load
-var stateSlot = { arg value; (value / engine.bufferStateStride).floor.asInteger % (engine.numBuffers + 1) };
+var stateSlot = { arg value; (value.abs / engine.bufferStateStride).floor.asInteger % (engine.numBuffers + 1) };
 var stateBase = { arg slot;
     (((engine.bufferLoads[slot] % engine.bufferStateLoads) * (engine.numBuffers + 1)) + slot) * engine.bufferStateStride };
 var record = { arg slot, duration, level = 1.0, feedback = 0, source = 0, threshold = 0, loop = 0, delay = 0;
@@ -1063,7 +1063,7 @@ test.("record: a synced replace take keeps its slot playing until bufferFadeWait
             { (msg[1] == stateIndex) and: { (whole % stride) == slot } } {
                 events.add((#[armed, recording, ended, canceled][code % 4].asString ++ " " ++ ((code div: 4) - records)).asSymbol) }
             { (msg[1] == lengthIndex) and: { stateSlot.(value) == slot } } {
-                events.add(("length " ++ (value - ((value / lengthStride).floor * lengthStride)).round(0.01)).asSymbol) }
+                events.add(("length " ++ (value.abs % lengthStride).round(0.01)).asSymbol) }
             { (msg[1] == failedIndex) and: { (whole % stride) == slot } } {
                 events.add(("loadFailed " ++ ((code div: 2) - loads) ++ " " ++ (code % 2)).asSymbol) };
         });
@@ -1841,7 +1841,7 @@ test.("record: a take's peaks file is in place when its length is reported, then
     [peaksPath, takePath].do({ arg path; if (File.exists(path)) { File.delete(path) } });
     watcher = OSCFunc({ arg msg;
         var value = msg[2], whole = value.round.asInteger;
-        if ((msg[1] == lengthIndex) and: { stateSlot.(value) == slot } and: { (value - ((value / 1000).floor * 1000)) > 0.005 }
+        if ((msg[1] == lengthIndex) and: { stateSlot.(value) == slot } and: { (value.abs % 1000) > 0.005 }
             and: { order.includes(\length).not }) {
             order.add(\length);
             peaksFrames = peaksFileFrames.(peaksPath);

@@ -6,7 +6,8 @@
 -- the slot stale, and one clock loop reads at most one marked slot per frame
 -- tick (and re-marks a slot that records playably every
 -- WAVEFORMS.refresh_seconds, 2 s: the engine rewrites its file at most that
--- often). A file is used only if it is this slot's, in
+-- often). A failed publication blocks reads until the engine reports a
+-- successful one. A file is used only if it is this slot's, in
 -- version 1, holds WAVEFORM_POINTS values in 0-1 and its length (frames /
 -- rate) is within LENGTH_TOLERANCE of the seconds the slot reports. A
 -- slot whose length changes forgets its old points at once (changed), so
@@ -98,7 +99,7 @@ return function(S)
   local function read(slot)
     if awaiting[slot] then return end
     local values, frames, rate = nil, nil, nil
-    if S.buffers[slot].seconds > 0 then
+    if S.buffers[slot].seconds > 0 and not S.buffers[slot].peaks_unavailable then
       local file = io.open(peaks_path(slot), "r")
       if file then
         local text = file:read("*a")

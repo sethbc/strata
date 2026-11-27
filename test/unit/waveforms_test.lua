@@ -53,6 +53,69 @@ local function watch_opens(pattern)
   return counter, function() io.open = original_open end
 end
 
+test("same-length replacement keeps neutral gain until its overview is published (#1187)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  load_buffer(1, "/tmp/quiet.wav")
+  write_peaks(1, ramp(64, 0.125), {frames = 48000})
+  report(context, 1, 1, 1); tick(context, 2)
+  S.lib.samples.set(1, "normalize", true)
+  assert_equal(S.lib.samples.gain(1), 8)
+
+  load_buffer(1, "/tmp/loud.wav")
+  report(context, 1, 0, 2)
+  local state = context.polls.buffer_state_value(1, 2, 1)
+  context.polls.fire("bufferState", -state)
+  tick(context, 2)
+  assert_equal(S.lib.buffers.status(1), "loaded", "the new audio is playable despite the write failure")
+  assert_equal(S.buffers[1].seconds, 1)
+  assert_equal(S.lib.waveforms.peaks(1), nil)
+  S.lib.samples.set(1, "normalize", true)
+  local gains = context.calls_named("setSlotGain")
+  assert_equal(gains[#gains].args[2], 1, "the old file is still readable")
+  S.lib.waveforms.stale(1); tick(context, 2)
+  assert_equal(S.lib.waveforms.frames(1), nil, "a reread cannot accept the old file")
+
+  write_peaks(1, ramp(64, 0.5), {frames = 48000, generation = 2})
+  context.polls.fire("bufferState", state); tick(context, 2)
+  gains = context.calls_named("setSlotGain")
+  assert_equal(gains[#gains].args[2], 2, "the new overview restores normalization at the same length")
+end)
+
+test("an undone load reads only the overview of confirmed audio (#1187)", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local path = "/tmp/sample.wav"
+  local function reject(load)
+    context.polls.fire("bufferLoadFailed", load * 2 * S.constants.NUM_BUFFERS)
+  end
+  load_buffer(1, path)
+  write_peaks(1, ramp(64, 0.125), {frames = 48000})
+  report(context, 1, 1, 1); tick(context, 2)
+  S.lib.samples.set(1, "normalize", true)
+
+  load_buffer(1, "/tmp/missing.wav"); reject(2); tick(context, 2)
+  assert_equal(S.lib.samples.gain(1), 8, "an already confirmed file regains its overview immediately")
+
+  -- The same file changes on disk. Both reports for its reload arrive
+  -- after another load has been requested and are ignored as superseded.
+  load_buffer(1, path)
+  load_buffer(1, "/tmp/missing.wav")
+  report(context, 1, 0, 3)
+  context.polls.fire("bufferState", -context.polls.buffer_state_value(1, 3, 1))
+  context.clear_engine_calls()
+  reject(4); tick(context, 2)
+  assert_equal(S.lib.samples.gain(1), 1, "the restored reload is still awaiting its own audio")
+  assert_equal(S.lib.waveforms.peaks(1), nil)
+  for _, call in ipairs(context.calls_named("setSlotGain")) do
+    assert_equal(call.args[2], 1, "a rollback may not boost the replacement from the old file")
+  end
+  context.polls.fire("bufferState", -context.polls.buffer_state_value(1, 4, 1))
+  tick(context, 2)
+  assert_equal(S.lib.buffers.status(1), "loaded")
+  assert_equal(S.lib.samples.gain(1), 1)
+end)
+
 test("a valid peaks file is read and binned", function()
   local context = load_strata(); finish_startup(context)
   local waveforms = local_value("S").lib.waveforms

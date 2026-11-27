@@ -189,7 +189,10 @@
     // bufferStateLoad's (rejectLoad's re-report, #1016)
     bufferStateReport { arg index, seconds, named;
         var load = if (index < numBuffers) { (named ?? { this.bufferStateLoad(index) }) % this.bufferStateLoads } { 0 };
-        ^((((load * (numBuffers + 1)) + index) * this.bufferStateStride) + seconds).asFloat
+        var value = ((((load * (numBuffers + 1)) + index) * this.bufferStateStride) + seconds).asFloat;
+        // The sign carries availability without costing a bit of length precision.
+        if (index < numBuffers and: { seconds > 0 } and: { areaState[\waveform][\writeFailed][index] }) { ^value.neg };
+        ^value
     }
 
     // The slot's bufferState value now: its valid seconds and load number
