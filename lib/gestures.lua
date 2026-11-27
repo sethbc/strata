@@ -149,16 +149,31 @@ return function(S)
 
   -- Offsets and a length in beats, the length rounded to whole units (at
   -- least one) and every offset scaled by the same factor
-  local function rounded(offsets, beats, unit)
+  local function rounded(events, offsets, beats, unit)
     local length = math.max(1, math.floor(beats / unit + 0.5)) * unit
-    local factor = beats > 0 and length / beats or 0
-    local scaled = {}
-    for index, offset in ipairs(offsets) do scaled[index] = offset * factor end
+
+    local scaled, at_end = {}, nil
+    for index, offset in ipairs(offsets) do
+      scaled[index] = beats > 0 and (offset / beats) * length or 0
+      if scaled[index] >= length then at_end = at_end or index end
+    end
+    if at_end then
+      -- A move at the very end precedes the first move on the same tick.
+      -- Beat offsets belong to [0, length), so put those moves at beat 0.
+      local ordered, wrapped = {}, {}
+      for index = 1, #events do
+        local source = (at_end + index - 2) % #events + 1
+        ordered[index] = events[source]
+        wrapped[index] = source >= at_end and 0 or scaled[source]
+      end
+      for index, event in ipairs(ordered) do events[index] = event end
+      return wrapped, length
+    end
     return scaled, length
   end
 
   local function sum(values, count)
-    local total = 0
+    local total = 0.0
     for index = 1, count do total = total + values[index] end
     return total
   end
@@ -180,7 +195,7 @@ return function(S)
     end
     local offsets, beats = recorder.offsets, recorder.length_beats
     if not offsets then offsets, beats = beats_of(pattern.time, pattern.count) end
-    recorder.offsets, recorder.length_beats = rounded(offsets, beats, GESTURES.unit_beats[mode])
+    recorder.offsets, recorder.length_beats = rounded(pattern.event, offsets, beats, GESTURES.unit_beats[mode])
     pattern.time = {}
     recorder.length_seconds = nil
   end
@@ -374,7 +389,13 @@ return function(S)
       return
     end
     if not recorder.offsets then
+      local step = pattern.step
+      local gap = pattern.time[step]
       pattern:watch(event)
+      -- The metro's callback may still be queued after the gap elapsed.
+      -- Keep both parts inside that gap, leaving its pending tick alone.
+      local elapsed = util.clamp(pattern.time[step], 0, gap)
+      pattern.time[step], pattern.time[step + 1] = elapsed, gap - elapsed
       return
     end
     if not recorder.loop_start then return end  -- the first loop has not started
@@ -578,7 +599,7 @@ return function(S)
       if recorder.quantize ~= "free" then
         local beats
         offsets, beats = beats_of(times, pattern.count)
-        offsets, length = rounded(offsets, beats, GESTURES.unit_beats[recorder.quantize])
+        offsets, length = rounded(events, offsets, beats, GESTURES.unit_beats[recorder.quantize])
       end
     end
     if offsets then
@@ -595,29 +616,61 @@ return function(S)
     return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
   end
 
+  -- A contiguous list whose length fits the recorder. A sparse table's #
+  -- can stop before its last key, losing events on load.
+  local function list_size(list)
+    if type(list) ~= "table" then return nil end
+    local count, last = 0, 0
+    for key in pairs(list) do
+      if type(key) ~= "number" or key % 1 ~= 0 or key < 1 or key > GESTURES.max_events then return nil end
+      count, last = count + 1, math.max(last, key)
+    end
+    if count == last then return count end
+  end
+
+  -- Older free overdubs split a gap at the wall-clock time even when its
+  -- metro callback was late. Return the overrun to the edits before the
+  -- negative remainder, newest first. Several edits can share a deadline.
+  local function repair_free_overdub(record)
+    local times, overrun = {}, 0.0
+    for i = #record.times, 1, -1 do
+      local gap = record.times[i] - overrun
+      times[i], overrun = math.max(0.0, gap), math.max(0.0, -gap)
+    end
+    if overrun > 0 then return "a bad event time" end  -- before the loop's start
+    local duration = sum(times, #times)
+    if not finite(duration) or duration <= 0 then return "a free loop of invalid length" end
+    record.times = times
+  end
+
   -- nil when a stored record is well formed, else what is wrong with it
   local function record_problem(record)
     if type(record) ~= "table" or not mode_index(record.quantize) then return "a recorder has no quantize" end
     local events = record.events
     if events == nil then return nil end
-    if type(events) ~= "table" or #events > GESTURES.max_events then return "a recorder's events are no list" end
+    local count = list_size(events)
+    if not count then return "a recorder's events are no list" end
     for _, event in ipairs(events) do
       if type(event) ~= "table" or type(event.id) ~= "string" or not finite(event.value) then return "a bad event" end
     end
     local free = record.quantize == "free"
+    if free and record.beats ~= nil then return "a free loop has beat offsets" end
     local list = free and record.times or record.beats
-    if type(list) ~= "table" or #list ~= #events then return "a recorder's times do not match its events" end
+    if list_size(list) ~= count then return "a recorder's times do not match its events" end
     local unit = GESTURES.unit_beats[record.quantize]
     if not free and (not finite(record.length_beats) or record.length_beats < unit or record.length_beats % unit ~= 0) then
       return "a loop length that is no whole number of " .. GESTURES.unit_names[record.quantize][2]
     end
-    local previous, total = 0, 0
-    for _, value in ipairs(list) do
-      if not finite(value) or value < 0 then return "a bad event time" end
+    local previous, total, has_overrun = 0, 0.0, false
+    for index = 1, count do
+      local value = list[index]
+      if not finite(value) then return "a bad event time" end
       if not free and (value < previous or value >= record.length_beats) then return "a bad event beat" end
+      if value < 0 then has_overrun = true end
       previous, total = value, total + value
     end
-    if free and #events > 0 and not (total > 0) then return "a free loop of no length" end
+    if free and count > 0 and (not finite(total) or total <= 0) then return "a free loop of invalid length" end
+    if has_overrun then return repair_free_overdub(record) end
     return nil
   end
 
