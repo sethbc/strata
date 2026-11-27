@@ -1075,7 +1075,7 @@ test("a Positions frame reads each row once and paints its port and half", funct
       assert_equal(pane.led(x, 1), slice, "slice at column " .. x)
       assert_equal(pane.led(x, 2), x == 9 and 15 or x == 11 and 11 or 4, "held jump at " .. x)
       assert_equal(pane.led(x, 3), x == 9 and 15 or x == 12 and blink or 4, "waiting jump at " .. x)
-      for v = 4, 7 do assert_equal(pane.led(x, v), 0, "empty slot or synth on row " .. v) end
+      for v = 4, S.constants.NUM_VOICES do assert_equal(pane.led(x, v), 0, "empty slot or synth on row " .. v) end
     end
   end
   assert_equal(reads, 4, "two waveform rows on two panes")
