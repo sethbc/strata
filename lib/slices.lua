@@ -125,7 +125,7 @@ return function(S)
   -- within min_seconds of the one before, at most max; the frames and rate
   -- they were made on and the edited mark are kept with them. false when
   -- the slot has no settings or its frames are unknown
-  function M.set_markers(slot, markers, edited)
+  local function set_markers(slot, markers, edited, minimum_count)
     local record = settings(slot)
     if not record or type(markers) ~= "table" then return false end
     local frames, rate = slot_frames(slot, record)
@@ -140,12 +140,18 @@ return function(S)
     for _, frame in ipairs(sorted) do
       if #kept == 0 or (frame - kept[#kept] >= gap and #kept < SLICES.max) then kept[#kept + 1] = frame end
     end
+    -- A hand insertion must keep every existing cut as well as the new one.
+    if minimum_count and #kept < minimum_count then return false end
     S.lib.samples.set(slot, "markers", kept)
     S.lib.samples.set(slot, "frames", frames)
     S.lib.samples.set(slot, "rate", rate)
     S.lib.samples.set(slot, "edited", edited == true)
     grid_redraw()
     return true
+  end
+
+  function M.set_markers(slot, markers, edited)
+    return set_markers(slot, markers, edited)
   end
 
   -- An analysis of the slot: counted, then sent (its report names its
@@ -224,12 +230,10 @@ return function(S)
   -- An add: false at max markers, or where set_markers keeps none more
   -- (past the frames, too near another)
   function M.add_marker(slot, frame)
-    local before = M.markers(slot) or {0}
-    if #before >= SLICES.max or not whole_in(frame, 1, math.huge) then return false end
-    local list = copy_list(before)
+    local list = M.markers(slot) or {0}
+    if #list >= SLICES.max or not whole_in(frame, 1, math.huge) then return false end
     list[#list + 1] = frame
-    if not M.set_markers(slot, list, true) then return false end
-    return #M.markers(slot) > #before
+    return set_markers(slot, list, true, #list)
   end
 
   function M.delete_marker(slot, index)
