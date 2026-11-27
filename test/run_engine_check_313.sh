@@ -68,7 +68,8 @@
 # broken" line, whatever ended it); capped (the memory cap killed a process
 # in the container: oom_kill above 0, #544); killed (exit 137 with no cap
 # kill: stopped from outside); crashed (a signal with none of those: #131);
-# or passed. The detail of a collector failure says what else the log
+# a remaining ENGINE CHECK FAILED: report is failed; otherwise status 0
+# passes. The detail of a collector failure says what else the log
 # shows. A sharded run that did not pass takes the class of its worst shard
 # (the first in that order, after passed; of two alike, the first in the
 # run's order), and the summary names that shard, then any other shard that
@@ -355,29 +356,30 @@ fi
 # shows, a passing one too (#687); its detail says what else the log shows.
 classify() {
   status=$(cat "$2" 2> /dev/null || echo 1)
-  signal=$(grep -o "sclang ended on signal [0-9]* after [0-9]* s" "$1" 2> /dev/null | head -n 1)
+  signal=$(grep -m 1 -oE "^ENGINE CHECK FAILED: sclang ended on signal [0-9]+ after [0-9]+ s" "$1" 2> /dev/null || true)
+  signal=${signal#ENGINE CHECK FAILED: }
+  engine_failure=$(grep -m 1 "^ENGINE CHECK FAILED:" "$1" 2> /dev/null || true)
+  failure=$(grep -m 1 -E "^FAIL|^ERROR|Strata invariant broken" "$1" 2> /dev/null || true)
+  cap_note=
+  grep -qE "^strata cgroup oom_kill: [1-9]" "$1" 2> /dev/null && cap_note="; the memory cap killed a process (#544)"
   detail=
   if grep -q "gr[e]y count error" "$1" 2> /dev/null; then
     class=collector rank=1
     detail="#211; count errors"
-    if grep -qE "^FAIL|^ERROR|Strata invariant broken" "$1"; then
-      detail="$detail; $(grep -m 1 -E "^FAIL|^ERROR|Strata invariant broken" "$1")"
-    fi
-    grep -qE "^strata cgroup oom_kill: [1-9]" "$1" && detail="$detail; the memory cap killed a process (#544)"
+    [ -z "$failure" ] || detail="$detail; $failure"
+    detail="$detail$cap_note"
     [ "$status" != 137 ] || detail="$detail; exit 137"
     if [ -n "$signal" ]; then
       detail="$detail; $signal"
-    elif [ "$status" = 0 ]; then
+    elif [ -n "$engine_failure" ] && [ -z "$failure$cap_note" ]; then
+      detail="$detail; $engine_failure"
+    elif [ "$status" = 0 ] && [ -z "$failure$cap_note" ]; then
       detail="$detail; the check itself passed"
     fi
-  elif [ "$status" = 0 ]; then
-    class=passed rank=6
-  elif grep -qE "^FAIL|^ERROR|Strata invariant broken" "$1" 2> /dev/null; then
+  elif [ -n "$failure" ]; then
     class=failed rank=2
-    note=
-    grep -qE "^strata cgroup oom_kill: [1-9]" "$1" && note="; the memory cap killed a process (#544)"
-    detail="$(grep -m 1 -E "^FAIL|^ERROR|Strata invariant broken" "$1")$note"
-  elif grep -qE "^strata cgroup oom_kill: [1-9]" "$1" 2> /dev/null; then
+    detail="$failure$cap_note"
+  elif [ -n "$cap_note" ]; then
     class=capped rank=3
     detail="the container's memory cap of $memory_cap killed it; ${signal:-no sclang signal}"
   elif [ "$status" = 137 ]; then
@@ -388,6 +390,11 @@ classify() {
   elif [ -n "$signal" ]; then
     class=crashed rank=5
     detail=$signal
+  elif [ -n "$engine_failure" ]; then
+    class=failed rank=2
+    detail=$engine_failure
+  elif [ "$status" = 0 ]; then
+    class=passed rank=6
   else
     class=failed rank=2
     detail=$(grep -m 1 -E "ENGINE CHECK FAILED|FAILURE" "$1" 2> /dev/null || echo "see the log")
