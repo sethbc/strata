@@ -359,6 +359,29 @@ local function lift(context, channel, note)
   context.midi.send(1, {type = "note_off", note = note, vel = 0, ch = channel})
 end
 
+test("wide MPE bends reach the receiver while native expression stays in range (#1237)", function()
+  local c, _, device = one_member()
+  params:set("mpe_bend_range", 96); params:set("midi_out_bend_range", 96)
+  settled(c); clear(device)
+  local function native_bend()
+    local calls = c.calls_named("noteExpression")
+    for index = #calls, 1, -1 do
+      local args = calls[index].args
+      if args[1] == 0 and args[2] == 0 then return args[3] end
+    end
+  end
+  c.clear_engine_calls()
+  press(c, 2, 60, 14336)
+  assert_equal(bends(device, 2), "14336", "+72 semitones on the first note")
+  settled(c)
+  assert_equal(native_bend(), 16)
+  clear(device); c.clear_engine_calls()
+  c.midi.send(1, {type = "pitchbend", val = 2048, ch = 2})
+  settled(c)
+  assert_equal(bends(device, 2), "2048", "-72 semitones on a held note")
+  assert_equal(native_bend(), 1/16)
+end)
+
 test("a played note ending on a shared channel puts back the bend of the one still on it, once", function()
   local context, S, device = one_member()
   press(context, 2, 60, 9000)
