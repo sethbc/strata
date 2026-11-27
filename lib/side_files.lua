@@ -173,6 +173,7 @@ return function(S)
   function M.new(spec)
     check(spec)
     local files = {}
+    local needs_backup = {}  -- paths whose last ordinary read could neither use nor set aside the file
     -- loaded: the start step read the live file, found it missing or set it
     -- aside, so it may be written over (the writer's closed says the cleanup
     -- step wrote it)
@@ -191,6 +192,14 @@ return function(S)
       if not written then print("error: " .. spec.name .. " not saved to " .. path .. " (" .. tostring(detail) .. ")") end
     end
     function files.write(path)
+      if needs_backup[path] then
+        local backup, why = S.lib.data_files.set_aside(path, spec.backup_suffix)
+        if not backup then
+          report(false, why, path)
+          return false
+        end
+        needs_backup[path] = nil
+      end
       local written, detail = S.lib.data_files.write(path, value())
       report(written, detail, path)
       return written
@@ -230,6 +239,7 @@ return function(S)
         loaded = nil
         writable = backup ~= nil
       end
+      if not reading_only then needs_backup[path] = not writable or nil end
       spec.load(loaded and loaded[spec.key] or nil, path, silent)
       return writable
     end
@@ -284,7 +294,8 @@ return function(S)
           if after_read then after_read(silent) end
         end,
         delete = function(path_base)
-          os.remove(path_base .. spec.side_suffix)
+          local path = path_base .. spec.side_suffix
+          if os.remove(path) then needs_backup[path] = nil end
           if after_delete then after_delete(path_base) end
         end,
       }

@@ -269,6 +269,67 @@ test("side files: the PSET hook's write always writes, its read passes silent on
   assert_equal(table.concat(order, ", "), "load nil nil", "a missing side file loads nothing")
 end)
 
+local function fill_backups(S, side)
+  local backups = {}
+  for n = 1, S.lib.data_files.DATA_FILES.backups do
+    backups[n] = side .. ".bak" .. (n == 1 and "" or "." .. n)
+    write_text(backups[n], "older copy " .. n)
+  end
+  return backups
+end
+
+test("a PSET save preserves its incompatible side file and every occupied backup (#1260)", function()
+  local context, S = loaded()
+  local pset = context.data_dir .. "strata-01"
+  local other = context.data_dir .. "strata-02"
+  local side = pset .. ".macros.data"
+  params:write(pset .. ".pset")
+  local old = S.lib.data_files.encode({version = 99, macros = {}})
+  write_text(side, old)
+  local backups = fill_backups(S, side)
+  params:read(pset .. ".pset")
+  params:write(other .. ".pset")
+  assert_equal(S.lib.data_files.read(other .. ".macros.data").version, 1, "another preset can save its macros")
+  params:read(other .. ".pset")
+  params:write(pset .. ".pset")
+  assert_equal(file_text(side), old, "the refused file is still in place after saving over its preset")
+  for n, path in ipairs(backups) do assert_equal(file_text(path), "older copy " .. n, path) end
+  assert(os.remove(backups[2]))
+  params:write(pset .. ".pset")
+  assert_equal(file_text(backups[2]), old, "retry backs up the original before publishing")
+  assert_equal(S.lib.data_files.read(side).version, 1, "the retry writes the current macros")
+end)
+
+test("a refused PSET write reports failure until a regular reread or deletion clears it (#1260)", function()
+  local context, S = loaded()
+  local files = probe(S)
+  local base = context.data_dir .. "strata-03"
+  local side = base .. ".probe.data"
+  local outcomes = {}
+  local hook = files.pset_hook(nil, nil, function(written)
+    table.insert(outcomes, written)
+  end)
+  local valid = S.lib.data_files.encode({version = 1, probes = {}})
+  local data_files = S.lib.data_files
+  fill_backups(S, side)
+  write_text(side, "unreadable")
+  hook.read(base)
+  S.lib.side_files.read_only(function() hook.read(base) end)
+  hook.write(base)
+  assert_equal(outcomes[1], false, "a read-only factory read cannot clear the refusal")
+  assert_equal(file_text(side), "unreadable", "the refused write preserves the file")
+  write_text(side, valid)
+  hook.read(base)
+  hook.write(base)
+  assert_equal(outcomes[2], true, "a regular reread of a repaired file allows saving")
+  write_text(side, "unreadable again")
+  hook.read(base)
+  hook.delete(base)
+  hook.write(base)
+  assert_equal(outcomes[3], true, "explicit deletion lets a later save create the file")
+  assert_equal(data_files.read(side).version, 1)
+end)
+
 test("side files: a spec is checked when it is made", function()
   local context, S = loaded()
   for _, field in ipairs({ "name", "contents", "key", "live_file", "side_suffix", "backup_suffix", "capture",
