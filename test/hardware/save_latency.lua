@@ -49,7 +49,7 @@ return function(writers)
             pending = pending - 1
           end
         end
-        assert(now - starts[1] < 120, "receipt timed out")
+        if now - starts[1] >= 120 then break end
         if pending > 0 then
           seq = seq + 1
           sent[seq] = now
@@ -70,6 +70,14 @@ return function(writers)
       local samples = {}
       for i, rtt in ipairs(rtts) do samples[i] = string.format("%.2f", rtt) end
       print("osc_rtt_ms=" .. table.concat(samples, ","))
+      if pending > 0 then
+        for slot = 1, writers do
+          local receipt = delays[slot] and string.format("receipt_ms=%.2f", delays[slot])
+            or string.format("receipt=pending waited_ms=%.2f", (last - starts[slot]) * 1000)
+          print(string.format("slot=%d %s path=%s", slot, receipt, paths[slot]))
+        end
+        error("receipt timed out")
+      end
       for slot = 1, writers do
         local channels, frames, rate = audio.file_info(paths[slot])
         print(string.format("slot=%d receipt_ms=%.2f path=%s channels=%s frames=%s rate=%s",
