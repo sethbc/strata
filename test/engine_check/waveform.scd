@@ -14,7 +14,7 @@ var storedPeaks = { arg target, slot; target.areaState[\waveform][\peaks][slot] 
 // bufferState (#578): the slot index a value names, ((loads % bufferStateLoads)
 // * (numBuffers + 1) + slot index) being its thousands, and a slot's
 // thousands now, which its reports carry until its next load
-var stateSlot = { arg value; (value / engine.bufferStateStride).floor.asInteger % (engine.numBuffers + 1) };
+var stateSlot = { arg value; (value.abs / engine.bufferStateStride).floor.asInteger % (engine.numBuffers + 1) };
 var stateBase = { arg slot;
     (((engine.bufferLoads[slot] % engine.bufferStateLoads) * (engine.numBuffers + 1)) + slot) * engine.bufferStateStride };
 
@@ -241,7 +241,7 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     command.(\clearBuffer, slot); server.sync;
     if (File.exists(peaksPath)) { File.delete(peaksPath) };
     watcher = OSCFunc({ arg msg;
-        if ((msg[1] == pollIndex) and: { stateSlot.(msg[2]) == slot } and: { (msg[2] % 1000) > 0.01 } and: { found.isNil }) {
+        if ((msg[1] == pollIndex) and: { stateSlot.(msg[2]) == slot } and: { (msg[2].abs % 1000) > 0.01 } and: { found.isNil }) {
             found = File.exists(peaksPath);
         };
     }, '/poll/value');
@@ -313,7 +313,7 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
         };
         target = build.value; old = target; path = target.peaksPath(0); mover = target.areaState[\waveform][\mover];
         watch = OSCFunc({ arg msg;
-            if (msg[1] == pollIndex and: { stateSlot.(msg[2]) == 0 } and: { (msg[2] % 1000) > 0.1 }) {
+            if (msg[1] == pollIndex and: { stateSlot.(msg[2]) == 0 } and: { (msg[2].abs % 1000) > 0.1 }) {
                 reports.add(msg[2]);
             }
         }, '/poll/value');
@@ -475,11 +475,36 @@ check.(engine.peaksPath(2) == (engine.allocSettingsDirectory +/+ "buf3.peaks"),
     command.(\loadBuffer, slot, h.monoPath, 0);
     waitFor.({ engine.bufferFrames[slot] == 4410 });
     0.1.wait; server.sync;
-    check.((engine.bufferFrames[slot] == 4410) and: { h.pollValueNear(\bufferState, stateBase.(slot) + seconds, 0.011) }
+    check.((engine.bufferFrames[slot] == 4410) and: { h.pollValueNear(\bufferState, (stateBase.(slot) + seconds).neg, 0.011) }
         and: { PathName(peaksPath).isFolder } and: { (dir +/+ "*.peaks.*.part").pathMatch.isEmpty },
         "waveform: a failed peaks write still reports the length (% frames)".format(engine.bufferFrames[slot]));
     ("rmdir " ++ peaksPath.shellQuote).systemCmd;
     command.(\clearBuffer, slot); server.sync;
+}.value;
+
+// A failed replacement can leave a readable, same-length sidecar (#1187).
+{
+    var slot = 3, path = scratchRoot +/+ "waveform-same-length.wav", sidecar = engine.peaksPath(slot);
+    var previous, failedValue, dir = sidecar.dirname;
+    h.writeTestFile(path, rate, rate, [0.125]);
+    command.(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
+    previous = File.readAllString(sidecar);
+    check.(previous.contains("peaks 0.125"), "waveform: the first load publishes its quiet overview");
+    h.writeTestFile(path, rate, rate, [0.5]);
+    ("chmod u-w " ++ dir.shellQuote).systemCmd;
+    protect {
+        command.(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
+        failedValue = (stateBase.(slot) + 1).neg;
+        check.(File.readAllString(sidecar) == previous and: { (h.bufferSample(engine.buffersL[slot], 100) - 0.5).abs < 0.001 },
+            "waveform: replacement audio plays while the original overview remains readable");
+        check.(h.pollValueNear(\bufferState, failedValue, 0.001) and: { stateSlot.(failedValue) == slot }
+            and: { engine.announcedBufferState(slot) == failedValue },
+            "waveform: immediate and repeated length reports mark the old overview unavailable");
+    } { ("chmod u+w " ++ dir.shellQuote).systemCmd };
+    command.(\loadBuffer, slot, path, 0); h.awaitLoad(slot);
+    check.(File.readAllString(sidecar).contains("peaks 0.500") and: { engine.announcedBufferState(slot) == (stateBase.(slot) + 1) },
+        "waveform: a successful publication makes the new overview available again");
+    File.delete(path);
 }.value;
 
 // The peaks mover (#210): one long-lived shell renames every peaks file, so a

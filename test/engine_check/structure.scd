@@ -309,7 +309,7 @@ var checkRollbackPolls = {
     h.waitFor({ fresh.bufferFrames[0] > 0 }, 3);
     reports = (fresh.numBuffers + 1).collect({ CronePollRegistry.getPollFromName(\bufferState).instVarAt(\function).value });
     // slot index 0's report: its thousands are (load number * (numBuffers + 1) + 0) (#578)
-    slotOne = reports.detect({ arg value; ((value / fresh.bufferStateStride).floor.asInteger % (fresh.numBuffers + 1)) == 0 });
+    slotOne = reports.detect({ arg value; ((value.abs / fresh.bufferStateStride).floor.asInteger % (fresh.numBuffers + 1)) == 0 });
     h.freeEngine(failed[\engine]);
     h.freeEngine(fresh);
     h.teardownSync("free rollback engines");

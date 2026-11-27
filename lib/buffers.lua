@@ -16,9 +16,10 @@
 
 -- At the start of a line (outside the constructor): a test finds the
 -- stride and the load numbers by matching these lines in the script's
--- sources. bufferState value = (load number * (NUM_BUFFERS + 1) + slot
+-- sources. The magnitude of bufferState is (load number * (NUM_BUFFERS + 1) + slot
 -- index) * BUFFER_STATE_STRIDE + valid seconds, the load number being the
--- slot's loads modulo BUFFER_STATE_LOADS (#578, buffer_state_changed)
+-- slot's loads modulo BUFFER_STATE_LOADS (#578, buffer_state_changed). A
+-- negative value means the current audio's peaks could not be published.
 local BUFFER_STATE_STRIDE = 1000  -- engine bufferStateStride
 local BUFFER_STATE_LOADS = 7      -- engine bufferStateLoads
 
@@ -359,10 +360,13 @@ return function(S)
     buffer.sent_start = buffer.start
     buffer.sample_rate, buffer.file_seconds = state.sample_rate, state.file_seconds
     set_buffer_file_param(slot, state.file_param)
-    -- the overview comes back with the audio (its peaks file is still on
-    -- disk), unless the state is a long load still being checked, which
-    -- has none yet (#401)
-    if state.checking_load ~= nil then S.lib.waveforms.forget(slot) else S.lib.waveforms.stale(slot) end
+    -- A restored load still awaiting confirmation may have missed its
+    -- publication report while the newer load was pending (#1187).
+    if state.checking_load ~= nil or state.confirm_since ~= nil then
+      S.lib.waveforms.forget(slot)
+    else
+      S.lib.waveforms.stale(slot)
+    end
     -- 3.7: settled audio binds what it is; an empty slot unbinds; a load
     -- still awaiting the engine binds when it settles
     if state.loaded and state.confirm_since == nil then
@@ -936,6 +940,8 @@ return function(S)
   -- that names that later load (#983); a report under that check's own
   -- number is its rejection's, whose seconds alone are kept (#1016).
   local function buffer_state_changed(value)
+    local peaks_unavailable = value < 0 or nil
+    value = math.abs(value)
     local cell = math.floor(value / BUFFER_STATE_STRIDE)
     local engine_slot = cell % (NUM_BUFFERS + 1)
     local load_number = math.floor(cell / (NUM_BUFFERS + 1))
@@ -957,6 +963,7 @@ return function(S)
     local given_back = buffer.checking_load ~= nil and buffer.checking_load ~= buffer.loads_sent
     if given_back and load_number == buffer.checking_load % BUFFER_STATE_LOADS
         and load_number ~= buffer.loads_sent % BUFFER_STATE_LOADS then
+      buffer.peaks_unavailable = peaks_unavailable
       if buffer.seconds ~= seconds then
         buffer.seconds = seconds
         request_redraw()
@@ -967,7 +974,8 @@ return function(S)
     -- sent before the engine had the slot's newest load (#578)
     if load_number ~= buffer.loads_sent % BUFFER_STATE_LOADS then return end
     local changed = buffer.seconds ~= seconds
-    local length_changed = changed
+    local overview_changed = changed or buffer.peaks_unavailable ~= peaks_unavailable
+    buffer.peaks_unavailable = peaks_unavailable
     buffer.seconds = seconds
     local has_audio = seconds > 0
     -- the first report after a replace take was canceled (the engine sends
@@ -975,11 +983,12 @@ return function(S)
     -- not prepared the slot, which is as it was before the take
     if buffer.kept_state ~= nil and settle_kept_state(slot, has_audio) then changed = true end
     if buffer.recording and S.lib.record.slot_reported(slot, seconds) then changed = true end
-    -- the engine wrote the slot's peaks before reporting its length; a new
-    -- length's old overview goes now, never drawn at the new length (#401);
+    -- A change in the length or the publication outcome invalidates the
+    -- cached overview, even for a replacement of the same length (#1187);
     -- another change with audio (a dub's slot now loaded) only rereads it
-    if length_changed then
+    if overview_changed then
       S.lib.waveforms.changed(slot)
+      if peaks_unavailable then S.lib.samples.send_gain(slot) end
     elseif changed and has_audio then
       S.lib.waveforms.stale(slot)
     end
