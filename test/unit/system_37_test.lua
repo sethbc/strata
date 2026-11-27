@@ -214,6 +214,21 @@ local function pset_lines(text)
   return lines
 end
 
+-- PSETs store silent levels as "-inf"; only LuaJIT reads it with tonumber.
+local PSET_INFINITY = { ["-inf"] = -math.huge, inf = math.huge }
+local function assert_saved_value(entry)
+  local actual, message = params:get(entry.id), entry.id .. " as saved"
+  local number = params:lookup_param(entry.id).t ~= params.tTEXT
+    and (PSET_INFINITY[entry.value] or tonumber(entry.value))
+  if not number then
+    assert_equal(tostring(actual), entry.value, message)
+  elseif math.abs(number) == math.huge then
+    assert_equal(actual, number, message)
+  else
+    assert_near(actual, number, 1e-9 * math.max(1, math.abs(number)), message)
+  end
+end
+
 -- A data folder of its own, under the harness's data root
 local function fresh_dir(name)
   local subdir = name .. "-" .. math.random(1, 1e9)
@@ -290,12 +305,7 @@ test("a 3.6 scenes file is set aside whole; a 3.6 PSET and a version 2 buffers.d
     elseif params:lookup_param(id).t == params.tGROUP then
       -- a group's line holds its size, no value
     else
-      local number = tonumber(entry.value)
-      if number and params:lookup_param(id).t ~= params.tTEXT then
-        assert_near(params:get(id), number, 1e-9 * math.max(1, math.abs(number)), id .. " as saved")
-      else
-        assert_equal(tostring(params:get(id)), entry.value, id .. " as saved")
-      end
+      assert_saved_value(entry)
       compared = compared + 1
     end
   end
@@ -474,12 +484,7 @@ test("format 9's scenes are set aside as older; its PSET loads", function()
     assert_true(params.lookup[id] ~= nil or id:match(PSET_3_6.grain_env) ~= nil,
       id .. ": every line names a param of this build")
     if params.lookup[id] and params:lookup_param(id).t ~= params.tGROUP then
-      local number = tonumber(entry.value)
-      if number and params:lookup_param(id).t ~= params.tTEXT then
-        assert_near(params:get(id), number, 1e-9 * math.max(1, math.abs(number)), id .. " as saved")
-      else
-        assert_equal(tostring(params:get(id)), entry.value, id .. " as saved")
-      end
+      assert_saved_value(entry)
       compared = compared + 1
     end
   end
@@ -531,12 +536,7 @@ test("this build's own files load: a format 10 scenes file, a PSET and its five 
     local id = entry.id
     assert_true(params.lookup[id] ~= nil, id .. ": every line names a param of this build")
     if params:lookup_param(id).t ~= params.tGROUP then
-      local number = tonumber(entry.value)
-      if number and params:lookup_param(id).t ~= params.tTEXT then
-        assert_near(params:get(id), number, 1e-9 * math.max(1, math.abs(number)), id .. " as saved")
-      else
-        assert_equal(tostring(params:get(id)), entry.value, id .. " as saved")
-      end
+      assert_saved_value(entry)
       compared = compared + 1
     end
   end
