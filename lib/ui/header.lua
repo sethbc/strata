@@ -139,7 +139,7 @@ return function(S)
       hint_cut.cut = type(text) == "string" and S.lib.ui_text.fit_text(S.lib.ui_text.printable(text), HINT_ROW_WIDTH)
         or text
     end
-    screen.level(4)
+    screen.level(7)
     screen.move(0, HINT_ROW_Y)
     screen.text(hint_cut.cut)
   end

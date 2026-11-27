@@ -85,7 +85,10 @@ test("the hint row is drawn once, by redraw, not by the page's draw", function()
     show_page(name)
     local hint_rows = 0
     for _, entry in ipairs(context.screen.texts) do
-      if entry.x == 0 and entry.y == h.HINT_ROW_Y then hint_rows = hint_rows + 1 end
+      if entry.x == 0 and entry.y == h.HINT_ROW_Y then
+        hint_rows = hint_rows + 1
+        assert_true(entry.level >= 7, name .. " hint has readable contrast")
+      end
     end
     assert_equal(hint_rows, 1, name .. " draws one hint row")
     assert_equal(hint_text(context), S.registry.pages[index].hints(false), name .. " hint row is its hints()")

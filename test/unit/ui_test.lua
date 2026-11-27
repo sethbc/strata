@@ -298,6 +298,7 @@ test("a page draw that fails still shows its page: the title, draw error on the 
   end
   assert_equal(title, "LFO", "the header names the page that is shown")
   assert_equal(h.hint_text(context), "draw error", "the hint row says the draw failed")
+  assert_true(h.texts_on_row(context, h.HINT_ROW_Y)[1].level >= 7, "the draw error has readable contrast")
   assert_true(not screen_shows(context, "half drawn"), "the half-drawn body is cleared")
   h.assert_screen_layout(context, "LFO after a failed draw")
   assert_equal(lines_printed(context, "lfo draw failed"), 1, "the error prints once")
