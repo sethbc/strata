@@ -729,6 +729,8 @@ checkMasterSteady = {
         server.sync; 0.5.wait;
         probe.set(\t_reset, 1); 3.0.wait;
         values = readBus.(bus);
+        check.((values.size == 5) and: { values[2] > 0.1 } and: { values[0] > (values[2] * 0.5) },
+            "effects: steady tone stays audible at drift % (master minimum %, reference minimum %)".format(drift, values[0], values[2]));
         if (drift == 0) {
             check.((values.size == 5) and: { values[3] > 0.2 } and: { values[4] < 1e-5 },
                 "effects: at drift 0 the master is its limiter and saturation alone (largest difference %, level %)".format(

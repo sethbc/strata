@@ -100,6 +100,39 @@ check.(sawType.notNil and: { sawType >= engine.numVoices }
     buses.do(_.free); referenceBus.free; probeBus.free; referenceOut.free;
 }.value;
 
+// Measure the three fundamentals on each side with 1 Hz-wide bandpass filters.
+{
+    var group, source, audio, levels, bins, silent = engine.silentBus.index;
+    SynthDef(\strataCheckSawDetuneBands, { arg in, out;
+        var bands = In.ar(in, 2).collect({ arg channel;
+            [480, 490, 500, 510, 520].collect({ arg freq;
+                Amplitude.kr(BPF.ar(channel, freq, 0.002), 0.05, 0.05)
+            })
+        });
+        Out.kr(out, bands.flat)
+    }).add;
+    server.sync;
+    group = Group.tail(server);
+    audio = Bus.audio(server, 2);
+    levels = Bus.control(server, 10);
+    source = Synth(\strataSaw, [\out, audio, \freq, 500, \detune, 0, \cutoff, 8000, \res, 0.1,
+        \modBus1, silent, \modBus2, silent, \modBus3, silent, \attackTime, 0.01], group, \addToHead);
+    Synth(\strataCheckSawDetuneBands, [\in, audio, \out, levels], group, \addToTail);
+    server.sync; 2.wait;
+    bins = h.readBus(levels).clump(5);
+    check.((bins.size == 2) and: { bins.every({ arg side;
+        (side[2] > 0.005) and: { [0, 1, 3, 4].every({ arg i; side[i] < (side[2] / 4) }) }
+    }) }, "saw: detune 0 puts only the fundamental in the five bins (%)".format(bins));
+    source.set(\detune, 0.02);
+    server.sync; 2.wait;
+    bins = h.readBus(levels).clump(5);
+    check.((bins.size == 2) and: { [[2, 3, 4], [0, 1, 2]].every({ arg wanted, channel;
+        var side = bins[channel], floor = side[wanted].minItem;
+        (floor > 0.005) and: { side[[0, 1, 2, 3, 4].reject({ arg i; wanted.includes(i) })].maxItem < (floor / 4) }
+    }) }, "saw: 2 percent detune plays 500/510/520 Hz left and 480/490/500 Hz right (%)".format(bins));
+    group.free; server.sync; levels.free; audio.free
+}.value;
+
 // "types: a held chord's three extra notes on a saw voice start three
 // \strataSaw synths": voice 0 put on saw and started, three notes held
 {
