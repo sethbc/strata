@@ -346,6 +346,15 @@ return function(S)
     params.action_read = function(filename, silent, number)
       local order = silent and {} or nil
       M.migrate_read_pset(filename, silent, order)
+      if silent and params:string("clock_source") == "internal" then
+        local tempo = params:get("tempo")
+        if params:get("clock_tempo") ~= tempo then
+          params:set("clock_tempo", tempo)
+        elseif order.clock_tempo then
+          -- This file set norns' clock param silently as well.
+          params:lookup_param("clock_tempo"):bang()
+        end
+      end
       local previous = pset.order
       pset.order = order
       run_pset_hooks("read", filename, number, filename, silent)

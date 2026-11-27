@@ -2222,8 +2222,8 @@ local function make_metro()
       return nil
     end
     local timer = { time = time, count = count, running = false, event = event }
-    function timer:start() self.running = true end
-    function timer:stop() self.running = false end
+    function timer:start() self.running, self.is_running = true, true end
+    function timer:stop() self.running, self.is_running = false, false end
     table.insert(metro.all, timer)
     return timer
   end

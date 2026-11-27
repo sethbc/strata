@@ -46,6 +46,21 @@ local function record(context, gestures, k, edits, tail)
   gestures.press(k)
 end
 
+test("a missing PSET gesture entry records on the loaded quantization (#1230)", function()
+  for _, side_file in ipairs({false, true}) do
+    local context, S, gestures = loaded()
+    local base = context.data_dir .. "empty-gesture"
+    h.write_text(base .. ".pset", '"gesture_1_quantize": 3\n')
+    if side_file then
+      assert(S.lib.data_files.write(base .. ".gestures.data", {version = gestures.GESTURES.data_version, recorders = {}}))
+    end
+    params:read(base .. ".pset", true)
+    record(context, gestures, 1, {{0, "reverb_mix", 1}}, 0.2)
+    assert_equal(params:get("gesture_1_quantize"), BAR)
+    assert_equal(S.gestures[1].length_beats, 4, "the new loop plays for a bar")
+  end
+end)
+
 local function event_ids(S, k)
   local ids = {}
   for _, event in ipairs(S.gestures[k].pattern.event) do table.insert(ids, event.id) end

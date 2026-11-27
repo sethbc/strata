@@ -11,6 +11,21 @@ local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h
 
 local function tuning() return local_value("lib").tuning end
 
+test("a preset with no voice quantize switch restores its saved pitch (#1224)", function()
+  local context = load_strata()
+  finish_startup(context)
+  local path = context.data_dir .. "before-quantize.pset"
+  h.write_text(path, '"v1_freq": 450\n')
+  for _, previous in ipairs({0, 1}) do
+    params:set("v1_quantize", previous)
+    params:set("v1_freq", 300)
+    params:read(path)
+    assert_equal(params:get("v1_quantize"), 0)
+    assert_near(params:get("v1_freq"), 450, 1e-6)
+    assert_near(local_value("voices")[1].values.freq, 450, 1e-6)
+  end
+end)
+
 local function option_index(param_id, name)
   for index, option in ipairs(params:lookup_param(param_id).options) do
     if option == name then return index end

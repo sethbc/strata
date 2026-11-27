@@ -69,7 +69,15 @@ return function(S)
       params:set(key_id(id), key, true)
       action(key)
     end)
-    params:set_action(key_id(id), function(key) select(record, id, key, false) end)
+    params:set_action(key_id(id), function(key)
+      -- norns passes a CRLF line's trailing CR to the text action before
+      -- our read hook runs. Resolve the key before routing to any output.
+      if type(key) == "string" and key:sub(-1) == "\r" then
+        key = key:sub(1, -2)
+        params:set(key_id(id), key, true)
+      end
+      select(record, id, key, false)
+    end)
   end
 
   -- The key in effect: the stored one when the list has it, else the first
@@ -88,12 +96,15 @@ return function(S)
   S.register_pset_hook({name = "io_keyed", read = function(_, _, pset_path, silent)
     local file = io.open(pset_path, "r")
     if not file then return end
-    local text = file:read("*a")
+    local saved = {}
+    for line in file:lines() do
+      local id, value = S.lib.params_setup.pset_line(line)
+      if id and saved[id] == nil then saved[id] = value end
+    end
     file:close()
     for _, id in ipairs(order) do
       local record = records[id]
-      local saved = text:match('"' .. (key_id(id):gsub("%p", "%%%0")) .. '"%s*:%s*([^\n]*)')
-      local key = saved or record.keys[1]
+      local key = saved[key_id(id)] or record.keys[1]
       local index = record.index[key] or 1
       if params:get(key_id(id)) ~= key or params:get(id) ~= index then
         params:set(key_id(id), key, true)
