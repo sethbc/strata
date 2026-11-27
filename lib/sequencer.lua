@@ -112,7 +112,7 @@ return function(S)
   end
 
   -- The playing state (local; read through the functions below): per voice
-  -- {anchor, tick, beat, due} and its position (3.7: last, the step taken
+  -- {anchor, tick, beat, due_tick, due} and its position (3.7: last, the step taken
   -- last, nil at a start; taken, the steps taken in the pass; pass_length;
   -- heading, ping-pong's way, 1 or -1; 3.9's way, the direction of the
   -- step taken last, nil at a start: start_position) and the transport's
@@ -1450,6 +1450,7 @@ return function(S)
   -- division reset's bar, when the voice would pass it)
   local function next_voice_tick(voice_idx)
     local state = play.voices[voice_idx]
+    if state.due then return state.due_tick, state.due end
     local division, swing = division_beats(voice_idx), swing_beats(voice_idx)
     local k = math.max(0, math.floor((state.beat - state.anchor) / division) - 1)
     while tick_beat(state, k, division, swing) <= state.beat + SEQ.beat_tolerance do k = k + 1 end
@@ -1523,8 +1524,8 @@ return function(S)
   -- periods (#1051): the chain periods that passed, 1 but after a late
   -- wake; the place moves on a move a period, and the slot it reaches is
   -- linked once, unless every move was a repeat (those between never load).
-  -- Returns the last period that linked, or nil when all held the scene.
-  local function chain_link(periods)
+  -- A timed link returns its bar for the bar hooks below.
+  local function chain_link(periods, first_due, period_beats)
     local place, last_link = chain.current, nil
     for period = 1, periods or 1 do
       local slot, move = next_chain_scene(place)
@@ -1532,8 +1533,12 @@ return function(S)
       place = slot
       if move ~= "repeat" then last_link = period end
     end
-    if last_link then load_chain_scene(place) end
-    return last_link
+    if last_link then
+      local boundary = first_due and first_due + (last_link - 1) * period_beats
+      if boundary then play.skip_before_link(boundary) end
+      load_chain_scene(place)
+      return boundary
+    end
   end
 
   -- 4b: every bar hook, in the order registered (first: the patterns'
@@ -1560,8 +1565,7 @@ return function(S)
       while beat >= chain.next_beat - SEQ.beat_tolerance do
         chain.next_beat, periods = chain.next_beat + period, periods + 1
       end
-      local last_link = chain_link(periods)
-      if last_link then linked_at = first_due + (last_link - 1) * period end
+      linked_at = chain_link(periods, first_due, period)
     end
     if play.next_bar and beat >= play.next_bar - SEQ.beat_tolerance then
       local bars = 0
@@ -1801,7 +1805,39 @@ return function(S)
       state.anchor, k = reset, 0
       start_position(voice_idx, state)
     end
-    state.tick, state.beat = k, beat
+    state.tick, state.beat, state.due = k, beat, nil
+  end
+
+  local function skip_position(voice_idx)
+    S.lib.loop_roll.played_step(voice_idx, take_position(voice_idx))
+    S.lib.lanes.advance(voice_idx)
+  end
+
+  -- Finish missed ticks in the outgoing scene, including those of clocks
+  -- whose resumes are still posted. Keep the first wait they would have
+  -- scheduled on or after the link. The following wait uses the new scene.
+  function play.skip_before_link(boundary)
+    local late = is_due(boundary + SEQ.wake_tolerance)
+    for voice_idx, state in ipairs(play.voices) do
+      local k, beat = next_voice_tick(voice_idx)
+      -- A clock still in a posted ratchet may have no pending step yet.
+      -- Keep the wait its last ratchet would have scheduled before the link.
+      -- A tied final ratchet already overdue belongs to the outgoing step.
+      local last = state.last_ratchet
+      local ratchets_ended = last and (last < boundary - SEQ.beat_tolerance or (late and near(last, boundary)))
+      if beat <= boundary + SEQ.beat_tolerance or ratchets_ended then
+        while beat < boundary - SEQ.beat_tolerance do
+          take_tick(voice_idx, k, beat)
+          skip_position(voice_idx)
+          k, beat = next_voice_tick(voice_idx)
+        end
+        state.due_tick, state.due = k, beat
+      elseif state.last_ratchet then
+        -- This ratchet plan spans the link. Only a hit on or after its
+        -- bar can test whether the incoming division has ended the step.
+        state.ratchets_from = boundary
+      end
+    end
   end
 
   -- No bursts (rule 4): at a wake the voice plays at most one step that has
@@ -1813,8 +1849,7 @@ return function(S)
     while true do
       local k, beat = next_voice_tick(voice_idx)
       if not is_due(beat) then return end
-      S.lib.loop_roll.played_step(voice_idx, take_position(voice_idx))
-      S.lib.lanes.advance(voice_idx)
+      skip_position(voice_idx)
       take_tick(voice_idx, k, beat)
     end
   end
@@ -1824,7 +1859,7 @@ return function(S)
   -- hits are skipped)
   local function due_hit(voice_idx, plan, hit)
     local _, next_beat = next_voice_tick(voice_idx)
-    if is_due(next_beat) then return nil end
+    if plan.beat ~= play.voices[voice_idx].beat or is_due(next_beat) then return nil end
     while hit < plan.hits and is_due(plan.beat + hit * plan.spacing) do hit = hit + 1 end
     return hit
   end
@@ -1839,25 +1874,37 @@ return function(S)
     state.last_sync, state.generation, state.stale = clock.get_beats(), play.generation, false
     local function forget() S.pattern_clocks[voice_idx] = nil end
     local function begin() return begin_voice_step(voice_idx) end
+    local function wait(target)
+      if not wait_for(state, target) then return false end
+      -- Only a delayed delivery links here. On-time ratchets keep their
+      -- order with the step that links on the same beat.
+      if chain.next_beat and is_due(target + SEQ.wake_tolerance) and is_due(chain.next_beat) then
+        guarded(forget, function() at_beat(clock.get_beats() + play.offset) end)
+      end
+      return true
+    end
     local plan = guarded(forget, begin)
     while true do
       local hit = 2
+      if plan.hits >= hit then state.last_ratchet = plan.beat + (plan.hits - 1) * plan.spacing end
       while hit <= plan.hits do
-        if not wait_for(state, plan.beat + (hit - 1) * plan.spacing) then return end
-        hit = guarded(forget, function() return due_hit(voice_idx, plan, hit) end)
-        if hit == nil then break end
-        guarded(forget, function() play_voice_hit(voice_idx, plan, hit) end)
+        local target = plan.beat + (hit - 1) * plan.spacing
+        if not wait(target) then return end
+        if not state.ratchets_from or target >= state.ratchets_from - SEQ.beat_tolerance then
+          hit = guarded(forget, function() return due_hit(voice_idx, plan, hit) end)
+          if hit == nil then break end
+          guarded(forget, function() play_voice_hit(voice_idx, plan, hit) end)
+        end
         hit = hit + 1
       end
-      local next_tick = guarded(forget, function()
-        local k, target = next_voice_tick(voice_idx)
-        return {k = k, target = target}
-      end)
-      state.due = next_tick.target
-      if not wait_for(state, next_tick.target) then return end
-      state.due = nil
+      state.last_ratchet, state.ratchets_from = nil, nil
+      guarded(forget, function() state.due_tick, state.due = next_voice_tick(voice_idx) end)
+      repeat
+        local target = state.due
+        if not wait(target) then return end
+      until state.due == target or is_due(state.due)
       guarded(forget, function()
-        take_tick(voice_idx, next_tick.k, next_tick.target)
+        take_tick(voice_idx, state.due_tick, state.due)
         skip_due_ticks(voice_idx)
       end)
       plan = guarded(forget, begin)

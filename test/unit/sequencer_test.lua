@@ -1532,6 +1532,129 @@ test("a late wake past three chain periods links once, to scene 4 (probe, #1051)
   assert_equal(slot, 4, "on scene 4")
 end)
 
+-- #1190: the posted 16th at 3.75 beats is delivered at 4.30, after
+-- the chain's new 32nds at 4, 4.125 and 4.25. Voice 3 slows down and
+-- its seven-step pattern is partway through a pass at the link.
+for _, first in ipairs({0, 1, 2}) do
+  local delivery = first == 0 and "on time" or "late starting at voice " .. first
+  test("chain division changes keep each voice on its own steps " .. delivery, function()
+    local context, S = setup()
+    local seq = S.lib.sequencer
+    for voice = 1, 3 do
+      for step = 1, 16 do seq.set_level(voice, step, 15) end
+    end
+    params:set("v3_seq_length", 7)
+    params:set("v3_seq_division", 1)
+    capture_scene(1)
+    params:set("v1_seq_division", 1)
+    params:set("v2_seq_division", 1)
+    params:set("v3_seq_division", 3)
+    capture_scene(2)
+    params:set("seq_chain", 1)
+    params:set("seq_chain_scenes", 2)
+    params:set("seq_chain_bars", 1)
+    local hits = {}
+    S.register_step_output({name = "phase probe", play = function(event)
+      if hits[event.voice] then hits[event.voice] = hits[event.voice] + 1 end
+    end})
+    pattern_clock_start()
+    context.clock.run_for(1.85)
+    if first == 0 then
+      context.clock.run_for(0.31)
+    else
+      context.clock.advance_until(S.pattern_clocks[first], function()
+        context.set_time(util.time() + 0.275)
+        hits = {0, 0, 0}
+      end)
+      context.clock.run_for(0.01)
+      for voice = 1, 3 do assert_equal(hits[voice], 1, "one hit after the stall, voice " .. voice) end
+    end
+    assert_equal(seq.chain_place(), 2, "scene 2 at beat 4.32")
+    for voice, step in ipairs({3, 3, 6}) do
+      assert_equal(seq.sounding_step(voice), step, "step after the link, voice " .. voice)
+    end
+    context.clock.run_for(0.5)
+    for voice, step in ipairs({11, 11, 3}) do
+      assert_equal(seq.sounding_step(voice), step, "a beat after the link, voice " .. voice)
+    end
+    pattern_clock_stop()
+  end)
+end
+
+test("a posted ratchet keeps its voice on the chain's boundary tick", function()
+  local context, S = setup()
+  local seq = S.lib.sequencer
+  -- Voice 1 wakes while voice 2 still waits for the last ratchet of step 16.
+  for step = 1, 16 do seq.set_level(2, step, 15) end
+  params:set("v1_seq_division", 1)
+  -- Voice 3's swung bar lasts 5.28 beats. Its last ratchet at 3.96
+  -- would already have scheduled that next tick before the link.
+  seq.set_level(3, 1, 15)
+  params:set("v3_seq_division", 8)
+  params:set("v3_seq_swing", 66)
+  seq.set_step_attr(3, 1, "ratchet", 4)
+  seq.set_step_attr(2, 16, "ratchet", 4)
+  capture_scene(1)
+  params:set("v2_seq_division", 1)
+  params:set("v3_seq_division", 1)
+  capture_scene(2)
+  params:set("seq_chain", 1)
+  params:set("seq_chain_bars", 1)
+  local hits
+  S.register_step_output({name = "ratchet probe", play = function(event)
+    if hits and event.voice == 2 then hits[#hits + 1] = event end
+  end})
+  pattern_clock_start()
+  context.clock.run_for(1.93)
+  context.clock.advance_until(S.pattern_clocks[1], function()
+    hits = {}
+    context.set_time(util.time() + 0.2)
+  end)
+  context.clock.run_for(0.01)
+  assert_equal(#hits, 1, "the missed ratchets and steps stay silent")
+  assert_true(hits[1].first, "the voice played a new step")
+  assert_equal(hits[1].step, 3, "the third 32nd since the link")
+  assert_equal(seq.sounding_step(3), 1, "the long swung step keeps its scheduled end")
+  context.clock.run_for(0.5)
+  assert_equal(seq.sounding_step(2), 11, "still on the linked grid a beat later")
+  assert_equal(seq.sounding_step(3), 2, "its first new step followed the old swung wait")
+  pattern_clock_stop()
+end)
+
+-- A swung bar lasts six beats. With three ratchets, voice 1's last
+-- hit at beat 4 runs before the other clocks link and posts the wait for
+-- beat 6. With four, its last hit at 4.5 checks the incoming division.
+for _, ratchets in ipairs({3, 4}) do
+  for _, delayed in ipairs({false, true}) do
+    local when = delayed and "after a stall" or "on time"
+    test(ratchets .. " ratchets on a swung bar keep their chain timing " .. when, function()
+      local context, S = setup()
+      local seq = S.lib.sequencer
+      params:set("v1_seq_division", 8)
+      params:set("v1_seq_swing", 75)
+      seq.set_level(1, 1, 15)
+      seq.set_step_attr(1, 1, "ratchet", ratchets)
+      capture_scene(1)
+      params:set("v1_seq_division", 1)
+      capture_scene(2)
+      params:set("seq_chain", 1)
+      params:set("seq_chain_bars", 1)
+      pattern_clock_start()
+      local started = util.time()
+      context.clock.run_for(1.36)
+      if delayed then
+        context.clock.advance_until(S.pattern_clocks[2], function() context.set_time(util.time() + 0.74) end)
+      end
+      context.clock.run_for(started + 2.14 - util.time())
+      assert_equal(seq.chain_place(), 2, "scene 2 at beat 4.28")
+      assert_equal(seq.sounding_step(1), 1, "the old step still plays")
+      context.clock.run_for(0.51)
+      assert_equal(seq.sounding_step(1), ratchets == 3 and 1 or 11, "the next step follows the scheduled wait")
+      pattern_clock_stop()
+    end)
+  end
+end
+
 test("two voices waking on the same late beat link once", function()
   local heard = {}
   local linked, slot = chain_run({1, 2}, function(context, S, links)
