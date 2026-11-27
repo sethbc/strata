@@ -92,9 +92,22 @@ local function assert_equal(actual, expected, message)
   end
 end
 
+local number_type = math.type or type
+
+local function within_tolerance(actual, expected, tolerance)
+  local distance = actual - expected
+  if number_type(distance) ~= "integer" then return math.abs(distance) <= tolerance end
+
+  if actual < expected then distance = -distance end
+  if distance >= 0 then return distance <= tolerance end
+  -- The unsigned distance wrapped above maxinteger. Subtract maxinteger + 1
+  -- from both sides to compare the remainder exactly, even for a float tolerance.
+  return tolerance > math.maxinteger and distance - math.mininteger <= tolerance + math.mininteger
+end
+
 local function assert_near(actual, expected, tolerance, message)
   tolerance = tolerance or 1e-9
-  if type(actual) == "number" and tolerance < math.huge and math.abs(actual - expected) <= tolerance then return end
+  if type(actual) == "number" and tolerance < math.huge and within_tolerance(actual, expected, tolerance) then return end
   fail(string.format("%s: expected %s, got %s", message or "values differ", tostring(expected), tostring(actual)), 2)
 end
 
