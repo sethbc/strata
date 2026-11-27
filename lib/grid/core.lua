@@ -1164,10 +1164,20 @@ return function(S)
     detach(port)
   end
 
-  -- While grid_key handles a key, grid_redraw() calls from its actions (a
-  -- param action that redraws, toggle_voice, ...) only wait: grid_key
-  -- paints each grid once when the key is handled (#161)
-  local key_repaint = {handling = false}
+  -- A key or an instant scene application can change many LEDs, and a
+  -- key can recall a scene. Paint the final state once, including on error.
+  local defer_repaint = false
+  function M.repaint_after(action, ...)
+    local outer = defer_repaint
+    defer_repaint = true
+    local ok, problem = xpcall(action, with_traceback, ...)
+    defer_repaint = outer
+    if not outer then
+      local painted, paint_error = xpcall(grid_redraw, with_traceback)
+      if ok and not painted then error(paint_error, 0) end
+    end
+    if not ok then error(problem, 0) end
+  end
 
   local function handle_key(port, grid_port, x, y, z)
     local layout = S.registry.grid_layouts[grid_layout(grid_port)]
@@ -1180,6 +1190,16 @@ return function(S)
       release_step_key(port, x, y)
       release_cell_key(port, x, y)
     end
+  end
+
+  local function dispatch_key(port, grid_port, x, y, z)
+    local handled, key_error = xpcall(handle_key, debug.traceback, port, grid_port, x, y, z)
+    if z ~= 1 then
+      local released, release_error = xpcall(release_key, debug.traceback, port, x, y)
+      if handled and not released then handled, key_error = false, release_error end
+    end
+    request_redraw()
+    if not handled then error(key_error, 0) end
   end
 
   -- Presses and releases. A press is held (S.grid_held) before the layout
@@ -1197,17 +1217,7 @@ return function(S)
     follow_size(port, grid_port)
     if x < 1 or x > grid_port.cols or y < 1 or y > grid_port.rows then return end
 
-    key_repaint.handling = true
-    local handled, key_error = xpcall(handle_key, debug.traceback, port, grid_port, x, y, z)
-    if z ~= 1 then
-      local released, release_error = xpcall(release_key, debug.traceback, port, x, y)
-      if handled and not released then handled, key_error = false, release_error end
-    end
-    key_repaint.handling = false
-
-    grid_redraw()
-    request_redraw()
-    if not handled then error(key_error, 0) end
+    M.repaint_after(dispatch_key, port, grid_port, x, y, z)
   end
 
   function select_grid_voice(voice_idx)
@@ -1228,7 +1238,7 @@ return function(S)
   -- voice toggle, the pattern clock, a poll) goes on
   function grid_redraw()
     if next(S.grids) == nil then return end  -- no grids: nothing to do
-    if key_repaint.handling then return end  -- grid_key paints once the key is handled
+    if defer_repaint then return end
 
     for port, grid_port in pairs(S.grids) do
       if grid_port.device then

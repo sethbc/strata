@@ -867,7 +867,7 @@ return function(S)
   -- scene-recalled hooks already, so they are not told again.
   -- released (3.8, a fade's landing passes the fade's set): the voices a
   -- load let go of during the fade, left out of the landing (skip_voices)
-  function recall_scene_instant(scene_num, scene_data, current_if_failed, landing, released, midi_input_port)
+  local function apply_instant(scene_num, scene_data, current_if_failed, landing, released, midi_input_port)
     scene_data = scene_data or S.scenes[scene_num].data
     clear_undo()  -- a recall ends the randomize undo (a fade's end too)
     local recalled, recall_error = xpcall(function()
@@ -880,7 +880,6 @@ return function(S)
     if not recalled then
       if current_if_failed ~= nil then S.current_scene = current_if_failed end
       request_redraw()
-      grid_redraw()
       error(recall_error, 0)
     end
 
@@ -889,7 +888,11 @@ return function(S)
     if not landing then tell_recalled(scene_num, midi_input_port) end
     update_voice_list()
     request_redraw()  -- freeze and running states, and the end of a fade
-    grid_redraw()
+  end
+
+  function recall_scene_instant(scene_num, scene_data, current_if_failed, landing, released, midi_input_port)
+    S.lib.grid_core.repaint_after(apply_instant, scene_num, scene_data, current_if_failed, landing, released,
+      midi_input_port)
   end
 
   -- Called by the scene sequencer when a scene's hold ends: wait while a
