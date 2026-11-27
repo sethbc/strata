@@ -12,7 +12,7 @@
 
 | Function | Does |
 |---|---|
-| `recall_scene(n)` | n 1 to 16 with a saved scene; while it waits for the quantizer, the grid's keys of scene n blink |
+| `recall_scene(n, midi_input_port)` | optional input port is carried through the quantized recall for MIDI echo suppression; n 1 to 16 with a saved scene; while it waits for the quantizer, the grid's keys of scene n blink |
 | `next_scene()` | the next playable scene after `S.current_scene` (the stepper at 100, 0, 0: an empty or invalid slot is passed over), wrapping; with none, `no scene can play` |
 | `run_voice(voice, mode)` | mode 0 stops, 1 starts, 2 toggles; a voice already as asked is left alone |
 | `retrigger(voice, velocity)` | velocity clamped to 0..1 |

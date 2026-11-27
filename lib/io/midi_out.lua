@@ -45,15 +45,14 @@ return function(S)
   -- slot k's last value; left_with[name][channel][note] = n: the offs a
   -- device is owed for the notes it was sounding as it left, by the name of
   -- the device that got them, paid where that device is next found with its
-  -- port free (#996); asked[port]: the scene a
-  -- program change in on that port asked for, until its recall lands;
+  -- port free (#996);
   -- setup_due[port]: the port's MPE zone owes its device a setup, sent once
   -- the port settles with its device not held (#772); held_owner[port]: the
   -- remote or midigrid name whose claim holds the port, so its release is known;
   -- takedown_due[port]: a zone taken down while the port was held owes its
   -- device the takedown, sent once the port settles free with it there (#788)
   local state = {config = {}, notes = {}, counts = {}, use = {}, member_times = {}, expressing = {}, cursor = 1,
-    express_ports = {}, cc_last = {}, left_with = {}, asked = {}, tick = 0, stopped = false,
+    express_ports = {}, cc_last = {}, left_with = {}, tick = 0, stopped = false,
     bend_range = MIDI_OUT.bend_range.default, noted = {}, dirty = false, setup_due = {}, held_owner = {},
     takedown_due = {}}
   for voice = 1, NUM_VOICES do
@@ -540,39 +539,17 @@ return function(S)
   -- Program change
   ---------------------------------------------------------------------------
 
-  -- lib/midi_in.lua's program change (0 to NUM_SCENES - 1, wanted by
-  -- midi_pc_in and midi_pc_channel) on the port it listens to: the scene
-  -- recalled as a scene key does, and its program change not sent back to
-  -- that port (build ruling 20): the port's one guard, asked[port] = scene, set
-  -- before the recall is asked for (with quantize off it lands inside that
-  -- call); a refused one (an empty scene) puts the port's earlier guard
-  -- back, so the guard is set only for a recall that was asked for; a newer
-  -- program change on the port replaces it
+  -- Carry the input port with this recall, through its quantized wait and
+  -- the first step of a fade. Another recall of the same slot has its own origin.
   function M.program_change_in(port, value)
     if state.stopped or type(value) ~= "number" or value % 1 ~= 0 then return false end
-    local scene, previous = value + 1, state.asked[port]
-    state.asked[port] = scene
-    local recalled = S.lib.io_actions.recall_scene(scene)
-    -- refused (an empty scene): the guard of a recall still waiting stays
-    if not recalled and state.asked[port] == scene then state.asked[port] = previous end
-    return recalled
+    return S.lib.io_actions.recall_scene(value + 1, port)
   end
 
-  -- A recall consumes every guard for its own scene, and sends nothing on
-  -- a port one of them names; a recall of another scene sends its program
-  -- change and leaves the guards alone, so the recall one waits for still
-  -- does not echo when it lands
-  S.register_scene_recalled(function(scene)
-    local guarded = {}
-    for port, asked in pairs(state.asked) do
-      if asked == scene then
-        guarded[port] = true
-        state.asked[port] = nil
-      end
-    end
+  S.register_scene_recalled(function(scene, input_port)
     if state.stopped or param_value("midi_pc_out") ~= 1 then return end
     local port = params:get("midi_pc_out_port")
-    if guarded[port] then return end
+    if port == input_port then return end
     send(port, "program_change", scene - 1, params:get("midi_pc_out_channel"))
   end)
 
@@ -1077,7 +1054,6 @@ return function(S)
     state.stopped = true
     state.expressing = {}
     state.cursor = 1
-    state.asked = {}
   end
 
   S.register_cleanup(S.constants.CLEANUP_ORDER.io_midi_out, function() M.stop() end)
