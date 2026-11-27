@@ -59,7 +59,7 @@ var freeDuringPendingFades = { arg engine, stereoPath;
 var childrenOf = { arg group;
     var condition = Condition(false), reply, children = List.new, index = 2, parse;
     OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
-        '/g_queryTree.reply', server.addr).oneShot;
+        '/g_queryTree.reply', server.addr, argTemplate: [0, group.nodeID]).oneShot;
     server.sendMsg('/g_queryTree', group.nodeID, 0);
     if (h.awaitReply(condition).not) { reply = [nil, 0, group.nodeID, 0] };
     // depth 0 is the group itself; a child is listed once its own children are read

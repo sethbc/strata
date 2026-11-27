@@ -430,9 +430,8 @@
     // timer's judgment and the area's stop (forgetWriterStarts). A writer
     // whose /s_new failed (no room in the real-time pool) sends no /n_go:
     // its timer judges it at startConfirmWait (judgeWriterStart, #1019).
-    // old: the writer it replaces (nil for a first writer). Every writer is
-    // in the NodeWatcher, so its isPlaying says whether its /n_go has come
-    // and no /n_end since, which the judgment reads of an old writer
+    // old is the writer it replaces (nil for a first writer). The chain
+    // lets the judgment identify which writer survived a failed start.
     watchWriterStart { arg voice, writer, run, old;
         var starts = areaState[\freeze][\writerStarts], entry = (run: run, writer: writer, old: old, before: starts[voice]);
         this.forgetWriterStart(voice);
@@ -443,7 +442,10 @@
             this.startConfirmWait.wait;
             // (out of reach of forgetWriterStart before the judging: a Routine never stops itself)
             entry[\judge] = nil;
-            this.areaCall(\judgeWriterStart, voice, entry);
+            while { starts[voice] === entry and: { this.pastStop.not } } {
+                this.areaCall(\judgeWriterStart, voice, entry);
+                if (starts[voice] === entry) { this.startConfirmWait.wait };
+            };
         });
         starts[voice] = entry;
         entry[\judge].play(SystemClock);
@@ -460,54 +462,65 @@
         starts[voice] = nil;
     }
 
-    // A writer still unconfirmed at its timer (watchWriterStart), after a
-    // sync (serverAnswers; nothing judged without its answer), still the
-    // voice's latest and the engine not past stop: its /s_new failed, and
-    // the record forgets it with no message to it (#1019). A failed
-    // Synth.replace replaced nothing, so the writer it would have replaced
-    // still runs: the record names the newest writer before it the server
-    // still has (liveWriterBefore), so one writer a voice stays tracked and
-    // the freeze area's stop frees it; a voice with none (its first writer
-    // failed) has no writer, and a pause, run or replace of it does nothing
-    // (runRingWriter, replaceRingWriter). The writer named is set to the
-    // state the failed one was made in (/n_run: it has had its first block,
-    // its /n_go having come), paused if the failed one was of another def (a
-    // spectral writer that never started: the ring holds, as a hold does)
+    // /synced orders preceding replies but cannot recover a dropped /n_go
+    // or /n_end. On a start timeout, ask for one snapshot of voiceGroup.
+    // A missing snapshot leaves the claim pending for a later retry.
+    writerNodeIDs {
+        var server = context.server, condition = Condition(false), tree, ids, i = 4, reply, timer;
+        reply = OSCFunc({ arg msg; tree = msg; condition.test = true; condition.signal },
+            '/g_queryTree.reply', server.addr, argTemplate: [0, voiceGroup.nodeID]).oneShot;
+        timer = Routine({ this.judgeSyncSeconds.wait; condition.test = true; condition.signal });
+        server.sendMsg('/g_queryTree', voiceGroup.nodeID, 0);
+        timer.play(SystemClock);
+        condition.wait;
+        timer.stop;
+        reply.free;
+        if (tree.isNil) { ^nil };
+        // The root's id and child count precede the depth-first records.
+        // Each record is id, child count; a synth (-1) also has its def.
+        ids = Set.new;
+        while { i < tree.size } {
+            ids.add(tree[i]);
+            i = i + if (tree[i + 1] == -1) { 3 } { 2 };
+        };
+        ^ids
+    }
+
+    // A replacement's missing notification can also mean the previous
+    // writer survived a failed /s_new (#1019). Reconcile the whole chain
+    // against what scsynth actually has, even if NodeWatcher's flags are
+    // stale (#1282). No command is sent to an unconfirmed or dead node.
     judgeWriterStart { arg voice, entry;
-        var starts = areaState[\freeze][\writerStarts], key = this.ringWriterKeys[voice], writer = entry[\writer], live;
+        var starts = areaState[\freeze][\writerStarts], key = this.ringWriterKeys[voice];
+        var writer = entry[\writer], live, each, candidate, ids;
         if (this.pastStop or: { starts[voice] !== entry }) { ^this };
         if (this.serverAnswers.not) { ^this };
         if (this.pastStop or: { starts[voice] !== entry }) { ^this };
+        ids = this.writerNodeIDs;
+        if (ids.isNil or: { this.pastStop } or: { starts[voice] !== entry }) { ^this };
         this.forgetWriterStart(voice);
         if (synths[key] !== writer) { NodeWatcher.unregister(writer); ^this };
-        live = this.liveWriterBefore(entry);
-        // the chain's writers the server never had (or freed) leave the NodeWatcher
-        this.forgetDeadWriters(entry);
+        candidate = writer;
+        each = entry;
+        while { candidate.notNil } {
+            if (ids.includes(candidate.nodeID)) {
+                live = live ? candidate;
+            } {
+                NodeWatcher.unregister(candidate);
+                candidate.isPlaying = false;
+                candidate.isRunning = false;
+            };
+            candidate = each !? { each[\old] };
+            each = each !? { each[\before] };
+        };
         if (live.isNil) { synths.removeAt(key); ^this };
         synths[key] = live;
-        live.run(entry[\run] and: { live.defName.asSymbol == writer.defName.asSymbol });
-    }
-
-    // The newest writer an entry's chain replaced that the server still has
-    // (its /n_go came and no /n_end: isPlaying), or nil. A replace of a
-    // writer still waiting keeps that writer's entry as before, so a chain
-    // of failed replaces reaches back to the last one that started
-    liveWriterBefore { arg entry;
-        var each = entry;
-        while { each.notNil } {
-            if (each[\old].notNil and: { each[\old].isPlaying }) { ^each[\old] };
-            each = each[\before];
-        };
-        ^nil
-    }
-
-    // Every writer of an entry's chain that is not playing, out of the
-    // NodeWatcher (judgeWriterStart: none of them will ever send /n_go)
-    forgetDeadWriters { arg entry;
-        var each = entry;
-        while { each.notNil } {
-            if (each[\writer].isPlaying.not) { NodeWatcher.unregister(each[\writer]) };
-            each = each[\before];
+        NodeWatcher.register(live);
+        live.isPlaying = true;
+        // The new writer was created in the requested state. A surviving
+        // predecessor must adopt it (a failed spectral start holds the ring).
+        if (live === writer) { live.isRunning = entry[\run] } {
+            live.run(entry[\run] and: { live.defName.asSymbol == writer.defName.asSymbol });
         };
     }
 
