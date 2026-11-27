@@ -167,7 +167,20 @@ test("IO's rings sweep the tape's level, speed, feedback and wear", function()
     context.arc.turn(1, ring, 100)
     assert_true(params:get(id) > spec:map(0.25), "ring " .. ring .. " raises " .. id)
     next_frame(context)
-    assert_near(device.segments[ring].to, spec:unmap(params:get(id)) * math.pi * 2, 1e-9, "ring " .. ring .. " shows " .. id)
+    if ring ~= 2 then
+      assert_near(device.segments[ring].to, spec:unmap(params:get(id)) * math.pi * 2, 1e-9, "ring " .. ring .. " shows " .. id)
+    end
+  end
+  for _, speed in ipairs({0, 1, -1}) do
+    params:set("tapeloop_rate", speed)
+    arc_redraw()
+    for led = 1, 64 do
+      local level = 0
+      if speed == 0 and led == 1 then level = 3 end
+      if speed == 1 and led <= 16 then level = 12 end
+      if speed == -1 and led > 48 then level = 12 end
+      assert_equal(device:get_led(2, led), level, "tape speed " .. speed .. ", LED " .. led)
+    end
   end
 end)
 
