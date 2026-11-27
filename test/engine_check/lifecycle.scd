@@ -936,6 +936,38 @@ check.(synthNames.(context.xg).size == before, "switching back to the synth rest
 checkSupersededAtStart.(3, before);
 checkStopStartCycles.(3);
 checkSynthSetWalk.(9);
+// A burst can fill sclang's notification socket. The server replaced the
+// old writer, but its /n_end and the replacement's /n_go never reached the
+// watchers. A later /synced cannot restore those missing notifications.
+{
+    var voice = 2, old = engine.ringWriterFor(voice), writer, entry, tree;
+    var settled, actual, tracked, phase = engine.areaState[\rings][\phaseBuses][voice], first;
+    NodeWatcher.unregister(old); // keep the stale positive isPlaying of the first writer
+    engine.replaceRingWriter(voice, \strataRingWrite, engine.granBuses[voice], false);
+    writer = engine.ringWriterFor(voice);
+    entry = engine.areaState[\freeze][\writerStarts][voice];
+    entry[\watch].free;
+    NodeWatcher.unregister(writer); // neither recipient sees its /n_go
+    server.sync;
+    NodeWatcher.register(old, false);
+    NodeWatcher.register(writer, false);
+    settled = h.waitFor({ engine.areaState[\freeze][\writerStarts][voice].isNil }, 3);
+    tree = h.synthTree(engine.voiceGroup);
+    actual = tree.any({ arg node; node.id == writer.nodeID }) and: { tree.every({ arg node; node.id != old.nodeID }) };
+    tracked = engine.ringWriterFor(voice) === writer;
+    check.(settled and: { actual } and: { tracked },
+        "lifecycle: missing writer notifications keep the server's actual replacement (confirmed %, actual %, tracked %)".format(
+            settled, actual, tracked));
+    // Restore a failed fixture's record too, so it cannot send a second
+    // command to the stale ID or strand the real writer at teardown.
+    if (tracked.not) { engine.synths[engine.ringWriterKeys[voice]] = writer; writer.register(true) };
+    engine.runRingWriter(voice, true);
+    server.sync;
+    first = h.readBusValue(phase);
+    check.(tracked and: { h.waitFor({ h.readBusValue(phase) != first }, 1) },
+        "lifecycle: resuming the recovered writer advances the ring head");
+}.value;
+
 checkInvariantWarnings.(3, before);
 checkQuietNodeSends.(3, before);
 checkFailedStarts.(5, before);

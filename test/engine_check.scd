@@ -377,7 +377,7 @@ var synthNames = { arg group, teardownStage;
             { server.sendMsg('/g_queryTree', group.nodeID, 0) });
     } {
         OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
-            '/g_queryTree.reply', server.addr).oneShot;
+            '/g_queryTree.reply', server.addr, argTemplate: [0, group.nodeID]).oneShot;
         server.sendMsg('/g_queryTree', group.nodeID, 0);
         if (awaitReply.(condition).not) { reply = [nil, 0, 0, 0] };  // parses as an empty tree
     };
@@ -401,7 +401,7 @@ var synthNames = { arg group, teardownStage;
 var synthNodes = { arg group;
     var condition = Condition(false), reply, list = List.new, index = 2, parse;
     OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal },
-        '/g_queryTree.reply', server.addr).oneShot;
+        '/g_queryTree.reply', server.addr, argTemplate: [1, group.nodeID]).oneShot;
     server.sendMsg('/g_queryTree', group.nodeID, 1);
     if (awaitReply.(condition).not) { reply = [nil, 0, 0, 0] };  // parses as an empty tree
     parse = {

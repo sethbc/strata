@@ -490,7 +490,7 @@ var checkReplacementFailsTwice = {
     first = stageOf.(voice);
     server.sendBundle(nil, *held.(bundle, first));
     // (flag 0: a synth's entry is its ID, -1 and its def's name)
-    OSCFunc({ arg msg; afterReplace = msg.count({ arg item; item.asString == "strataVoiceMix" }) }, '/g_queryTree.reply', server.addr).oneShot;
+    OSCFunc({ arg msg; afterReplace = msg.count({ arg item; item.asString == "strataVoiceMix" }) }, '/g_queryTree.reply', server.addr, argTemplate: [0, mixGroup.nodeID]).oneShot;
     server.sendMsg('/g_queryTree', mixGroup.nodeID, 0);
     bundle = server.makeBundle(false, { command.(\setGrainParam, voice, \filterFreq, freq) });
     server.sendBundle(nil, *held.(bundle, first));

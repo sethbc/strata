@@ -44,7 +44,7 @@ nodeCounts = {
 // A group's own children's node IDs, in order, from one /g_queryTree
 childrenOf = { arg group;
     var condition = Condition(false), reply, children = List.new, index = 2, parse;
-    OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal }, '/g_queryTree.reply', server.addr).oneShot;
+    OSCFunc({ arg msg; reply = msg; condition.test = true; condition.signal }, '/g_queryTree.reply', server.addr, argTemplate: [0, group.nodeID]).oneShot;
     server.sendMsg('/g_queryTree', group.nodeID, 0);
     if (h.awaitReply(condition).not) { reply = [nil, 0, group.nodeID, 0] };
     parse = { arg depth;
