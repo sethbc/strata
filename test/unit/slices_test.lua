@@ -377,11 +377,12 @@ test("markers stay sorted, 10 ms apart and at most 64, and the first cannot be d
   S.lib.slices.set_markers(1, list, false)
   assert_equal(S.lib.slices.count(1), 64, "at most 64")
   assert_equal(S.lib.slices.add_marker(1, 90000), false, "an add at 64")
+  assert_equal(S.lib.slices.markers(1)[64], 63000, "the last cut stays")
+  assert_equal(S.lib.samples.settings(1).edited, false, "refusal leaves generated cuts unedited")
   assert_equal(S.lib.slices.delete_marker(1, 1), false, "never the first")
   assert_true(S.lib.slices.delete_marker(1, 64), "the last")
   assert_equal(S.lib.slices.count(1), 63)
   assert_true(S.lib.slices.add_marker(1, 90000), "room again")
-  assert_equal(S.lib.slices.add_marker(1, 90100), false, "too near another")
   S.lib.slices.set_markers(1, {0, 10000, 20000}, false)
   assert_true(S.lib.slices.nudge_marker(1, 2, 48))
   assert_equal(list_text(S.lib.slices.markers(1)), "{0, 10048, 20000}")
@@ -391,6 +392,37 @@ test("markers stay sorted, 10 ms apart and at most 64, and the first cannot be d
   assert_equal(S.lib.slices.nudge_marker(1, 1, 100), false, "the first stays at 0")
   assert_equal(S.lib.slices.SLICES.max, 64); assert_equal(S.lib.slices.SLICES.first_note, 36)
 end)
+
+-- A refused add can fall before a cut (displacing it in the sorted list),
+-- or on a shorter load that only plays the first two of the four saved cuts.
+for _, seconds in ipairs({2, 1}) do
+  test("a refused insertion keeps every saved cut with " .. seconds .. " s loaded", function()
+    local context, S = sliced(2, 4)
+    local path = context.audio_dir .. "loop.wav"
+    local side_file = context.data_dir .. "strata/samples.data"
+    local function reload(length)
+      settle_load(context, 1, path, length)
+      write_peaks(1, length)
+      tick(context)
+    end
+    if seconds == 1 then reload(1) end
+    context.clock.run_for(0.12)
+    local before = context.tab.load(side_file).files[1].settings
+    local original = "{0, 24000, 48000, 72000}"
+    assert_equal(list_text(before.markers), original)
+    assert_equal(before.edited, false)
+    assert_equal(S.lib.slices.count(1), seconds * 2)
+    assert_equal(S.lib.slices.add_marker(1, 23904), false)
+    context.clock.run_for(0.12)
+    local after = context.tab.load(side_file).files[1].settings
+    assert_equal(list_text(after.markers), original, "saved cut positions")
+    assert_equal(after.edited, false, "saved edits flag")
+    assert_equal(after.frames, 96000, "the length the cuts were made on")
+    if seconds == 1 then reload(2) end
+    assert_equal(S.lib.slices.count(1), 4, "all four slices play at full length")
+    assert_equal(S.lib.slices.region(1, 2)[1], 0.25)
+  end)
+end
 
 -------------------------------------------------------------------------------
 -- Playing them
