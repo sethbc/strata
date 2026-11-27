@@ -705,4 +705,48 @@ test("a scene key blinks while its recall waits", function()
   end)
 end)
 
+for _, entry in ipairs({"direct", "grid key", "partial failure"}) do
+  test("a changed scene refreshes every grid once with its final LEDs, " .. entry, function()
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    local pane = scenes_pane(context, "256 top")
+    local devices = {pane.device, context.grid.plug(2, 16, 8)}
+    capture_scene(1)
+    for voice = 1, h.voice_count() do
+      toggle_voice(voice)
+      params:set("v" .. voice .. "_mute", 1)
+      params:set("v" .. voice .. "_seq_length", 7)
+      params:set("v" .. voice .. "_source", 2)
+    end
+    if entry == "partial failure" then
+      params:set_action("v6_mute", function() error("scene mute failed") end)
+    end
+    local before = {devices[1].refresh_count, devices[2].refresh_count}
+    if entry == "grid key" then
+      pane.press(1, 1, 1)
+    else
+      local ran, err = pcall(recall_scene, 1, 0)
+      if entry == "partial failure" then
+        assert_true(not ran and tostring(err):find("scene mute failed", 1, true))
+      else
+        assert_true(ran, tostring(err))
+      end
+    end
+    assert_equal(S.current_scene, entry == "partial failure" and 0 or 1)
+    local painted = {}
+    for port, dev in ipairs(devices) do
+      assert_equal(dev.refresh_count, before[port] + 1, "completed refreshes on port " .. port)
+      painted[port] = h.deep_copy(dev.leds)
+    end
+    grid_redraw()
+    for port, dev in ipairs(devices) do
+      assert_equal(dev.refresh_count, before[port] + 2, "the next redraw still paints")
+      for x = 1, dev.cols do
+        for y = 1, dev.rows do assert_equal(painted[port][x][y], dev:get_led(x, y)) end
+      end
+    end
+  end)
+end
+
 end

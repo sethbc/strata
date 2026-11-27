@@ -46,7 +46,7 @@ Voice activation:
 
 Patterns:
 - restored after all parameter changes, each voice's through `S.lib.sequencer.replace_pattern` (which ends a step held on the grid, #242);
-- `grid_redraw()` is called so the grid shows them;
+- The outermost recall or grid key repaints each grid once after the entries and hooks, including after a partial failure;
 - the pattern sequencer keeps playing if it was running.
 
 ### Entries
