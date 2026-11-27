@@ -440,9 +440,20 @@ return function(S)
     if not record.backup then record.load_problem = nil end
   end
 
+  local function holds_text(path, text)
+    local file = io.open(path, "rb")
+    if not file then return false end
+    -- A mismatched size needs no read. Allow one extra byte to detect a
+    -- file that grows after the size check without reading all of it.
+    local same = file:seek("end") == #text and file:seek("set", 0) == 0
+      and file:read(#text + 1) == text
+    file:close()
+    return same
+  end
+
   function M.write(path, value)
     local text = M.encode(value)
-    if read_text(path) == text then
+    if holds_text(path, text) then
       note_write(path, true)
       return true, "unchanged"
     end
