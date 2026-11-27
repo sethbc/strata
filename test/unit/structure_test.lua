@@ -3453,6 +3453,87 @@ test("the 3.13 script's -1 and STRATA_ENGINE_CHECK_AREAS run one container per r
   h.remove_tree(root)
 end)
 
+test("the Docker runner reclassifies the latest attempt in a reused folder (#1189)", function()
+  local root = data_root .. "sc313-current"
+  local fake_run = [[
+    if [ -n "${FAIL_CHECK:-}" ]; then echo "FAIL current check"; exit 1; fi
+    echo "ENGINE CHECK PASSED"; exit 0]]
+  fake_313_checkout(root, { "alpha", "beta,gamma" }, fake_run)
+  local logs = "-o " .. h.shell_quote(root .. "/logs")
+  local function launch(options, env)
+    return run_fake_313(root, options .. " " .. logs .. " " .. h.shell_quote(root .. "/norns"), env)
+  end
+  local function replay(options)
+    return run_fake_313(root, "-c " .. (options or "") .. " " .. logs)
+  end
+  local output = launch("-n 2")
+  assert_true(output:find("shards: passed 4 of 4;", 1, true) and output:find("exit=0", 1, true), output)
+
+  output = launch("-1", "FAIL_CHECK=1")
+  assert_true(output:find("run 1: failed (FAIL current check)", 1, true) and output:find("exit=1", 1, true), output)
+  output = replay("-n 2")
+  assert_true(output:find("run 1: failed (FAIL current check)", 1, true) and output:find("exit=1", 1, true), output)
+  assert_true(output:find("run 2: incomplete", 1, true) and not output:find("shards: ", 1, true), output)
+
+  -- A different shard matrix reuses both layouts' logs.
+  fake_313_checkout(root, { "alpha" }, fake_run)
+  output = launch("")
+  assert_true(output:find("shards: passed 1 of 1;", 1, true) and output:find("exit=0", 1, true), output)
+  output = replay()
+  assert_true(output:find("shards: passed 1 of 1;", 1, true) and output:find("exit=0", 1, true), output)
+
+  -- A failed start has no new container log. Earlier passes remain on disk.
+  output = run_fake_313(root, "-1 " .. logs .. " " .. h.shell_quote(root .. "/missing-norns"))
+  assert_true(output:find("exit=2", 1, true), output)
+  output = replay()
+  assert_true(output:find("run 1: incomplete", 1, true) and output:find("exit=1", 1, true), output)
+  h.remove_tree(root)
+end)
+
+test("the Docker runner keeps the completed shards of an interrupted attempt (#1189)", function()
+  local root = data_root .. "sc313-interrupted-results"
+  local fake_run = [[
+    if [ -z "${INTERRUPT_CHECK:-}" ]; then exit 0; fi
+    case "$*" in
+      *STRATA_ENGINE_CHECK_AREAS=alpha*) echo gr"ey count error"; exit 1 ;;
+      *STRATA_ENGINE_CHECK_AREAS=beta*)
+        while [ "$1" != --name ]; do shift; done
+        runner=${2#strata-sc313-}
+        kill -TERM "${runner%%-*}"
+        exit 1 ;;
+    esac]]
+  fake_313_checkout(root, { "alpha", "beta", "gamma" }, fake_run)
+  local logs = "-o " .. h.shell_quote(root .. "/logs")
+  local launch = logs .. " " .. h.shell_quote(root .. "/norns")
+  local output = run_fake_313(root, launch)
+  assert_true(output:find("shards: passed 3 of 3;", 1, true) and output:find("exit=0", 1, true), output)
+  output = run_fake_313(root, launch, "INTERRUPT_CHECK=1")
+  assert_true(output:find("exit=130", 1, true), output)
+  output = run_fake_313(root, "-c " .. logs)
+  assert_true(output:find("run 1: incomplete", 1, true) and output:find("collector failure in alpha", 1, true)
+    and output:find("shards: passed 0 of 3;", 1, true) and output:find("collector failure 1 (#211)", 1, true)
+    and output:find("exit=1", 1, true), output)
+  h.remove_tree(root)
+end)
+
+test("the Docker runner refuses a second writer to the same output folder (#1189)", function()
+  local root = data_root .. "sc313-overlapping"
+  -- Start another runner through the normal CLI while the outer container is live.
+  fake_313_checkout(root, { "alpha" }, [[
+    if [ -n "${INNER:-}" ]; then echo "FAIL overlapping run"; exit 1; fi
+    INNER=1 /bin/sh test/run_engine_check_313.sh -1 -o logs norns > inner.txt 2>&1
+    echo "exit=$?" >> inner.txt
+    exit 0]])
+  local output = run_fake_313(root, "-o logs norns")
+  assert_true(output:find("exit=0", 1, true), output)
+  local inner = h.file_text(root .. "/inner.txt")
+  assert_true(inner:find("exit=2", 1, true) and inner:find("logs", 1, true), inner)
+  assert_equal(#read_lines(root .. "/docker-run.txt"), 1, "only the first writer starts a container")
+  output = run_fake_313(root, "-c -o logs")
+  assert_true(output:find("shards: passed 1 of 1;", 1, true) and output:find("exit=0", 1, true), output)
+  h.remove_tree(root)
+end)
+
 test("the 3.13 script reads its shards from the workflow at each start, and refuses a list it cannot read (#581)", function()
   local shell_quote, root = h.shell_quote, data_root .. "sc313-list"
   fake_313_checkout(root, { "alpha", "beta,gamma" }, "    exit 0")
@@ -3585,6 +3666,19 @@ local function write_shard_fixtures(folder, fixtures)
     local status = assert(io.open(folder .. "/run-" .. fixture[1] .. ".status", "w")); status:write(fixture[2] .. "\n"); status:close()
   end
 end
+
+test("the Docker runner flags overlapping layouts in unmarked logs (#1189)", function()
+  local root = data_root .. "sc313-legacy-reuse"
+  fake_313_checkout(root, { "alpha" }, "exit 0")
+  write_shard_fixtures(root .. "/logs", {
+    { "1-alpha", 0, "ENGINE CHECK PASSED" }, { "1", 1, "FAIL single" },
+    { "2-alpha", 0, "ENGINE CHECK PASSED" }, { "3", 0, "ENGINE CHECK PASSED" },
+  })
+  local output = run_fake_313(root, "-c -n 3 -o logs")
+  assert_true(output:find("run 1: incomplete", 1, true) and output:find("both", 1, true), output)
+  assert_true(output:find("passed 2 of 3;", 1, true) and output:find("exit=1", 1, true), output)
+  h.remove_tree(root)
+end)
 
 test("the 3.13 script's -n and -j require positive decimal counts (#1084)", function()
   local root = data_root .. "sc313-counts"

@@ -37,10 +37,9 @@
 #   -l  prints the shards a sharded run would use, one a line, and starts
 #       nothing
 #   -c  classifies the runs already in the -o folder (i = 1..n, either
-#       layout; a run with shard logs is read as sharded, against the
-#       workflow's list: its shards in the list's order, then any shard log
-#       the list no longer names, by file name; a run lacking a listed
-#       shard's log or its sole run-<i>.log is incomplete) and starts nothing
+#       layout) and starts nothing. Use the latest launch's run count and
+#       shard list to select its logs. For older folders without a record,
+#       infer each layout from its logs and the workflow's shard list
 #   path/to/norns defaults to $NORNS_DIR, else ~/src/norns.
 #   STRATA_ENGINE_CHECK_AREAS, set and not empty, runs those areas in one
 #   container per run, as before #581. It, ENGINE_CHECK_TIMEOUT (which
@@ -182,16 +181,30 @@ if [ -n "$list_only" ]; then
   exit 0
 fi
 
-# A start that launches full runs runs them sharded, unless -1 or the
-# caller's areas say otherwise
-sharded=
+# The record is blank during setup. Before any container starts, publish the
+# run count and exact shard list with all of this attempt's statuses empty.
 shards=
-if [ -z "$classify_only" ] && [ -z "$one_process" ] && [ -z "${STRATA_ENGINE_CHECK_AREAS:-}" ]; then
-  sharded=1
-  shards=$(read_shards) || exit 2
-fi
-
+recorded_runs=
+sharded=
 launch_runs() {
+  # All writers use the same flat log names. Hold a kernel lock on the folder
+  # itself, inherited by running jobs, including if the launcher is killed.
+  exec 9< "$log_dir"
+  if command -v flock > /dev/null 2>&1; then
+    lock_folder() { flock -n 9; }
+  else
+    # macOS ships Perl's flock instead of the util-linux command.
+    lock_folder() { perl -MFcntl=:flock -e 'open my $dir, "<&=9" or die $!; exit !flock($dir, LOCK_EX | LOCK_NB)'; }
+  fi
+  if ! lock_folder; then
+    echo "cannot lock the log folder for writing: $log_dir" >&2
+    exit 2
+  fi
+  : > "$log_dir/current-run"
+  if [ -z "$one_process" ] && [ -z "${STRATA_ENGINE_CHECK_AREAS:-}" ]; then
+    sharded=1
+    shards=$(read_shards) || exit 2
+  fi
   if [ ! -d "$norns_dir/sc/core" ]; then
     echo "norns source not found at $norns_dir (pass it as the last argument)" >&2
     exit 2
@@ -214,23 +227,36 @@ launch_runs() {
     docker build --label "strata.dockerfile-sha256=$sources_hash" -t "$image" -f "$dockerfile" "$build_context"
   fi
 
+  for_each_container clear_status
+  record=$(mktemp "$log_dir/current-run.XXXXXXXX")
+  { printf '%s %s\n' "$runs" "${record##*.}"; printf '%s\n' "$shards"; } > "$record"
+  chmod +r "$record"   # match the logs' readability under the caller's umask
+  mv -f -- "$record" "$log_dir/current-run"
+
   echo "SuperCollider $release (option -s $version, image $image)"
   if [ -n "$sharded" ]; then
     echo "areas: all, in the workflow's shards ($(echo $shards)), one container each; $runs run(s), $parallel container(s) at once"
   else
     echo "areas: ${STRATA_ENGINE_CHECK_AREAS:-all}, one container per run; $runs run(s), $parallel at once"
   fi
+  for_each_container start_container
+  wait
+}
+
+# Visit exactly the same run and shard names for preparation and launch.
+for_each_container() {
   run=1
   while [ "$run" -le "$runs" ]; do
     if [ -n "$sharded" ]; then
-      for shard in $shards; do start_container "$run-$(file_name "$shard")" "$shard"; done
+      for shard in $shards; do "$1" "$run-$(file_name "$shard")" "$shard"; done
     else
-      start_container "$run" ""
+      "$1" "$run" ""
     fi
     run=$((run + 1))
   done
-  wait
 }
+
+clear_status() { : > "$log_dir/run-$1.status"; }
 
 # The containers this start launched, named after this script's PID so an
 # interrupt stops only its own
@@ -246,7 +272,7 @@ trap 'stop_containers; exit 130' INT TERM
 # Start a container once fewer than -j are running: $1 the suffix of its
 # name and log (the run, then for a shard its file name), $2 the areas it
 # runs (empty: the caller's STRATA_ENGINE_CHECK_AREAS, if any). A job's
-# status file is emptied before it starts and written as it ends, so a job
+# status file is empty from preparation until it ends, so a job
 # is running while its status is empty: that cannot be fooled by a PID the
 # system has given to another process since. Its PID is asked only for a
 # job that ended without writing one (killed first), whose slot then frees
@@ -267,7 +293,6 @@ start_container() {
     sleep 0.2 2> /dev/null || sleep 1
   done
   started_names="$started_names $1"
-  : > "$log_dir/run-$1.status"
   run_one "$1" "$2" &
   running="$running $1:$!"
 }
@@ -306,10 +331,17 @@ echo "logs: $log_dir"
 
 [ -n "$classify_only" ] || launch_runs
 
-# -c judges a folder that holds shard logs against the workflow's list: a
-# run lacking some of its shards is incomplete, and a run's shards are read
-# in the list's order
-if [ -n "$classify_only" ]; then
+# New launches record their layout even when older logs are still present.
+# A folder made by an older runner keeps the original discovery rules.
+recorded=
+if [ -f "$log_dir/current-run" ]; then
+  recorded=1
+  {
+    read -r recorded_runs attempt || recorded_runs=0
+    shards=$(cat)
+  } < "$log_dir/current-run"
+  case $recorded_runs in ''|*[!0-9]*) recorded_runs=0 ;; esac
+elif [ -n "$classify_only" ]; then
   for log in "$log_dir"/run-*-*.log; do
     if [ -e "$log" ]; then shards=$(read_shards) || exit 2; fi
     break
@@ -364,30 +396,26 @@ classify() {
   [ "$class" != collector ] || label="collector failure"
 }
 
-# run_shards <run>: sets stems, the log stems of the run's shards (the
-# workflow's, in its order; for -c, those with a log, then any other shard
-# log the folder holds, by name), and missing, for -c, the workflow's shards
-# with no log, joined by commas for display and counted once per shard.
-# stems empty: a run in one container
-# (run-<i>.log)
+# Select the finished shard stems and count each missing shard once. Legacy
+# folders use the workflow order, then any remaining shard logs by file name.
+# Both lists empty means a run in one container (run-<i>.log).
 run_shards() {
   stems=
   missing=
-  if [ -n "$sharded" ]; then
-    for shard in $shards; do stems="$stems $1-$(file_name "$shard")"; done
-    return 0
-  fi
-  [ -n "$classify_only" ] || return 0
   found=
-  for log in "$log_dir/run-$1-"*.log; do
-    [ -e "$log" ] || continue
-    stem=${log##*/run-}
-    found="$found ${stem%.log}"
-  done
-  [ -n "$found" ] || return 0
+  ambiguous=
+  if [ -z "$recorded" ]; then
+    for log in "$log_dir/run-$1-"*.log; do
+      [ -e "$log" ] || continue
+      stem=${log##*/run-}
+      found="$found ${stem%.log}"
+    done
+    [ -n "$found" ] || return 0
+    if [ -f "$log_dir/run-$1.log" ]; then ambiguous=1; return 0; fi
+  fi
   for shard in $shards; do
     stem=$1-$(file_name "$shard")
-    if [ -e "$log_dir/run-$stem.log" ]; then
+    if [ -f "$log_dir/run-$stem.log" ] && { [ -z "$recorded" ] || [ -s "$log_dir/run-$stem.status" ]; }; then
       stems="$stems $stem"
     else
       missing="$missing,$shard"
@@ -418,12 +446,24 @@ newline='
 '
 run=1
 while [ "$run" -le "$runs" ]; do
+  if [ -n "$recorded" ] && [ "$run" -gt "$recorded_runs" ]; then
+    count run incomplete
+    echo "run $run: incomplete (no completed run $run in the latest attempt)"
+    run=$((run + 1))
+    continue
+  fi
   run_shards "$run"
   log=$log_dir/run-$run.log
-  if [ -z "$stems" ] && [ ! -f "$log" ]; then
+  if [ -n "$ambiguous" ]; then
+    count run incomplete
+    echo "run $run: incomplete (both single and shard logs without a current-run record)"
+  elif [ -z "$stems$missing" ] && [ ! -f "$log" ]; then
     count run incomplete
     echo "run $run: incomplete (missing $log)"
-  elif [ -z "$stems" ]; then
+  elif [ -z "$stems$missing" ] && [ -n "$recorded" ] && [ ! -s "$log_dir/run-$run.status" ]; then
+    count run incomplete
+    echo "run $run: incomplete (no finished result for $log)"
+  elif [ -z "$stems$missing" ]; then
     classify "$log" "$log_dir/run-$run.status"
     count run "$class"
     if [ "$class" = passed ]; then echo "run $run: passed"; else echo "run $run: $label ($detail), $log"; fi
@@ -463,7 +503,8 @@ while [ "$run" -le "$runs" ]; do
     if [ -n "$missing" ]; then
       count run incomplete
       [ -z "$worst_stem" ] || others="$newline  and $worst$others"
-      echo "run $run: incomplete (no log for $missing)$others"
+      if [ -n "$recorded" ]; then reason="no finished result"; else reason="no log"; fi
+      echo "run $run: incomplete ($reason for $missing)$others"
     elif [ -n "$worst_stem" ]; then
       count run "$worst_class"
       echo "run $run: $worst$others"
@@ -474,6 +515,16 @@ while [ "$run" -le "$runs" ]; do
   fi
   run=$((run + 1))
 done
+# A replay may read while another launch starts. Refuse mixed evidence if
+# the folder changed hands since the record was read (including a legacy
+# folder's first reuse).
+if [ -n "$classify_only" ] && [ -f "$log_dir/current-run" ]; then
+  read -r current_runs current_attempt < "$log_dir/current-run" || current_attempt=
+  if [ "${attempt:-}" != "$current_attempt" ] || [ -z "$recorded" ]; then
+    echo "incomplete: another attempt started while classifying $log_dir"
+    exit 1
+  fi
+fi
 [ -z "$slowest" ] || echo "slowest shard: $slowest, $slowest_seconds s"
 echo "passed $run_passed of $runs; failed $run_failed; capped $run_capped (#544); killed $run_killed; collector failure $run_collector (#211); crashed $run_crashed (#131); incomplete $run_incomplete"
 [ "$shard_total" -eq 0 ] || echo "shards: passed $shard_passed of $shard_total; failed $shard_failed; capped $shard_capped (#544); killed $shard_killed; collector failure $shard_collector (#211); crashed $shard_crashed (#131); missing $shard_missing"
