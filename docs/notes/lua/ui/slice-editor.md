@@ -1,12 +1,12 @@
 ## Must not break
 
-- The editor shows over the page only through `S.lib.ui_modal` (`push` at `open`, `pop` at `close`); it is opened only by K3 on BUFFER's `slices` field (and by layout states and tests), and `open(slot)` refuses (returns false, pushes nothing) a slot with no audio (`S.lib.samples.settings(slot)` nil).
+- The editor shows over the page only through `S.lib.ui_modal` (`push` at `open`, `pop` at `close`); it is opened only by K3 on BUFFER's `slices` field (and by layout states and tests), and `open(slot)` returns false and `"loading"` or `"empty"` if the file load is pending or the slot has no settings.
 - It keeps no slice or setting of its own. Markers change only through `S.lib.slices.add_marker`, `delete_marker` and `nudge_marker`; the file's settings only through `S.lib.samples.set` and `set_bars`; slices are made again only through `S.lib.slices.make`. It reads `S.lib.slices.markers`, `count`, `analyzing`, `playing`, `SLICES.max`, `S.lib.samples.settings`, `bars`, `gain`, `SAMPLES` (`modes`, `tempo_min`, `tempo_max`), `S.lib.waveforms.frames`, `rate` (48 kHz without it), `bins` and `S.lib.playheads.position`, `has_audio`, `moving`. It sends no engine command.
 - The first marker (frame 0) is never nudged or deleted.
 - A nudge is `round(d × nudge_seconds × rate)` frames (`nudge_seconds` 0.001, ALT `fine_nudge_seconds` 0.0001; half away from 0, so 4.8 is 5 and -4.8 is -5); a nudge of 0 frames sends nothing.
 - A change that makes the slices again (the mode, or the amount in `equal` or `transients`) flashes `edits dropped` when the record was `edited` before it. In `off` the amount sets `count` and makes nothing.
-- The MIDI key: the note hook (`S.register_note_hook`, `slice editor`, its `heard`: every MIDI note a voice receives, before the slice filter, so a note outside a slicing voice's slices too, design §3.7) only records a note when the `key` row is picked, SLICE owns the top of the modal stack and the norns menu is closed. The next 48 Hz step (`S.lib.lfos.on_step`) checks that focus again before setting the key through `S.lib.samples.set`. If focus has moved, the step discards the note. A close forgets a noted key.
-- The slot emptied under the editor closes it: its listener on `S.lib.samples.on_bind` (registered once, at the first open, behind `binds_heard`) closes the editor when its slot's bind leaves no settings record.
+- The MIDI key: the note hook (`S.register_note_hook`, `slice editor`, its `heard`: every MIDI note a voice receives, before the slice filter, so a note outside a slicing voice's slices too, design §3.7) only records a note when the `key` row is picked, SLICE owns the top of the modal stack and the norns menu is closed. The next 48 Hz step (`S.lib.lfos.on_step`) checks that focus again before setting the key through `S.lib.samples.set`. If focus has moved, the step discards the note. A close or a rebind of the edited slot forgets a noted key.
+- Starting a file load calls `close(slot)` before the next input. Other slots keep their editor. The slot emptied under the editor also closes it: its listener on `S.lib.samples.on_bind` (registered once, at the first open, behind `binds_heard`) closes the editor when its slot's bind leaves no settings record.
 - The modules it reads (`S.lib.slices`, `S.lib.samples`, `S.lib.waveforms`) are read at each use and never checked to be there: a missing module or function fails loudly. The amount's bounds are the file settings' (`S.lib.samples.SAMPLES.count_min`, `count_max` and `sensitivity_max`, the bounds `S.lib.samples.set` checks): no copies.
 - The hints are one style in every view, the other modal editors' (`<key>:<action>`, K2 and K3 first; #736), each whole on the 128 px hint row in norns.ttf: markers `K2:back K3:add E2:sel E3:move` (125 px; E3 says `move`, as `E2:sel` with `E3:nudge` would be 129), with ALT `K3:delete E2:rows E3:fine` (104); rows `K2:back E2:slices E3:edit` (100), with ALT `E2:row E3:edit` (57). A "hints" flash (BUFFER's, `buffer_page_flash`) shows in their place.
 
@@ -22,21 +22,22 @@ No test runs this table: it is one of the design's modal owners (its section 5, 
 | State | Event | Next | Effect |
 |---|---|---|---|
 | closed | K3 on BUFFER's slices field, the slot holding audio | markers | pushed, on marker 1; every ring's carried ticks forgotten |
+| closed | K3 on BUFFER's slices field during a file load | closed | `buf <n> loading` flashed, nothing pushed |
 | closed | K3 on BUFFER's slices field, the slot empty | closed | `buf <n> empty` flashed, nothing pushed |
 | markers | K2 | closed | popped (ALT+K2 does nothing) |
 | markers | ALT+E2 | rows | on the row last picked |
-| markers | the slot emptied (a bind leaves no settings) | closed | popped |
+| markers | a file load starts or a bind leaves the slot empty | closed | popped |
 | markers | the grid's step editor pushed over it | markers | covered: the controls are the step editor's until it closes |
 | rows | E2 | markers | the picked row kept |
 | rows | ALT+E2 | rows | another row picked |
 | rows | K2 | closed | popped, a noted key forgotten |
 | rows | a MIDI note on the visible, selected key row | rows | the next step sets the key if the field still has focus (`S.lib.samples.set`) |
-| rows | the slot emptied | closed | popped, a noted key forgotten |
+| rows | a file load starts or the slot empties | closed | popped, a noted key forgotten |
 | rows | the grid's step editor pushed over it | rows | covered, as from markers |
 
 ## Owns
 
-- `lib/ui/slice_editor.lua` (`S.lib.ui_slice_editor`, 3.7 design §3.7, decision 14): `EDITOR` (the tunables, `layout`, `levels`, `flashes`), `open(slot)`, `close()`, `is_open()`, `state()` (`{slot, marker, view, row}`), `pick_marker(d)`, `pick_row(name)`, `nudge(d, fine)`, `add()`, `delete()`, `turn_row(name, d)`, `amount_range(record?)`, `tempo_range()`, `ring_fractions()`, BUFFER's `slot_text(slot)` and `starts(slot)`, and `owner` (whose `arc_delta` and `arc_redraw` `lib/arc/buffer.lua` sets, `docs/notes/lua/arc-pages.md`). Its unit tests: `test/unit/ui_slice_editor_test.lua` (with `h.slice_doubles`' editor doubles, set as fields of the real `S.lib.slices`, `S.lib.samples` and `S.lib.waveforms`).
+- `lib/ui/slice_editor.lua` (`S.lib.ui_slice_editor`, 3.7 design §3.7, decision 14): `EDITOR` (the tunables, `layout`, `levels`, `flashes`), `open(slot)`, `close(slot?)`, `is_open()`, `state()` (`{slot, marker, view, row}`), `pick_marker(d)`, `pick_row(name)`, `nudge(d, fine)`, `add()`, `delete()`, `turn_row(name, d)`, `amount_range(record?)`, `tempo_range()`, `ring_fractions()`, BUFFER's `slot_text(slot)` and `starts(slot)`, and `owner` (whose `arc_delta` and `arc_redraw` `lib/arc/buffer.lua` sets, `docs/notes/lua/arc-pages.md`). Its unit tests: `test/unit/ui_slice_editor_test.lua` (with `h.slice_doubles`' editor doubles, set as fields of the real `S.lib.slices`, `S.lib.samples` and `S.lib.waveforms`).
 - No clock, cleanup step or registry of its own: a note hook, an `on_step` function and the `slice editor` invariant (Machines, above). Its owner's record names it `SLICE`, the header's title while it is on top (#901), and its `close` calls `M.close` (looked up at the call), which cleanup's `modal_owners` step (141, `S.lib.ui_modal.close_all`) calls for an open editor (#899).
 
 ## Views and controls

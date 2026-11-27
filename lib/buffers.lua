@@ -548,6 +548,7 @@ return function(S)
     buffer.kept_state = nil
     buffer.take_number, buffer.take_unsaved = nil, false
     buffer.confirm_since = util.time()
+    S.lib.ui_slice_editor.close(slot)
     buffer.path = path
     buffer.missing_path = nil
     buffer.start, buffer.sent_start = start, start

@@ -86,10 +86,15 @@ return function(S)
     return type(slot) == "number" and slot >= 1 and slot <= S.constants.NUM_BUFFERS and slot % 1 == 0
   end
 
-  -- The settings record of what the slot holds, nil for no audio
+  -- BUFFER shows the selected file as soon as its load starts. Its settings
+  -- still belong to the previous audio until the engine confirms the load.
   local function settings(slot)
-    if not valid_slot(slot) then return nil end
-    return S.lib.samples.settings(slot)
+    if valid_slot(slot) then
+      if S.lib.buffers.status(slot) == "loading" then return nil, "loading" end
+      local record = S.lib.samples.settings(slot)
+      if record then return record end
+    end
+    return nil, "empty"
   end
 
   -- The slot's markers, {0} when it has none
@@ -138,21 +143,25 @@ return function(S)
   -- Opening and closing
   ---------------------------------------------------------------------------
 
-  -- The slot emptied under the editor closes it (S.lib.samples' bind
-  -- listeners hear every bind and unbind); registered once, at the first open
+  -- Binding resolves which record owns future edits. Discard a key heard
+  -- before that bind and close if the slot emptied.
   local function listen_for_binds()
     if binds_heard then return end
     binds_heard = true
     S.lib.samples.on_bind(function(slot)
-      if editor.open and slot == editor.slot and not settings(slot) then M.close() end
+      if editor.open and slot == editor.slot then
+        pending_key = nil
+        if not settings(slot) then M.close() end
+      end
     end)
   end
 
-  -- Open the editor on slot, in the markers view on its first marker: false
-  -- (nothing opened) for a slot with no audio. A second open replaces the
+  -- Open in the markers view on the first marker. Refuse an empty or
+  -- loading slot with false and the reason. A second open replaces the
   -- first; every ring's carried ticks are forgotten, as at a page change
   function M.open(slot)
-    if not settings(slot) then return false end
+    local record, reason = settings(slot)
+    if not record then return false, reason end
     if editor.open then S.lib.ui_modal.pop(owner) end
     listen_for_binds()
     editor.open, editor.slot, editor.marker, editor.view = true, slot, 1, "markers"
@@ -162,8 +171,9 @@ return function(S)
     return true
   end
 
-  function M.close()
-    if not editor.open then return end
+  -- With a slot, close only the editor for that slot (a new file load).
+  function M.close(slot)
+    if not editor.open or (slot ~= nil and slot ~= editor.slot) then return end
     editor.open, pending_key = false, nil
     S.lib.ui_modal.pop(owner)
   end
