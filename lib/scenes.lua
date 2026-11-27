@@ -1274,6 +1274,7 @@ return function(S)
     -- a running transition is canceled where it is, applying nothing (the
     -- scene it left is current again), so no step of it reads the new
     -- scenes
+    S.lib.quantize.cancel("scene")
     cancel_scene_transition()
     -- the current scene stays current only if the file holds the same scene
     -- in its slot (the text a write would give, so a scene saved and read
@@ -1582,6 +1583,7 @@ return function(S)
     -- the read set its sound already: a running fade ends where it is,
     -- whatever the file holds, so no later step or landing of it puts the
     -- old target's params back over it (#859; take_scenes cancels too)
+    S.lib.quantize.cancel("scene")
     cancel_scene_transition()
     if scene_table == nil then
       if S.scene_file.pset == path_base then

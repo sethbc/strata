@@ -5503,4 +5503,37 @@ test("every block kept by voice leaves its voices alone when all are skipped", f
   end
 end)
 
+for _, kind in ipairs({"preset", "preset without side file", "disk"}) do
+  test("a waiting recall cannot play after loading a new " .. kind, function()
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    local path = context.data_dir .. "bank.pset"
+    params:set("reverb_mix", 0.75)
+    capture_scene(1)
+    params:set("reverb_mix", 0.5)
+    params:write(path)
+    local bank = h.file_text(context.data_dir .. "strata/scenes.data")
+    params:set("reverb_mix", 0.25)
+    capture_scene(1)
+    params:set("scene_transition_time", 0)
+    params:set("quantize_actions", 3)
+    assert_true(S.lib.io_actions.recall_scene(1))
+    assert_true(S.lib.quantize.waiting("scene"))
+    if kind == "disk" then
+      h.write_text(context.data_dir .. "strata/scenes.data", bank)
+      assert_equal(load_scenes_from_disk(), "loaded")
+    else
+      if kind == "preset without side file" then assert(os.remove(context.data_dir .. "bank.scenes.data")) end
+      params:read(path)
+    end
+    local expected_mix = kind == "disk" and 0.25 or 0.5
+    local expected_slot_mix = kind == "preset without side file" and 0.25 or 0.75
+    context.clock.run_for(2.5)
+    assert_near(params:get("reverb_mix"), expected_mix, 1e-8, "the sound the load left keeps playing")
+    assert_equal(S.current_scene, 0, "no recall into the loaded bank")
+    assert_near(S.scenes[1].data.reverb_mix, expected_slot_mix, 1e-8)
+  end)
+end
+
 end
