@@ -2174,7 +2174,7 @@ end
 -- file as it is, not as apt's lists give it
 -- #1005: the one line that may name Ubuntu's sources file, or set apt's
 -- sources (Dir::Etc::sourcelist, Dir::Etc::sourceparts, any case), is the
--- list step's ubuntu_only, exactly as pinned (CI_WORKFLOW.LIST_UPDATE): it
+-- list step's ubuntu_only, exactly as pinned (CI_WORKFLOW.LIST_UPDATE), repeated in the install step: it
 -- only points apt at the file, read as it is, and names no variable a
 -- later line could write through
 -- #1011: and what points apt at other configuration, keyrings, lists or
@@ -2564,13 +2564,18 @@ function CI_WORKFLOW.failing_cases(workflow, find_problems, cases, job)
   end
   assert_true(#missed == 0, "mutations of the workflow not refused:\n" .. table.concat(missed, "\n"))
 end
+-- Both steps declare the source options. Include the next line to target the list step.
+function CI_WORKFLOW.list_source_edit(old, new)
+  local next_line = "\n          status=0"
+  return { old .. next_line, new .. next_line }
+end
 -- #1011: the ways of pointing apt at other configuration, other keyrings or
 -- other sources, each a mutation of a job's text that apt_weakenings
 -- refuses, in both jobs that keep their packages (each edit's text is in
 -- each job once)
 function CI_WORKFLOW.relocation_cases()
-  local install = '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n'
-  local function on_install(extra) return { install, '          sudo apt-get $APT_NETWORK_OPTIONS install -y ' .. extra .. ' "${packages[@]}"\n' } end
+  local install = '          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"\n'
+  local function on_install(extra) return { install, '          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y ' .. extra .. ' "${packages[@]}"\n' } end
   local function instead(line) return { install, "          " .. line .. "\n" } end
   local function before_install(...)
     local lines = {}
@@ -2588,15 +2593,15 @@ function CI_WORKFLOW.relocation_cases()
     { name = "-o Dir=", expect = "dir=: sudo apt-get", edits = on_install("-o Dir=/tmp/apt") },
     { name = "-o Dir::Etc=", expect = dir .. "sudo apt-get", edits = on_install("-o Dir::Etc=/tmp/etc") },
     { name = "Dir::Etc::parts, quoted, any case", expect = dir .. "sudo apt-get", edits = on_install('-o "dir::etc::parts=/tmp/conf.d"') },
-    { name = "the list's ubuntu_only moving Dir::Etc", expect = dir .. "ubuntu_only=(", edits = { parts, "-o Dir::Etc::sourceparts=- -o Dir::Etc=/tmp/etc)" } },
-    { name = "the list's ubuntu_only moving Dir", expect = "dir=: ubuntu_only=(", edits = { parts, "-o Dir::Etc::sourceparts=- -o Dir=/tmp/apt)" } },
+    { name = "the list's ubuntu_only moving Dir::Etc", expect = dir .. "ubuntu_only=(", edits = CI_WORKFLOW.list_source_edit(parts, "-o Dir::Etc::sourceparts=- -o Dir::Etc=/tmp/etc)") },
+    { name = "the list's ubuntu_only moving Dir", expect = "dir=: ubuntu_only=(", edits = CI_WORKFLOW.list_source_edit(parts, "-o Dir::Etc::sourceparts=- -o Dir=/tmp/apt)") },
     -- other keyrings, and a deb822 source trusted unsigned
     { name = "Dir::Etc::trusted", expect = "trusted: sudo apt-get", edits = on_install("-o Dir::Etc::trusted=/tmp/k.gpg") },
     { name = "Dir::Etc::TrustedParts", expect = "trusted: sudo apt-get", edits = on_install("-o Dir::Etc::TrustedParts=/tmp/keys") },
     { name = "a deb822 Trusted: yes", expect = "trusted: echo", edits = instead("echo 'Trusted: yes' >> \"$RUNNER_TEMP/x.sources\"") },
     -- a configuration file the workflow does not hold
     { name = "APT_CONFIG before an install", expect = "APT_CONFIG: APT_CONFIG=",
-      edits = instead('APT_CONFIG="$RUNNER_TEMP/x.conf" sudo -E apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"') },
+      edits = instead('APT_CONFIG="$RUNNER_TEMP/x.conf" sudo -E apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"') },
     { name = "APT_CONFIG exported", expect = "APT_CONFIG: export", edits = before_install("export APT_CONFIG=/tmp/x.conf") },
     { name = "APT_CONFIG left to the later steps", expect = "APT_CONFIG: echo", edits = before_install('echo "APT_CONFIG=/tmp/x.conf" >> "$GITHUB_ENV"') },
     { name = "apt-get -c", expect = "a configuration file for apt (-c, --config-file): sudo apt-get", edits = on_install("-c /tmp/x.conf") },
@@ -2924,15 +2929,15 @@ end)
 test("the workflow refuses every weakening of apt's checks and every install of a file path (#786)", function()
   local workflow = read_repo_file(".github/workflows/test.yml")
   assert_equal(table.concat(CI_WORKFLOW.apt_weakenings(workflow), " | "), "", "the workflow's weakenings")
-  local install = '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n'
-  local function on_install(extra) return { install, '          sudo apt-get $APT_NETWORK_OPTIONS install -y ' .. extra .. ' "${packages[@]}"\n' } end
+  local install = '          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"\n'
+  local function on_install(extra) return { install, '          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y ' .. extra .. ' "${packages[@]}"\n' } end
   local function instead(line) return { install, "          " .. line .. "\n" } end
   local cases = {
     { name = "--force-yes", expect = "--force-yes", edits = on_install("--force-yes") },
     { name = "Verify-Peer=false", expect = "Verify-Peer", edits = on_install("-o Acquire::https::Verify-Peer=false") },
     { name = "Verify-Host=false", expect = "Verify-Host", edits = on_install("-o Acquire::https::Verify-Host=false") },
     { name = "--allow-insecure-repositories", expect = "--allow-insecure-repositories",
-      edits = { '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}"', '45 apt-get $APT_NETWORK_OPTIONS --allow-insecure-repositories "${ubuntu_only[@]}"' } },
+      edits = { '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any', '45 apt-get $APT_NETWORK_OPTIONS --allow-insecure-repositories "${ubuntu_only[@]}" --error-on=any' } },
     { name = "AllowWeakRepositories", expect = "AllowWeakRepositories", edits = on_install("-o Acquire::AllowWeakRepositories=true") },
     { name = "Check-Date", expect = "Check-Date", edits = on_install("-o Acquire::Check-Date=false") },
     { name = "apt-get install of ./x.deb", expect = "./x.deb", edits = instead("sudo apt-get $APT_NETWORK_OPTIONS install -y ./x.deb") },
@@ -2953,9 +2958,9 @@ test("the workflow refuses every weakening of apt's checks and every install of 
     { name = "a write to Ubuntu's sources file", expect = "sources.list: echo",
       edits = instead('echo "Types: deb" | sudo tee -a /etc/apt/sources.list.d/ubuntu.sources') },
     { name = "the list's ubuntu_only reading a second file", expect = "sources.list: ubuntu_only=(",
-      edits = { "-o Dir::Etc::sourceparts=-)", "-o Dir::Etc::sourceparts=- -o Dir::Etc::sourcelist=/etc/apt/sources.list)" } },
+      edits = CI_WORKFLOW.list_source_edit("-o Dir::Etc::sourceparts=-)", "-o Dir::Etc::sourceparts=- -o Dir::Etc::sourcelist=/etc/apt/sources.list)") },
     { name = "the list's ubuntu_only reading parts from another folder", expect = "dir::etc::source: ubuntu_only=(",
-      edits = { "-o Dir::Etc::sourceparts=-)", "-o Dir::Etc::sourceparts=/tmp/parts)" } },
+      edits = CI_WORKFLOW.list_source_edit("-o Dir::Etc::sourceparts=-)", "-o Dir::Etc::sourceparts=/tmp/parts)") },
     { name = "the install reading another sources file", expect = "dir::etc::source: sudo apt-get",
       edits = on_install("-o Dir::Etc::SourceList=/tmp/x.list") },
     { name = "the install reading another parts folder", expect = "dir::etc::source: sudo apt-get",
@@ -2968,7 +2973,7 @@ test("the workflow refuses every weakening of apt's checks and every install of 
   -- under /etc/apt/ and the Dir::State of the SHA512 list's making pass;
   -- #1024: so do Acquire::Retries, a read from /usr/share/keyrings/ and a
   -- gpg --verify against a keyring there
-  local install = '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n'
+  local install = '          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"\n'
   local passes = "          python3 -c 'import sys'\n          git -C \"$RUNNER_TEMP\" status\n"
     .. "          cp /etc/apt/apt-mirrors.txt \"$RUNNER_TEMP/\"\n          sudo apt-get -o Dir::State::status=/tmp/s check\n"
     .. "          sudo apt-get -o Acquire::Retries=1 check\n          cp /usr/share/keyrings/ubuntu-archive-keyring.gpg \"$RUNNER_TEMP/\"\n"
@@ -3071,9 +3076,9 @@ test("a kept package reaches apt only through the hash check in the Lua jobs too
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, cases, "lua-suite")
   -- and what an apt weakening is in the shard is one in the Lua job
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.apt_weakenings, {
-    { name = "dpkg -i of the kept files", expect = "dpkg -i", edits = { '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n',
+    { name = "dpkg -i of the kept files", expect = "dpkg -i", edits = { '          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"\n',
       '          sudo dpkg -i "$debs"/*.deb\n' } },
-    { name = "an install of a kept file", expect = '"$debs/$name"', edits = { '          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"\n',
+    { name = "an install of a kept file", expect = '"$debs/$name"', edits = { '          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"\n',
       '          sudo apt-get $APT_NETWORK_OPTIONS install -y "$debs/$name"\n' } },
   }, "lua-suite")
   -- #1011: and so is a move or write of apt's configuration
@@ -3155,7 +3160,7 @@ test("a slow mirror ends a job's download early and tries archive.ubuntu.com, ap
     local install = job and at.install and job.steps[at.install]
     assert_true(install, cache.where .. " has its install step")
     local limits = {}
-    for seconds in install.text:gmatch("sudo timeout %-%-kill%-after=%d+ (%d+) apt%-get %$APT_NETWORK_OPTIONS install %-y %-%-download%-only ") do
+    for seconds in install.text:gmatch("sudo timeout %-%-kill%-after=%d+ (%d+) apt%-get %$APT_NETWORK_OPTIONS \"%${ubuntu_only%[@%]%}\" install %-y %-%-download%-only ") do
       limits[#limits + 1] = tonumber(seconds)
     end
     assert_equal(#limits, 2, cache.where .. ": the download runs under a limit, and once more after the mirrors are reordered")
@@ -3296,7 +3301,7 @@ test("a list step's update reads Ubuntu's sources alone, fails on any of their e
   CI_WORKFLOW.failing_cases(workflow, CI_WORKFLOW.cache_problems, {
     { name = "the Lua list's update reading every source", job = "lua-suite",
       expect = "lua-suite: the list step's update differs from its pinned text at line 3:",
-      edits = { " -o Dir::Etc::sourceparts=-)", ")" } },
+      edits = CI_WORKFLOW.list_source_edit(" -o Dir::Etc::sourceparts=-)", ")") },
     { name = "the shard's update trusting a warning", job = "engine-shard",
       expect = "engine-shard: the list step's update differs from its pinned text at line 5:",
       edits = { '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" --error-on=any ', '45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" ' } },
@@ -3325,6 +3330,23 @@ test("a list step's update reads Ubuntu's sources alone, fails on any of their e
       expect = "engine-shard: the list step's update differs from its pinned text at line 22:",
       edits = { "              exit 1\n            fi\n          done\n", "              true\n            fi\n          done\n" } },
   })
+end)
+
+test("the download, retry and install use the manifest's Ubuntu sources in both jobs (#1206)", function()
+  local workflow = read_repo_file(".github/workflows/test.yml")
+  for _, cache in ipairs(CI_WORKFLOW.CACHES) do
+    local job, at = CI_WORKFLOW.cache_steps(workflow, cache)
+    local configured, calls = false, 0
+    for _, line in ipairs(CI_WORKFLOW.script(job.steps[at.install])) do
+      if line:match("^ubuntu_only=") then configured = line == CI_WORKFLOW.UBUNTU_ONLY end
+      if line:find("apt-get ", 1, true) then
+        calls = calls + 1
+        assert_true(configured and line:find('apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install ', 1, true) ~= nil,
+          cache.where .. " must use the manifest's Ubuntu sources: " .. line)
+      end
+    end
+    assert_equal(calls, 3, cache.where .. " downloads, retries and installs")
+  end
 end)
 
 -- The SuperCollider 3.13 image (test/run_engine_check_313.sh) runs what CI
