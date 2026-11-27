@@ -183,9 +183,8 @@ return function(S)
     record.pass = nil
     if record.ends_at or not voice_uses_buffer(record.voice) or (record.slot == 1 and not played.hold_to_end) then return end
     local fraction = played.region and played.region[2] or params:get("v" .. record.voice .. "_loop_length")
-    if pass_seconds(record.voice, fraction) then
-      record.pass = {fraction = fraction, progress = 0, at = now}
-    end
+    local _, rate = pass_seconds(record.voice, fraction)
+    if rate ~= nil then record.pass = {fraction = fraction, progress = 0, at = now, moved = rate ~= 0} end
   end
 
   local function reached_end(record, now)
@@ -197,9 +196,21 @@ return function(S)
       record.pass, record.hold_to_end = nil, false  -- a switch out of one shot
       return pass.lifted
     end
+    if rate ~= 0 then pass.moved = true end
     pass.progress = pass.progress + math.max(0, now - pass.at) * rate
     pass.at = now
     return math.abs(pass.progress) >= 1
+  end
+
+  -- A slice struck at rest still has a pass to follow. Its key can end it
+  -- until the first movement, including a thaw just before key-up.
+  local function holds_to_end(record)
+    if not record.hold_to_end then return false end
+    local pass = record.pass
+    if not pass or pass.moved then return true end
+    local _, rate = pass_seconds(record.voice, pass.fraction)
+    if rate and rate ~= 0 then pass.moved = true end
+    return pass.moved
   end
 
   -- The count MAIN shows changed
@@ -335,7 +346,7 @@ return function(S)
       if record then
         table.insert(list, {slot = slot, owner = record.owner, key = record.key, pitch = record.pitch,
           held = record.held, parked = record.parked, region = copy_region(record.region),
-          hold_to_end = record.hold_to_end})
+          hold_to_end = holds_to_end(record)})
       end
     end
     return list
@@ -714,7 +725,7 @@ return function(S)
     local slot = M.find(voice, owner, key)
     if not slot then return S.lib.arp.release(voice, owner, key) end
     local record = slots[voice][slot]
-    if record.hold_to_end then
+    if holds_to_end(record) then
       if record.pass then record.pass.lifted = true end
       return false
     end
@@ -727,7 +738,7 @@ return function(S)
     if not whole_in(voice, 1, NUM_VOICES) then return false end
     for slot = 1, NOTE_SLOTS do
       local record = slots[voice][slot]
-      if record and record.held and record.hold_to_end then return true end
+      if record and record.held and holds_to_end(record) then return true end
     end
     return false
   end
