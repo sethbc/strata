@@ -1814,6 +1814,9 @@ end
 -- table of them (params is not loaded when this list is built, #839)
 local T = h.stubs.PARAM_TYPE_CODES
 local PARAM_FIXTURE_ALLOWED = {
+  {kind = "added", id = "scene_confirm_seconds", after = "scene_chance_random",
+    why = "#1209: time to confirm a scene overwrite",
+    record = {t = T.number, name = "overwrite confirm (s)", default = 2, min = 2, max = 20}},
   -- groundwork: MIDI note off is latch or release (the groundwork design §8)
   {kind = "options", id = "midi_note_off", options = {"latch", "release"},
     why = "groundwork: note off is latch or release (design section 8)"},

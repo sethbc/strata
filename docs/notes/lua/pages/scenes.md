@@ -2,7 +2,7 @@
 
 - The hints name only keys that act (#419, #420): an empty slot reads `empty  ALT+K3:save` (its recall does nothing but flash `S<n> empty`, `S<n> <name> empty` for a named slot, on the header, from `recall_scene` itself, so a grid key shows it too, and so does any other caller on an empty slot, MIDI included; the scene sequencer skips empty slots before it calls), ALT on a slot (empty or not) `K2:name K3:save`, any field (ALT or not) `E2:move E3:edit`.
 - The page file sets every record field but the arc fields; SCENES' rings are `lib/arc/scenes.lua`'s (`docs/notes/lua/arc-pages.md`).
-- The overwrite prompt is the page's own state, never a flash (#255): the page never starts or ends a `"hints"` flash. The confirmation is `S.scenes_page = {armed_slot, armed_until}`, and it is armed while `armed_slot` is the cursor's slot and `util.time() < armed_until` (2 s after the arming press). While armed, `hints` returns the prompt with or without ALT, so a flash scoped to another page (BUFFER's load reports) cannot hide it. The prompt names the keys that answer it: `K3 again: overwrite S<n>` with ALT held, `ALT+K3: overwrite S<n>` with ALT up (a plain K3 then recalls the slot, as always).
+- The overwrite prompt is the page's own state, never a flash (#255): the page never starts or ends a `"hints"` flash. The confirmation is `S.scenes_page = {armed_slot, armed_until}`, and it is armed while `armed_slot` is the cursor's slot and `util.time() < armed_until` (the arming time plus the current `scene_confirm_seconds`, 2–20 s, default 2). While armed, `hints` returns the prompt with or without ALT, so a flash scoped to another page (BUFFER's load reports) cannot hide it. The prompt names the keys that answer it: `K3 again: overwrite S<n>` with ALT held, `ALT+K3: overwrite S<n>` with ALT up (a plain K3 then recalls the slot, as always).
 - A second ALT+K3 saves only while armed and no flash covers the hint row (`S.lib.ui_flash.text("hints") == nil`). Under a covering flash (a hints flash showing on SCENES: one with no page, or one scoped to SCENES) the press only arms again: never save without the prompt on screen.
 - `draw` and `hints` write no state of `S` and never call `S.lib.ui_flash` or `request_redraw()` (the draw keeps each slot's last name cut in a local, as the hint row does). The prompt lapses through the record's `animates` (the frame clock draws the page every frame while it returns true): false when nothing is armed, true while armed, and once the arming has lapsed (its time passed, or the cursor left the slot by a route other than `move_cursor`) it disarms and returns true once more, for the frame that takes the prompt off the hint row.
 - Every E2, ALT+E2 or ring move of the cursor goes through `S.lib.pages_scenes.move_cursor(slot)` (E2, ALT+E2 and arc ring 1): it puts `S.cursors.scene` on `slot`, clamped to the slots and fields, keeps the bank of a slot it lands on in `S.scenes_page.bank` and, when the cursor moved, disarms (and asks for a redraw). A move by another route (setting `S.cursors.scene` directly) is never armed, since `armed` compares the slot, and the next frame disarms it, except a move away and back within one frame. The cursor must never carry a confirmation to another slot (Review Focus 5).
@@ -25,7 +25,7 @@ Every cell is a row. `the slot emptied, then ALT+K3` empties the cursor's slot a
 
 | State | Event | Next | Effect |
 |---|---|---|---|
-| idle | ALT+K3 on a populated slot | armed | `armed_slot` the slot, `armed_until` now + 2 s; the hint row asks |
+| idle | ALT+K3 on a populated slot | armed | `armed_slot` the slot, `armed_until` now + the chosen interval; the hint row asks |
 | idle | ALT+K3 under a covering hints flash | armed | as above (nothing to confirm yet) |
 | idle | the slot emptied, then ALT+K3 | idle | saved at once |
 | idle | move_cursor | idle | the cursor moves |
@@ -34,7 +34,7 @@ Every cell is a row. `the slot emptied, then ALT+K3` empties the cursor's slot a
 | idle | a frame | idle | `animates()` false |
 | armed | ALT+K3 on a populated slot | idle | `disarm()`, then `S.lib.scenes.save(slot)` |
 | armed | the slot emptied, then ALT+K3 | idle | `disarm()`, then saved |
-| armed | ALT+K3 under a covering hints flash | armed | armed again for 2 s, nothing saved (never save without the prompt on screen) |
+| armed | ALT+K3 under a covering hints flash | armed | armed again for the chosen interval, nothing saved (never save without the prompt on screen) |
 | armed | move_cursor | idle | `disarm()`, nothing saved |
 | armed | the arming time passes | lapsed | no function runs |
 | armed | the cursor set directly | lapsed | no function runs |
@@ -69,7 +69,7 @@ The overwrite confirmation (`S.scenes_page`, #255):
 | armed | the cursor's slot (1..`NUM_SCENES`) | a `util.time()` still ahead | ALT held: `K3 again: overwrite S<armed_slot>`; ALT up: `ALT+K3: overwrite S<armed_slot>` (unless a hints flash showing on SCENES covers it) | true |
 | lapsed | a slot, but not the cursor's, or with `armed_until` passed | as set | the page's hints | true once: it disarms |
 
-- idle or lapsed to armed, armed to armed: ALT+K3 on a populated slot that is not armed or whose prompt a flash covers (`scenes_alt_key`) sets `armed_slot` to the slot and `armed_until` to now plus 2 s.
+- idle or lapsed to armed, armed to armed: ALT+K3 on a populated slot that is not armed or whose prompt a flash covers (`scenes_alt_key`) sets `armed_slot` to the slot and `armed_until` to now plus the chosen interval.
 - armed to idle: `disarm()`, from the confirming ALT+K3 (then `S.lib.scenes.save(slot)`), an ALT+K3 on an empty slot (which saves at once), and `move_cursor` when the cursor moves.
 - armed to lapsed: time passing, or `S.cursors.scene` set directly; no function runs.
 - lapsed to idle: `disarm()`, from `animates()` on the next frame while SCENES shows (or `move_cursor`, or an ALT+K3).
