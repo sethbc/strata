@@ -48,11 +48,11 @@ SynthDef(\strataCheckDelayStep, { arg out, first = 0, second = 1, third = 0, at 
 }).add;
 // A stereo input: pink noise at noise (independent channels) until noiseTo,
 // a sine of freq at sine on both channels from sineFrom to sineTo (s from its start)
-SynthDef(\strataCheckDelayInput, { arg out, noise = 0, noiseTo = 1e9, sine = 0, freq = 1000, sineFrom = 1e9, sineTo = 1e9, sineAgain = 1e9;
+SynthDef(\strataCheckDelayInput, { arg out, noise = 0, noiseTo = 1e9, sine = 0, freq = 1000, sineFrom = 1e9, sineTo = 1e9, sineAgain = 1e9, phase = 0;
     var elapsed = Sweep.ar(0, 1);
     var noises = ({ PinkNoise.ar(noise) } ! 2) * (elapsed < noiseTo);
     var sounding = ((elapsed >= sineFrom) * (elapsed < sineTo)).max(elapsed >= sineAgain);
-    Out.ar(out, noises + ((SinOsc.ar(freq, 0, sine) ! 2) * sounding));
+    Out.ar(out, noises + ((SinOsc.ar(freq, phase, sine) ! 2) * sounding));
 }).add;
 // A stereo bus in eight windows of time from the synth's start ([start,
 // end] s each): per window, the sum of its squared samples (both channels),
@@ -294,9 +294,16 @@ checkClearHistory = {
         // Clearing before the input should give the same shimmer tail as an
         // uncleared node. The window contains only feedback from that input.
         (inputFrom: 0, delay: shimmering, windows: [[0.92, 1.2]]),
-        (inputFrom: 0, delay: shimmering, steps: (t_clear: [0, 1, 1, 0.01, 1e9]), ref: 5, windows: [[0.92, 1.2]])
+        (inputFrom: 0, delay: shimmering, steps: (t_clear: [0, 1, 1, 0.01, 1e9]), ref: 5, windows: [[0.92, 1.2]]),
+        // A moving tap changes the sine's natural slope. Compare its largest
+        // sample step with the very same sweep played without a clear.
+        (input: [\sine, 0.1, \sineFrom, 0.1, \freq, 20, \phase, pi/2], delay: short,
+            steps: (time: [0.04, 0.6, 0.6, 0.75, 1e9]), windows: [[0.74, 0.95]]),
+        (inputFrom: 7, delay: short, steps: (t_clear: atEnd, time: [0.04, 0.6, 0.6, 0.75, 1e9]),
+            windows: [[0.74, 0.95]])
     ], 1.8);
     var peak = { arg i, w = 0; windowField.(results[i], w, 4) };
+    var sweepStep = windowField.(results[7], 0, 6), closedStep = windowField.(results[8], 0, 6);
     check.((peak.(0) > 0.09) and: { peak.(1) < 1e-6 } and: { peak.(1, 1) > 0.09 },
         "delay: a second Clear discards the first refill and passes new input (one press %, both %, new tone %)".format(
             peak.(0), peak.(1), peak.(1, 1)));
@@ -309,6 +316,9 @@ checkClearHistory = {
     check.((peak.(5) > 0.02) and: { peak.(6) > 0.02 } and: { windowField.(results[6], 0, 5) < 1e-6 },
         "delay: a Clear at startup preserves the shimmer tail of new input (peak %, difference %)".format(
             peak.(5), windowField.(results[6], 0, 5)));
+    check.((peak.(8) > 0.09) and: { sweepStep > 0 } and: { closedStep <= (sweepStep + 1e-5) },
+        "delay: a moving tap fades when it reaches cleared history (largest step %, uncleared sweep %)".format(
+            closedStep, sweepStep));
 };
 
 // A clear ends without a step (#308's kind of click): a steady sine at 0.5,

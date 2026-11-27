@@ -16,7 +16,7 @@
 
 ## In the delay (`StrataDelay.sc`)
 
-`\strataDelay` gains `shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2`. The shifter runs on the line's eligible output. After Clear, it discards each head's contribution until its read fits in the new audio, after the clear fade, one control block of clock margin and two frames for cubic interpolation. The feedback is `fed = tap + ((shifted - tap) × shimmer.clip(0, 1).lag(fxMixLag))`, then `fed × feedback.clip(0, 0.95).max(hold) × the clear's gain` into `LocalOut`; the return plays the unshifted tap. Each repeat steps by the ratio; at shimmer 1 a frozen loop is all shifted. `startDelay` passes the delay's two rings and the kept `shimmer` and `shimmerRatio`.
+`\strataDelay` gains `shiftL=0, shiftR=0, shimmer=0, shimmerRatio=2`. The shifter runs on the line's eligible output. After Clear, each head can contribute only from new audio. Its history allowance reserves one control block for the clock and two frames for cubic interpolation. The return fade is downstream of the shifter's input. The feedback is `fed = tap + ((shifted - tap) × shimmer.clip(0, 1).lag(fxMixLag))`, then `fed × feedback.clip(0, 0.95).max(hold) × the clear's gain` into `LocalOut`; the return plays the unshifted tap. Each repeat steps by the ratio; at shimmer 1 a frozen loop is all shifted. `startDelay` passes the delay's two rings and the kept `shimmer` and `shimmerRatio`.
 
 ## Around each reverb (`StrataEffects.sc`)
 
@@ -34,7 +34,7 @@ Both reverb defs gain the same four args. `shimmerLoop { arg wet, sent, bufs, am
 
 ## Memory and CPU
 
-The rings are ordinary RAM (256 KB, `fixedBufferBytes`, `docs/notes/engine/performance.md`); the graphs are the pool's. Measured with the memory area's twenty-node probes (`docs/notes/engine/memory.md`): `\strataDelay` 24.4 KB (16.0 before shimmer; limit 30), `\strataReverb` 125.6 KB (103.6 before; limit 130, raised from 125 in 2a's fix round 2: two probe steps of room was too thin for a CI gate), `\strataReverbFDN` 229.2 KB at 3.8 (208.1 before shimmer), 103.6 KB since 3.9's reverb freeze moved its lines into buffers (limit 110, `docs/notes/engine/memory.md`). CPU, measured in NRT on x86 (sixteen instances for 300 s, user time less the source's): one stereo shifter alone is about 0.84 × FreeVerb2's; two run always, at amount 0 too (a CM3 figure is a device check, #6).
+The rings are ordinary RAM (256 KB, `fixedBufferBytes`, `docs/notes/engine/performance.md`); the graphs are the pool's. Measured with the memory area's twenty-node probes (`docs/notes/engine/memory.md`): `\strataDelay` 29.5 KB with guarded reads (24.4 KB with 3.8's shimmer, 16.0 KB before shimmer, limit 30), `\strataReverb` 125.6 KB (103.6 before; limit 130, raised from 125 in 2a's fix round 2: two probe steps of room was too thin for a CI gate), `\strataReverbFDN` 229.2 KB at 3.8 (208.1 before shimmer), 103.6 KB since 3.9's reverb freeze moved its lines into buffers (limit 110, `docs/notes/engine/memory.md`). CPU, measured in NRT on x86 (sixteen instances for 300 s, user time less the source's): one stereo shifter alone is about 0.84 × FreeVerb2's; two run always, at amount 0 too (a CM3 figure is a device check, #6).
 
 ## The engine check (`test/engine_check/shimmer.scd`)
 
