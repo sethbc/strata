@@ -63,6 +63,8 @@ if [ ! -d "$norns_dir/sc/core" ]; then
   exit 2
 fi
 
+norns_dir=$(cd "$norns_dir" && pwd)
+
 case ${STRATA_ENGINE_CHECK_ONE_SCLANG:-} in
   ''|1) ;;
   *) echo "STRATA_ENGINE_CHECK_ONE_SCLANG must be 1 or empty, got \"$STRATA_ENGINE_CHECK_ONE_SCLANG\"" >&2; exit 2 ;;
@@ -359,8 +361,8 @@ grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch
 # and posts a pass marker (#1082). So does a scsynth still
 # running after its stop (exit 3: a full run starts no shard after it).
 # lifecycle.scd checks real warnings against the quoted expression below.
-if grep -q "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] && [ -z "$server_left" ] \
-  && ! grep -qE "^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error" "$output"; then
+if grep -Fxq "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] && [ -z "$server_left" ] \
+  && ! grep -qE "^FAIL|^ENGINE CHECK FAILED:|^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error" "$output"; then
   exit 0
 fi
 echo "--- full sclang output ---"
