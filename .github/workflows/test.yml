@@ -18,6 +18,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  # Both engine classes and the Lua poll registry use this full norns commit.
+  NORNS_REF: 227aa0442181e3eab3fc189ee6b5342648ce7300
   # Every apt-get below takes these (#785): apt tries a failed file once more
   # (Acquire::Retries, apt.conf(5)) and drops a connection that sends nothing
   # for 15 s (Acquire::http::Timeout, "the connection as well as the data
@@ -249,6 +251,24 @@ jobs:
         if: matrix.lua == 'lua5.3' && startsWith(matrix.shard, '1/')
         run: lua5.3 test/sync_check.lua
 
+      - name: Check out norns' Lua libraries
+        if: matrix.lua == 'lua5.3' && startsWith(matrix.shard, '1/')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: monome/norns
+          ref: ${{ env.NORNS_REF }}
+          path: norns
+          sparse-checkout: lua
+        timeout-minutes: 1
+
+      - name: Save result after a norns poll registry reload
+        if: matrix.lua == 'lua5.3' && startsWith(matrix.shard, '1/')
+        env:
+          NORNS_DIR: ${{ github.workspace }}/norns
+        run: lua5.3 test/run.lua --dir test/fixtures/save-result-registry
+        timeout-minutes: 1
+
   # The required status check: passes only when both suites passed (a
   # failed, canceled or skipped one fails it), so branch protection keeps
   # requiring one job named lua
@@ -313,9 +333,6 @@ jobs:
           - record,waveform,onsets,delay,shimmer
     env:
       STRATA_ENGINE_CHECK_AREAS: ${{ matrix.areas }}
-      # the norns commit the engine is compiled against (sc/core classes), in full:
-      # a short name could match a branch or tag of that name first (#490)
-      NORNS_REF: 227aa0442181e3eab3fc189ee6b5342648ce7300
       NORNS_DIR: ${{ github.workspace }}/norns
       QT_QPA_PLATFORM: offscreen
       DEBIAN_FRONTEND: noninteractive

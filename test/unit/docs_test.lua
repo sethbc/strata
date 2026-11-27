@@ -1477,7 +1477,7 @@ end
 -- 3.8's package x5: the Lua suite runs a job per interpreter and shard of
 -- the unit files (test/run.lua --shard), each in parallel on its runner's
 -- cores, gathered by the lua job; the sync check runs once a run
-test("CI's Lua suite jobs run each shard of the unit files under each interpreter, the sync check once", function()
+test("CI's Lua suite jobs run each shard of the unit files under each interpreter, the sync and registry checks once", function()
   for _, case in ipairs({ { '"1/1"', "" }, { '"1/2", "2/2"', "" }, { '"2/3", "1/3", "3/3"', "" },
       { '"1/2"', "missing: 2/2" }, { '"1/2", "1/2", "2/2"', "repeated: \"1/2\"" }, { '"1/2", "2/3"', "a shard of another count: \"2/3\"" },
       { '1/1', "not a quoted K/N: 1/1" }, { '"0/1", "1/1"', "out of range: 0/1" }, { "", "not a quoted K/N: " } }) do
@@ -1490,12 +1490,30 @@ test("CI's Lua suite jobs run each shard of the unit files under each interprete
   assert_true(list ~= nil, "lua-suite's matrix names its shards on one line (shard: [...])")
   assert_equal(table.concat(CI_WORKFLOW.shard_problems(list or ""), " | "), "", "the shards are 1/N .. N/N, each once")
   assert_true(suite.text:find("\n      fail%-fast: false\n") ~= nil, "a failing job never cancels the others")
-  local runs, sync_steps, cores = 0, {}, false
+  local runs, registry_runs, sync_steps, cores = 0, 0, {}, false
+  local registry_shard = "if: matrix.lua == 'lua5.3' && startsWith(matrix.shard, '1/')\n"
+  local registry_checkout
   for _, job in ipairs(jobs) do
     for _, step in ipairs(job.steps) do
       if step.text:find("test/sync_check.lua", 1, true) then sync_steps[#sync_steps + 1] = { job = job.name, step = step } end
       if job.name == "lua-suite" and step.text:find("\n%s+run: nproc\n") then cores = true end
-      if step.text:find("test/run.lua", 1, true) then
+      if step.text:find("repository: monome/norns\n", 1, true) then
+        assert_equal(job.name, "lua-suite", "the registry checkout is on the Lua runner")
+        assert_true(step.text:find(registry_shard, 1, true), "only the registry shard checks out norns")
+        assert_true(step.text:find("ref: ${{ env.NORNS_REF }}\n", 1, true), "the registry uses the engine's norns pin")
+        registry_checkout = step.text:match("\n%s+path: ([^\n]+)\n")
+      end
+      if step.text:find("test/fixtures/save-result-registry", 1, true) then
+        registry_runs = registry_runs + 1
+        assert_equal(job.name, "lua-suite", "the registry uses the installed Lua 5.3")
+        assert_true(step.text:find(registry_shard, 1, true),
+          "the registry runs in the Lua 5.3 job of shard 1 only")
+        assert_true(step.text:find("run: lua5.3 test/run.lua --dir test/fixtures/save-result-registry\n", 1, true),
+          "the registry fixture's exit status reaches CI")
+        assert_true(registry_checkout and step.text:find("NORNS_DIR: ${{ github.workspace }}/" .. registry_checkout .. "\n", 1, true),
+          "the registry reads the pinned checkout made before it runs")
+        assert_true(not step.may_fail, "a registry failure fails the job")
+      elseif step.text:find("test/run.lua", 1, true) then
         runs = runs + 1
         assert_equal(job.name, "lua-suite", "only lua-suite runs the Lua suite")
         assert_true(step.text:find("run: ${{ matrix.lua }} test/run.lua --shard ${{ matrix.shard }}\n", 1, true) ~= nil,
@@ -1504,6 +1522,7 @@ test("CI's Lua suite jobs run each shard of the unit files under each interprete
     end
   end
   assert_equal(runs, 1, "one step runs the suite")
+  assert_equal(registry_runs, 1, "one step runs the real norns save poll registry fixture")
   assert_true(cores, "lua-suite prints the runner's cores (nproc) before the suite")
   -- the sync check: one step, run by the Lua 5.3 job of the first shard only
   assert_equal(#sync_steps, 1, "one step runs the sync check")

@@ -3976,20 +3976,21 @@ test("the workflow reads only, keeps no credentials and pins by full commit (#49
   local workflow = read_repo_text(".github/workflows/test.yml")
   assert_true(workflow:find("\npermissions:\n  contents: read\n") ~= nil, "a top-level permissions: contents: read")
   local checkouts = 0
-  for step in workflow:gmatch("%-%s*uses:%s*actions/checkout@[^\n]*\n[^\n]*\n[^\n]*") do
+  for step in workflow:gmatch("uses:%s*actions/checkout@[^\n]*\n[^\n]*\n[^\n]*") do
     checkouts = checkouts + 1
     assert_true(step:find("persist%-credentials: false") ~= nil, "a checkout keeps no credentials: " .. step)
   end
-  assert_equal(checkouts, 2, "both checkouts")
+  assert_equal(checkouts, 3, "the two Strata checkouts and the norns Lua checkout")
   local pins = 0
   for pin, version in workflow:gmatch("actions/checkout@(%S+)%s*#%s*v(%d+)") do
     pins = pins + 1
     assert_true(pin:match("^%x+$") ~= nil and #pin == 40, "actions/checkout is pinned by its 40-character commit: " .. pin)
     assert_true(tonumber(version) >= 7, "actions/checkout is on the current major (v7 or later), not v" .. version)
   end
-  assert_equal(pins, 2, "both checkouts are pinned by commit with a version comment")
-  local ref = workflow:match("NORNS_REF:%s*(%S+)")
-  assert_true(ref ~= nil and #ref == 40 and ref:match("^%x+$") ~= nil, "NORNS_REF is a full 40-character commit: " .. tostring(ref))
+  assert_equal(pins, checkouts, "every checkout is pinned by commit with a version comment")
+  local shared = workflow:match("\nenv:\n(.-)\njobs:\n") or ""
+  local ref = shared:match("\n  NORNS_REF:%s*(%S+)")
+  assert_true(ref ~= nil and #ref == 40 and ref:match("^%x+$") ~= nil, "the shared NORNS_REF is a full 40-character commit: " .. tostring(ref))
 end)
 
 -- The workflow's table of area times: the sum of every time listed, and
