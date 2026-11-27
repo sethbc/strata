@@ -3806,6 +3806,32 @@ end)
 -- failure, the worst class, whatever else it shows and even at status 0
 local COLLECTOR_LINE = "gr" .. "ey count error"
 
+test("the Docker runner checks the log for failures even at status zero (#1193)", function()
+  local root = data_root .. "sc313-zero-status"
+  local fail = "FAIL waveform: a 300 s load"
+  local startup = "ENGINE CHECK FAILED: JACK did not start"
+  local cap = "strata cgroup oom_kill: 1"
+  local signal = "sclang ended on signal 11 after 9 s"
+  for _, case in ipairs({
+    { line = "ok a regression probe expects " .. signal, verdict = "passed", status = 0 },
+    { line = "ok a regression probe expects " .. startup, verdict = "passed", status = 0 },
+    { line = fail, verdict = "failed (" .. fail .. ")", status = 1 },
+    { line = "ERROR: check failed", verdict = "failed (ERROR: check failed)", status = 1 },
+    { line = "Strata invariant broken: slot state", verdict = "failed (Strata invariant broken: slot state)", status = 1 },
+    { line = startup, verdict = "failed (" .. startup .. ")", status = 1 },
+    { line = cap, verdict = "capped (the container's memory cap of 8g killed it; no sclang signal)", status = 1 },
+    { line = "ENGINE CHECK FAILED: " .. signal .. "; sclang stopped", verdict = "crashed (" .. signal .. ")", status = 1 },
+    { line = COLLECTOR_LINE .. "\n" .. cap, verdict = "collector failure (#211; count errors; the memory cap killed a process (#544))", status = 1 },
+    { line = fail .. "\n" .. COLLECTOR_LINE, verdict = "collector failure (#211; count errors; " .. fail .. ")", status = 1 },
+  }) do
+    write_shard_fixtures(root, { { 1, 0, case.line .. "\nENGINE CHECK PASSED\n" } })
+    local output = run_313_script(root, "-c -o " .. h.shell_quote(root))
+    assert_true(output:find("run 1: " .. case.verdict, 1, true) ~= nil, case.line .. " verdict: " .. output)
+    assert_true(output:find("exit=" .. case.status .. "\n", 1, true) ~= nil, case.line .. " exit status: " .. output)
+  end
+  h.remove_tree(root)
+end)
+
 test("the engine check runner surfaces a collector count error when sclang survives (#1082)", function()
   for _, case in ipairs({
     { name = "clean", line = "compiled", status = 0 },
