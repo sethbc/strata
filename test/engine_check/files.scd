@@ -1129,6 +1129,7 @@ checkLongSave.value;
     var root = e.saveReceiptRoot, alias = scratchRoot +/+ "shared-receipt-alias";
     var path = root +/+ ("strata-save-" ++ token), header = "strata-save-v1 " ++ token;
     var base = header.size + 5, reader, held, n, dst = scratchRoot +/+ "receipt-audio.wav";
+    var emptyDst = scratchRoot +/+ "receipt-empty.wav", fixture, bytes;
     var nextRequest = 0;
     var save = { arg name, len;
         nextRequest = nextRequest + 1;
@@ -1159,8 +1160,19 @@ checkLongSave.value;
     n = saveResults.value.size;
     save.(dst, 1);
     ask.(0, 1); ask.(1, 1); ask.(0, 99);
-    check.(waitFor.({ saveReportsAfter.(n) == [[0, 1, false]] }) and: { cell.(1) == [2, 2] },
-        "files: pending/unknown queries publish nothing; actual success reaches the unlinked inode (%, %)".format(saveReportsAfter.(n), cell.(1)));
+    h.commandTo(e, \saveBufferRequest, 7, emptyDst, 0, 1, 1, token);
+    check.(waitFor.({ saveReportsAfter.(n).size == 2 })
+        and: { saveReportsAfter.(n).includesEqual([0, 1, false]) }
+        and: { saveReportsAfter.(n).includesEqual([7, 1, true]) }
+        and: { File.exists(dst) and: { File.exists(emptyDst).not } },
+        "files: pending/unknown queries stay silent; request 1 writes slot 0 and fails on empty slot 7");
+    // The Lua buffers test settles both saves from this same byte image.
+    // Each hex line is one slot's four cells, in file order after the header.
+    fixture = File.readAllString(h.testDir +/+ "fixtures/save-receipt-slots.hex").reject(_.isSpace);
+    reader.seek(65536); reader.getInt8; // discard the reader's input buffer
+    reader.seek(base);
+    bytes = Array.fill(256, { reader.getInt8.asHexString(2) }).join;
+    check.(bytes == fixture, "files: both request-1 receipts occupy their own cells in the Lua fixture");
     n = saveResults.value.size; ask.(0, 1);
     check.(waitFor.({ saveReportsAfter.(n) == [[0, 1, false]] }), "files: a lost success can be requested by full number");
     n = saveResults.value.size;

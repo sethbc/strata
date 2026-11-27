@@ -760,6 +760,52 @@ test("four accepted whole saves each copy their own settings across a missing ol
   assert_equal(copied[paths[1]], keys[1]); assert_equal(#S.buffers[1].pending_saves, 0)
 end)
 
+test("Lua settles SC request 1 independently on its first and last slots despite missed and repeated wakes (#1091)", function()
+  local c = load_strata(); finish_startup(c)
+  local S = local_value("S")
+  local samples = S.lib.samples
+  local function save(slot, key)
+    load_buffer(slot, "/tmp/source-" .. slot .. ".wav"); state_report(c, slot, 1, 4)
+    samples.set(slot, "key", key)
+    assert_true(save_buffer(slot))
+    local sent = c.calls_named("saveBufferRequest")
+    local args = sent[#sent].args
+    assert_equal(args[1], slot - 1)
+    assert_equal(args[5], 1)
+    return args[2]
+  end
+  local success = save(1, 48)
+  local failure = save(8, 62)
+  samples.set(1, "key", 72) -- settlement must use the send-time snapshot
+  local copies, store = {}, samples.store_file
+  samples.store_file = function(path, record)
+    copies[#copies + 1] = {path, record.key}
+    assert_true(store(path, record), "the sample library accepted the saved file’s settings")
+    return true
+  end
+
+  -- files.scd compares this entire image with what SC actually wrote.
+  local hex = h.file_text(h.repo_root .. "/test/fixtures/save-receipt-slots.hex"):gsub("%s", "")
+  local bytes = hex:gsub("%x%x", function(pair) return string.char(tonumber(pair, 16)) end)
+  c.write_save_receipt_cells(bytes)
+  local failed_wake = save_result_value(8, 1, true)
+  c.polls.fire("bufferSaveResult", failed_wake)
+  c.polls.fire("bufferSaveResult", failed_wake)
+  assert_equal(#S.buffers[8].pending_saves, 0)
+  assert_equal(S.lib.ui_flash.text("header"), "buf 8 save failed")
+  assert_true(printed_since(c, 0):find("cannot save " .. failure, 1, true))
+  assert_equal(#copies, 0)
+  assert_equal(#S.buffers[1].pending_saves, 1)
+
+  c.clock.run_for(1.01) -- slot 1's success wake was lost
+  assert_equal(#S.buffers[1].pending_saves, 0)
+  assert_equal(#copies, 1)
+  assert_equal(copies[1][1], success)
+  assert_equal(copies[1][2], 48)
+  c.polls.fire("bufferSaveResult", save_result_value(1, 1))
+  assert_equal(#copies, 1, "a late success wake cannot copy the settings again")
+end)
+
 test("a hung save queries only its slot's oldest once per second; quick saves send no query (#1091)", function()
   local c = load_strata(); finish_startup(c)
   for slot = 1, 3 do

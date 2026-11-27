@@ -10,6 +10,8 @@ The sync check allows the retained external four-argument `saveBuffer` command. 
 
 For save results, `context.save_result(value, lose_poll, bytes_written)` writes through the simulated engine's own handle to the current session receipt. Tests may drop the notification or shorten the write. `context.polls.fire("bufferSaveResult", value)` delivers a raw poll without publishing a receipt, including one held across reload. `NORNS_DIR=<norns> lua test/run.lua --dir test/fixtures/save-result-registry` drives the pinned norns registry through old and new production save handlers.
 
+The files engine check compares all 256 receipt bytes after request 1 succeeds on SC slot 0 and fails on slot 7 with `test/fixtures/save-receipt-slots.hex` (four cells per line, one line per slot). The Lua buffer test supplies the same bytes through `context.write_save_receipt_cells(bytes)` and drives the production poll handler and timer.
+
 It rejects any `engine.*` call whose name, argument count or types do not match the SC `addCommand` signatures. An `f` or `i` argument must also be finite: a NaN fails every `<` and `>` of the range checks below and an infinity passes an open one, so both are refused as types (`must be a finite number`, `must be an integer`) (#477).
 
 It range-checks the values, with limits parsed from the engine source by `stubs.parse_engine_spec` (`numVoices`, `numBuffers`, `inputSource`, `voiceTypeDefs` (3.8: the types, at least `numVoices`; the stub keeps each voice's type from the `setVoiceType` calls it sees, voice v on type v at each install, and checks `setVoiceParam`'s names against that type's def), the SynthDef `arg` lists):
