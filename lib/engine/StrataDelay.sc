@@ -43,14 +43,14 @@
     // larger than the steady signal's (the delay area's check)
     delayClearOpenSeconds { ^0.02 }
 
-    // A clear's gain from muted (1, or 0 inside the window): back to 1 over
+    // A clear's gain from open (1, or 0 inside the window): back to 1 over
     // delayClearOpenSeconds and down to 0 at close (per second; a fall of
     // ControlRate.ir is one control block), each as a raised cosine of a
     // linear Slew, so it starts and ends without a corner. Exactly 1 while
-    // muted is 1 (Slew starts at its input, and cos(pi) is -1 in single
+    // open is 1 (Slew starts at its input, and cos(pi) is -1 in single
     // precision): an uncleared delay plays its graph before, bit for bit
-    delayClearGain { arg muted, close;
-        var ramp = Slew.kr(muted, 1 / this.delayClearOpenSeconds, close);
+    delayClearGain { arg open, close;
+        var ramp = Slew.kr(open, 1 / this.delayClearOpenSeconds, close);
         ^(1 - cos(ramp * pi)) * 0.5
     }
 
@@ -109,11 +109,11 @@
         // at every pass); the cross-feed moves with hold to pingPong snapped
         // to 0 or 1 (delayPingPongSnap), so the loop keeps its width.
         // Unfrozen (hold 0) every product is the graph before, bit for bit.
-        // 3.8's clear (t_clear, a trigger; design §7.2): a Trig1 window of
-        // the delay time and delayClearMargin mutes the feedback (at once)
-        // and the return (faded over delayClearFade), so what the line held
-        // is gone when it ends and the line holds only what came in since;
-        // both come back over delayClearOpenSeconds (delayClearGain).
+        // Clear fades the return, closes the feedback and keeps accepting input.
+        // Time the refill from the latest press, even inside a previous refill.
+        // A moving tap must also have that much new history at both ends of its
+        // block (BufDelayC interpolates a control-rate time over the block).
+        // The margin lets the old LocalIn block and cubic read neighbors pass.
         // 3.8's shimmer (shimmer 0-1, lagged fxMixLag; shimmerRatio 0.5-4;
         // design §7.4): the feedback is a blend of the delayed signal and its
         // shifted copy (shimmerShift, on the delay's two shimmer rings shiftL
@@ -134,15 +134,29 @@
             var lagged = pingPong.clip(0, 1).lag(0.05);
             var snapped = (pingPong.clip(0, 1) >= this.delayPingPongSnap).lag(0.05);
             var cross = lagged + ((snapped - lagged) * hold), keep = 1 - cross;
-            var muted = 1 - Trig1.kr(t_clear, delayTime + this.delayClearMargin);
+            var age = Sweep.kr(t_clear, 1), uncleared = 1 - SetResetFF.kr(t_clear);
+            var oldestTap = delayTime.max(Delay1.kr(delayTime));
+            var refill = Latch.kr(delayTime, t_clear).max(oldestTap) + this.delayClearMargin;
+            var open = uncleared.max(age >= refill);
+            var closing = age < (this.delayClearFade + ControlDur.ir);
+            // Both shimmer heads may use the complete ring until the first
+            // Clear. After it, exclude the initial return fade, a clock block
+            // and the oldest two frames of their cubic reads.
+            var freshFrames = Select.kr(uncleared, [
+                ((age - this.delayClearMargin - ControlDur.ir) * SampleRate.ir) - 2, this.shimmerRingFrames
+            ]);
             var delayed = BufDelayC.ar([bufL, bufR], [
                 input[0] + (input[1] * cross) + (returned[0] * keep) + (returned[1] * cross),
                 (input[1] * keep) + (returned[1] * keep) + (returned[0] * cross)
             ], delayTime);
-            var shifted = this.shimmerShift(delayed, [shiftL, shiftR], shimmerRatio.clip(0.5, 4));
-            var fed = delayed + ((shifted - delayed) * shimmer.clip(0, 1).lag(this.fxMixLag));
-            LocalOut.ar(fed * feedback.clip(0, 0.95).max(hold) * this.delayClearGain(muted, ControlRate.ir));
-            Out.ar(out, delayed * this.delayClearGain(muted, 1 / this.delayClearFade) * mix.clip(0, 1).lag(this.fxMixLag));
+            // Select switches the whole block. Multiplication by a control-rate
+            // guard interpolates it and leaks old samples on a fast sweep.
+            var tap = Select.ar(open.max(closing), [DC.ar(0), delayed]);
+            var shifted = this.shimmerShift(tap, [shiftL, shiftR], shimmerRatio.clip(0.5, 4), freshFrames);
+            var fed = tap + ((shifted - tap) * shimmer.clip(0, 1).lag(this.fxMixLag));
+            LocalOut.ar(fed * feedback.clip(0, 0.95).max(hold) * this.delayClearGain(open, ControlRate.ir));
+            Out.ar(out, tap * this.delayClearGain(open, 1 / this.delayClearFade)
+                * mix.clip(0, 1).lag(this.fxMixLag));
         }).add;
     }
 

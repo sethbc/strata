@@ -29,7 +29,7 @@ var startCheckDelay, allocLine, runCases, guarded, withIgnoredLines;
 // BufDelayC at the rounded time, plus LocalIn's one feedback block
 var heldPeriod = { arg time; ((time * server.sampleRate).round + server.options.blockSize) / server.sampleRate };
 var checkHeldLoop, checkLoopBehavior, checkClearEdge, checkFreezeCommand, checkLiftAfterFreedFreeze, checkIgnoredValues;
-var checkClearCommand, checkFreshEngine;
+var checkClearCommand, checkFreshEngine, checkClearHistory;
 var times = [0.375, 0.30928];
 // the audio channels the server's allocator holds (#807: the area gives
 // back every bus it allocates), how many it held as the area began, and
@@ -41,17 +41,18 @@ var audioChannelsAtStart = audioChannelsHeld.value, contextChannels = 0;
 var clearStepBound = 1.0;
 
 // A control bus's value over time from the synth's start: first, second
-// from at (s), third from endAt
-SynthDef(\strataCheckDelayStep, { arg out, first = 0, second = 1, third = 0, at = 1e9, endAt = 1e9;
+// from at (s), third from endAt, optionally back to second from againAt
+SynthDef(\strataCheckDelayStep, { arg out, first = 0, second = 1, third = 0, at = 1e9, endAt = 1e9, againAt = 1e9;
     var elapsed = Sweep.kr(0, 1);
-    Out.kr(out, Select.kr((elapsed >= at) + (elapsed >= endAt), [first, second, third]));
+    Out.kr(out, Select.kr((elapsed >= at) + (elapsed >= endAt) + (elapsed >= againAt), [first, second, third, second]));
 }).add;
 // A stereo input: pink noise at noise (independent channels) until noiseTo,
-// a sine of freq at sine on both channels from sineFrom (s from its start)
-SynthDef(\strataCheckDelayInput, { arg out, noise = 0, noiseTo = 1e9, sine = 0, freq = 1000, sineFrom = 1e9;
+// a sine of freq at sine on both channels from sineFrom to sineTo (s from its start)
+SynthDef(\strataCheckDelayInput, { arg out, noise = 0, noiseTo = 1e9, sine = 0, freq = 1000, sineFrom = 1e9, sineTo = 1e9, sineAgain = 1e9;
     var elapsed = Sweep.ar(0, 1);
     var noises = ({ PinkNoise.ar(noise) } ! 2) * (elapsed < noiseTo);
-    Out.ar(out, noises + ((SinOsc.ar(freq, 0, sine) ! 2) * (elapsed >= sineFrom)));
+    var sounding = ((elapsed >= sineFrom) * (elapsed < sineTo)).max(elapsed >= sineAgain);
+    Out.ar(out, noises + ((SinOsc.ar(freq, 0, sine) ! 2) * sounding));
 }).add;
 // A stereo bus in eight windows of time from the synth's start ([start,
 // end] s each): per window, the sum of its squared samples (both channels),
@@ -97,7 +98,7 @@ windowField = { arg values, window, field; values !? { values[(window * fields) 
 // server time: each case an Event of delay (the node's controls), input
 // (\strataCheckDelayInput's controls) or inputFrom (an earlier case's
 // index, whose input it shares), steps (control -> [first, second, third,
-// at, endAt]: a \strataCheckDelayStep mapped to the node's control), ref
+// at, endAt, optional againAt]: a \strataCheckDelayStep mapped to the node's control), ref
 // (an earlier case's index, whose return the difference is taken from) and
 // windows (up to eight [start, end] pairs). The values of each case, as
 // windowField reads them
@@ -120,7 +121,7 @@ runCases = { arg cases, seconds;
                 each[\stepBuses].add(bus);
                 each[control] = bus;
                 Synth(\strataCheckDelayStep, [\out, bus, \first, step[0], \second, step[1], \third, step[2],
-                    \at, step[3], \endAt, step[4]], group, \addToTail);
+                    \at, step[3], \endAt, step[4], \againAt, step[5] ? 1e9], group, \addToTail);
             });
             node = startCheckDelay.(each[\inBus], each[\outBus], each[\line], case[\delay] ? [], group);
             (case[\steps] ? ()).keysDo({ arg control; node.map(control, each[control]) });
@@ -266,6 +267,48 @@ checkLoopBehavior = {
     check.((steady > 0.1) and: { windowField.(values, 1, 4) < (steady * 1e-6) },
         "delay: frozen and cleared, the loop is empty: under -120 dB after the clear's window (% dB of the frozen peak)".format(
             ampDb.(windowField.(values, 1, 4) / steady.max(1e-15))));
+};
+
+// An input pulse and every control change use the server clock. Compare
+// paired nodes driven by the same audio, and require an audible reference.
+checkClearHistory = {
+    var pulse = [\sine, 0.1, \freq, 330, \sineFrom, 0.75, \sineTo, 0.85, \sineAgain, 1.25];
+    var short = [\time, 0.04, \feedback, 0], long = [\time, 0.4, \feedback, 0];
+    var shimmering = [\time, 0.04, \feedback, 0.9, \shimmer, 1];
+    var before = [\sine, 0.1, \sineFrom, 0.15, \sineTo, 0.45];
+    var repeatWindows = [[1.1, 1.35], [1.68, 1.75]], ringWindows = [[0.3, 0.43], [0.53, 1.5]];
+    var atEnd = [0, 1, 1, 0.48, 1e9];
+    var results = runCases.([
+        // Both clears precede the echo. Only the first precedes the input.
+        (input: pulse, delay: long, steps: (t_clear: [0, 1, 0, 0.65, 0.7]), windows: repeatWindows),
+        (inputFrom: 0, delay: long, steps: (t_clear: [0, 1, 0, 0.65, 0.7, 0.9]), windows: repeatWindows),
+        // The pitch shifter's heads can read further back than this delay time.
+        (input: before, delay: shimmering,
+            steps: (t_clear: atEnd), windows: ringWindows),
+        // Move the tap into the old tone after the original clear window.
+        (inputFrom: 2, delay: short, steps: (t_clear: atEnd, time: [0.04, 0.6, 0.6, 0.75, 1e9]),
+            windows: [[0.25, 0.43], [0.7, 1.25]]),
+        // Sweep across discarded audio in a single control block, then back.
+        (input: [\sine, 0.1, \sineFrom, 0.15, \sineTo, 0.479], delay: short,
+            steps: (t_clear: atEnd, time: [0.04, 5.4, 0.01, 0.75, 0.9]), windows: [[0.25, 0.43], [0.55, 1.4]]),
+        // Clearing before the input should give the same shimmer tail as an
+        // uncleared node. The window contains only feedback from that input.
+        (inputFrom: 0, delay: shimmering, windows: [[0.92, 1.2]]),
+        (inputFrom: 0, delay: shimmering, steps: (t_clear: [0, 1, 1, 0.01, 1e9]), ref: 5, windows: [[0.92, 1.2]])
+    ], 1.8);
+    var peak = { arg i, w = 0; windowField.(results[i], w, 4) };
+    check.((peak.(0) > 0.09) and: { peak.(1) < 1e-6 } and: { peak.(1, 1) > 0.09 },
+        "delay: a second Clear discards the first refill and passes new input (one press %, both %, new tone %)".format(
+            peak.(0), peak.(1), peak.(1, 1)));
+    check.((peak.(2) > 0.05) and: { peak.(2, 1) < 1e-6 },
+        "delay: a short cleared line cannot retrieve old shimmer (before %, after %)".format(peak.(2), peak.(2, 1)));
+    check.((peak.(3) > 0.09) and: { peak.(3, 1) < 1e-6 },
+        "delay: lengthening the tap after Clear cannot retrieve the discarded tone (before %, after %)".format(peak.(3), peak.(3, 1)));
+    check.((peak.(4) > 0.09) and: { peak.(4, 1) < 1e-6 },
+        "delay: a full-range time sweep cannot cross back into discarded audio for part of a block (peak %)".format(peak.(4, 1)));
+    check.((peak.(5) > 0.02) and: { peak.(6) > 0.02 } and: { windowField.(results[6], 0, 5) < 1e-6 },
+        "delay: a Clear at startup preserves the shimmer tail of new input (peak %, difference %)".format(
+            peak.(5), windowField.(results[6], 0, 5)));
 };
 
 // A clear ends without a step (#308's kind of click): a steady sine at 0.5,
@@ -418,6 +461,7 @@ checkFreshEngine = {
 guarded.("the held loop", checkHeldLoop);
 guarded.("the loop's behavior", checkLoopBehavior);
 guarded.("the clear's edge", checkClearEdge);
+guarded.("cleared line and pitch-shifter history", checkClearHistory);
 guarded.("setDelayFreeze", checkFreezeCommand);
 guarded.("a lift after a freed freeze", checkLiftAfterFreedFreeze);
 guarded.("setDelayFreeze's ignored values", checkIgnoredValues);

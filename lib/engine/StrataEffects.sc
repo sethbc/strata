@@ -102,12 +102,17 @@
     // 0.5 x cos(pi x the first head's saw) and 1 less it, sum to exactly 1
     // and are 0 where a head jumps: a convex mix, never above the ring's
     // peak. BufRd's loop wraps the read frames
-    shimmerShift { arg sig, bufs, ratio;
+    shimmerShift { arg sig, bufs, ratio, freshFrames;
         var frames = this.shimmerRingFrames, window = this.shimmerWindowSeconds;
         var phase = Phasor.ar(0, 1, 0, frames), saws = LFSaw.ar((1 - ratio) / window, [0, 1]);
         var span = window * SampleRate.ir * 0.5, lead = this.shimmerLeadBlocks * BlockSize.ir;
-        var reads = phase - ((saws * span) + (span + lead));
+        var lookback = (saws * span) + (span + lead), reads = phase - lookback;
         var first = ((saws[0] * pi).cos * 0.5) + 0.5, gains = [first, 1 - first];
+        // For the delay, either head can still reach across its last Clear.
+        // The reverb has no Clear and builds the original pair of heads.
+        if (freshFrames.notNil) {
+            gains = gains * (lookback <= freshFrames);
+        };
         ^sig.collect({ arg channel, index;
             BufWr.ar(channel, bufs[index], phase);
             (BufRd.ar(1, bufs[index], reads, 1, 4) * gains).sum
