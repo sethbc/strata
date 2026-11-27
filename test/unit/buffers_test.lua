@@ -319,6 +319,104 @@ test("a failed load over audio puts the slot's file back and is never remembered
   assert_equal(saved.paths[2], "/tmp/good.wav", "buffers.data keeps the old file")
 end)
 
+test("a rejected PARAMETERS file restores its PSET value and can be picked again (#1221)", function()
+  local context = load_strata(); finish_startup(context)
+  local good, bad = context.audio_dir .. "good.wav", context.audio_dir .. "damaged.wav"
+  params:set("buf1_file", good)
+  state_report(context, 1, 1, 4)
+  params:set("buf1_file", bad)
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
+  assert_equal(local_value("buffers")[1].path, good)
+  assert_equal(params:get("buf1_file"), good, "PARAMETERS shows the restored audio")
+  local preset = context.data_dir .. "rollback.pset"
+  params:write(preset)
+  assert_equal(local_value("S").lib.params_setup.pset_value(h.file_text(preset), "buf1_file"), good)
+  context.clear_engine_calls()
+  params:set("buf1_file", bad)
+  assert_equal(#context.calls_named("loadBuffer"), 1, "selecting the repaired file retries its load")
+end)
+
+test("a silent PSET selects only its named files and a rejected selection can be retried (#1225)", function()
+  local context = load_strata(); finish_startup(context)
+  local preset = context.data_dir .. "silent-buffers.pset"
+  local bell, drone = context.audio_dir .. "bell.wav", context.audio_dir .. "drone.wav"
+  h.write_text(preset, '"buf1_file": ' .. bell .. "\n")
+  load_buffer(1, drone); state_report(context, 1, 1, 4)
+  load_buffer(2, drone); state_report(context, 2, 1, 4)
+  params:set("buf2_file", bell, true)  -- a silent edit to a slot absent from the PSET
+  context.clear_engine_calls()
+  params:read(preset, true)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "only the named slot changes")
+  assert_equal(loads[1].args[1], 0); assert_equal(loads[1].args[2], bell)
+  params:read(preset)
+  assert_equal(#context.calls_named("loadBuffer"), 1, "a pending selection is not sent twice")
+  context.polls.fire("bufferLoadFailed", load_failed_value(1, 2))
+  assert_equal(params:get("buf1_file"), drone)
+  params:read(preset)
+  assert_equal(#context.calls_named("loadBuffer"), 2, "a failed replacement retries")
+  state_report(context, 1, 3, 0); state_report(context, 1, 3, 2)
+  params:read(preset, true)
+  assert_equal(#context.calls_named("loadBuffer"), 2, "the confirmed selection stays")
+  assert_equal(local_value("buffers")[2].path, drone)
+end)
+
+test("a silent PSET can reload the file a replace take displaced (#1225)", function()
+  local context = load_strata(); finish_startup(context)
+  local path = context.audio_dir .. "source.wav"
+  params:set("buf1_file", path); state_report(context, 1, 1, 4)
+  local preset = context.data_dir .. "source.pset"
+  params:write(preset)
+  record_buffer(1)
+  context.clear_engine_calls()
+  params:read(preset, true)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "the slot's previous pathname is not the live take")
+  assert_equal(loads[1].args[2], path)
+  assert_equal(local_value("buffers")[1].recording, false)
+end)
+
+test("a silent preset honors a selected file whose folder stays out of PARAMETERS (#1225)", function()
+  local context = load_strata(); finish_startup(context)
+  local path = context.audio_dir .. "kit $5/drum.wav"
+  local preset = context.data_dir .. "special-folder.pset"
+  h.write_text(preset, '"buf2_file": ' .. path .. "\n")
+  context.clear_engine_calls()
+  params:read(preset, true)
+  local loads = context.calls_named("loadBuffer")
+  assert_equal(#loads, 1, "the guarded setter still accepts the sound file")
+  assert_equal(loads[1].args[2], path)
+  assert_equal(params:get("buf2_file"), _path.audio, "the native browser keeps the safe display")
+end)
+
+test("whole and loop exports wait until replacement succeeds or restores the old file (#1262)", function()
+  h.write_performance_active({tier = "high", buffer_seconds = 60, max_grains = 128, history_seconds = 60,
+    reason = "high: setting"})
+  local context = load_strata(); finish_startup(context)
+  context.audio.files["/tmp/replacement.wav"] = {2, 48000 * 30, 48000}
+  load_buffer(1, "/tmp/previous.wav"); state_report(context, 1, 1, 4)
+  for attempt = 2, 3 do
+    load_buffer(1, attempt == 2 and "/tmp/rejected.wav" or "/tmp/replacement.wav")
+    context.clear_engine_calls()
+    for _, save in ipairs({save_buffer, save_buffer_loop}) do
+      local sent, why = save(1)
+      assert_equal(sent, false, "the displayed replacement has not settled")
+      assert_equal(why, "loading")
+      assert_equal(local_value("S").lib.ui_flash.text("header"), "buf 1 loading")
+    end
+    assert_equal(#context.calls_named("saveBufferRequest"), 0)
+    if attempt == 2 then
+      context.polls.fire("bufferLoadFailed", load_failed_value(1, attempt))
+      assert_equal(local_value("buffers")[1].path, "/tmp/previous.wav")
+    else
+      state_report(context, 1, attempt, 0); state_report(context, 1, attempt, 30)
+      assert_equal(local_value("buffers")[1].path, "/tmp/replacement.wav")
+    end
+    assert_true(save_buffer(1)); assert_true(save_buffer_loop(1))
+    assert_equal(#context.calls_named("saveBufferRequest"), 2)
+  end
+end)
+
 test("a failed load into an empty slot leaves it empty; a failed restore is forgotten", function()
   local subdir = "failed-restore-" .. math.random(1, 1e9)
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)

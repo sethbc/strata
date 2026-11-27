@@ -87,12 +87,12 @@ test("all buffer file setters protect the native browser across preset and OSC i
     params:read(pset, silent)
     assert_equal(#native_scans, 0, "no PSET path goes to the host scanner")
     local loads = context.calls_named("loadBuffer")
-    assert_equal(#loads, silent and 0 or 8, "only an ordinary read plays the selected files")
+    assert_equal(#loads, silent and 8 or 0, "the ordinary recall keeps the files selected by the silent recall")
     for slot = 1, 8 do
       local param = params:lookup_param("buf" .. slot .. "_file")
       assert_equal(param.path, _path.audio)
       assert_equal(param.dir, _path.audio, "PARAMETERS opens in the audio folder")
-      if not silent then assert_equal(loads[slot].args[2], path) end
+      if silent then assert_equal(loads[slot].args[2], path) end
     end
   end
   context.clear_engine_calls()

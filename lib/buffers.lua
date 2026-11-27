@@ -231,8 +231,14 @@ return function(S)
   -- PSET reads and native OSC set the File object before its action runs.
   -- Keep the native File's shape for PARAMETERS' picker and E3 navigation,
   -- but build the list through the same quoted directory reader as BUFFER.
+  local selected_files = {}  -- the requested file, even when its folder is hidden from PARAMETERS
   local function set_file_selection(param, path, silent)
-    if type(path) ~= "string" or path:find("[%z\r\n]") or path == param.path then return end
+    if type(path) ~= "string" or path:find("[%z\r\n]") then
+      selected_files[param.id] = nil
+      return
+    end
+    selected_files[param.id] = path
+    if path == param.path then return end
     local folder = path:match("^(.*/)")
     local shown = path
     -- PARAMETERS also passes dir to norns' own file browser, which lists
@@ -260,12 +266,28 @@ return function(S)
     local param = params:lookup_param(id)
     param.set = set_file_selection
     param:set(_path.audio, true)
-    params:set_action(id, function(path) load_buffer(slot, path) end)
+    params:set_action(id, function(path)
+      if path ~= S.buffers[slot].file_selection then load_buffer(slot, path) end
+    end)
   end
 
   function set_buffer_file_param(slot, path)
-    params:set("buf" .. slot .. "_file", path, true)
+    local id = "buf" .. slot .. "_file"
+    params:set(id, path, true)
+    -- The menu may already show a new selection when its action starts.
+    -- Keep the slot's own selection for rollback and PSET reconciliation.
+    S.buffers[slot].file_selection = selected_files[id]
   end
+
+  S.register_pset_hook({name = "buffer_files", read = function(_, _, _, silent)
+    if not silent then return end
+    for slot = 1, NUM_BUFFERS do
+      local id = "buf" .. slot .. "_file"
+      if S.lib.params_setup.read_order(id) then
+        params:lookup_param(id).action(selected_files[id])
+      end
+    end
+  end})
 
   -- An empty slot's shown state and file param, for buffer_load_failed.
   -- settled_empty is "take" after a canceled recording whose take may have
@@ -313,7 +335,7 @@ return function(S)
     return {take_number = buffer.take_number, take_unsaved = not buffer.recording and buffer.take_unsaved,
       name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
       settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
-      missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file"),
+      missing_path = buffer.missing_path, file_param = buffer.file_selection or _path.audio,
       checking_from = buffer.checking_from, checking_load = buffer.checking_load,
       start = buffer.sent_start, sample_rate = buffer.sample_rate, file_seconds = buffer.file_seconds}
   end
@@ -739,10 +761,9 @@ return function(S)
     end)
   end
 
-  -- Why a save of the slot cannot go: "invalid" (not a slot), "busy" (the slot
-  -- records or awaits its take: an armed recording has `recording` set) or
-  -- "empty" (the engine reports no length: a load shows at once, and the
-  -- engine's report settles whether it holds audio; a replace take reads 0 s).
+  -- Save refusals: "invalid" for a bad slot, "busy" while recording or
+  -- finishing, "loading" until the new file is confirmed, and "empty"
+  -- when the engine reports no audio.
   -- "save queue full" while the oldest outstanding save holds the window.
   local function save_refusal(slot)
     if not valid_buffer_slot(slot) then return "invalid" end
@@ -750,6 +771,11 @@ return function(S)
     if buffer.recording or buffer.finishing then
       print("buffer " .. slot .. " is recording, nothing to save yet")
       return "busy"
+    end
+    if buffer.confirm_since ~= nil then
+      header_flash("buf " .. slot .. " loading")
+      print("buffer " .. slot .. " is loading, nothing to save yet")
+      return "loading"
     end
     if buffer.seconds <= 0 then
       print("buffer " .. slot .. " is empty, nothing to save")
