@@ -198,13 +198,14 @@ jobs:
           done < "$RUNNER_TEMP/lua-packages.sha512"
           echo "$kept package files from the cache, each matching apt's lists"
           status=0
-          sudo timeout --kill-after=5 20 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+          ubuntu_only=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
+          sudo timeout --kill-after=5 20 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y --download-only "${packages[@]}" || status=$?
           if { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; } && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
             echo "::warning::apt's first mirror is slow (download unfinished after 20 s): trying https://archive.ubuntu.com first"
             sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
             cat "$mirrors"
             status=0
-            sudo timeout --kill-after=5 30 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+            sudo timeout --kill-after=5 30 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y --download-only "${packages[@]}" || status=$?
           fi
           if [ "$status" -ne 0 ]; then
             echo "::error::the packages did not download (exit $status; 124 or 137: too slow). The Lua suite never ran: rerun this job"
@@ -214,7 +215,7 @@ jobs:
           while read -r sum name; do
             if [ -f "$archives/$name" ]; then cp "$archives/$name" "$debs/"; fi
           done < "$RUNNER_TEMP/lua-packages.sha512"
-          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"
+          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"
 
       # Kept by the step right after the install when the key was not an
       # exact hit: the four jobs of a run try the one key, the first saves
@@ -463,13 +464,14 @@ jobs:
           done < "$RUNNER_TEMP/sc-packages.sha512"
           echo "$kept package files from the cache, each matching apt's lists"
           status=0
-          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+          ubuntu_only=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources -o Dir::Etc::sourceparts=-)
+          sudo timeout --kill-after=5 45 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y --download-only "${packages[@]}" || status=$?
           if { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; } && grep -q '^https://archive\.ubuntu\.com/ubuntu/[[:space:]]' "$mirrors"; then
             echo "::warning::apt's first mirror is slow (download unfinished after 45 s): trying https://archive.ubuntu.com first"
             sudo sed -i -E '/^https:\/\/archive\.ubuntu\.com\/ubuntu\//! s/priority:[0-9]+/priority:9/' "$mirrors"
             cat "$mirrors"
             status=0
-            sudo timeout --kill-after=5 75 apt-get $APT_NETWORK_OPTIONS install -y --download-only "${packages[@]}" || status=$?
+            sudo timeout --kill-after=5 75 apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y --download-only "${packages[@]}" || status=$?
           fi
           if [ "$status" -ne 0 ]; then
             echo "::error::the packages did not download (exit $status; 124 or 137: too slow). The engine check never ran: rerun this job"
@@ -479,7 +481,7 @@ jobs:
           while read -r sum name; do
             if [ -f "$archives/$name" ]; then cp "$archives/$name" "$debs/"; fi
           done < "$RUNNER_TEMP/sc-packages.sha512"
-          sudo apt-get $APT_NETWORK_OPTIONS install -y "${packages[@]}"
+          sudo apt-get $APT_NETWORK_OPTIONS "${ubuntu_only[@]}" install -y "${packages[@]}"
 
       # Saved right after the install, whatever the check does later, when the
       # key was not an exact hit: the first shard to install saves the entry,
