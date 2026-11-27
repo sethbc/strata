@@ -1628,6 +1628,31 @@ test("a parallel run's failing test fails the run and is printed again before th
   h.remove_tree(dir)
 end)
 
+test("a serial run keeps its failures and cleans up when a case calls os.exit (#1269)", function()
+  local dir = RUNNER.tree("early-exit", { ["early_test.lua"] = [[
+return function(h)
+  h.test("first failure", function() error("first failure diagnostic") end)
+  h.test("early exit", function() os.exit(0) end)
+  h.test("last case", function() end)
+end
+]] })
+  for _, args in ipairs({ { "--jobs", "1" }, { "early" } }) do
+    local arguments = { "--dir", dir }
+    for _, argument in ipairs(args) do arguments[#arguments + 1] = argument end
+    local output, status, folder = RUNNER.run(arguments)
+    local gone = folder and not RUNNER.exists(folder)
+    -- A runner with the regression leaves its own temporary folder outside this suite's.
+    if folder and not gone then os.remove(folder) end
+    assert_equal(status, 1, output)
+    assert_true(gone, "the run removed its temporary folder")
+    assert_true(output:find("first failure diagnostic", 1, true), output)
+    assert_true(output:find("FAIL early exit", 1, true), output)
+    assert_true(output:find("ok   last case", 1, true), output)
+    assert_true(output:find("3 tests, 2 failures", 1, true), output)
+  end
+  h.remove_tree(dir)
+end)
+
 test("a parallel run fails and names a process that crashes, a file that does not load and one that registers no test", function()
   local leave = '  h.test("%s leaves", function() io.write("data root " .. h.data_root .. "\\n"); io.flush(); %s end)\n'
   local dir = RUNNER.tree("abnormal", {

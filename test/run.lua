@@ -274,7 +274,16 @@ local function run()
   return run_parallel(names, jobs)
 end
 
+-- A worker has a parent that detects an exit without a complete report.
+-- In a standalone run, turn os.exit during registration or a test into
+-- a failure so the runner can report the outcome and remove its folder.
+local exit = os.exit
+local supervised = options.report and (os.getenv("STRATA_TEST_DATA_ROOT") or "") ~= ""
+if not supervised then
+  os.exit = function(code) error("test called os.exit(" .. tostring(code) .. ")", 2) end
+end
 local ran, status = xpcall(run, debug.traceback)
+if not supervised then os.exit = exit end
 print = h.real_print
 h.remove_tree(h.data_root)
 if not ran then
