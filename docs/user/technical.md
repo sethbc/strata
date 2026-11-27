@@ -51,6 +51,12 @@ On the high tier each buffer holds up to the buffer length (60 s by default, up 
 
 ## Audio Signal Flow
 
+With a synth source, the voice synth feeds its voice bus and ring. The audio input has its own bus and ring. The granular processor reads from the chosen ring, a stereo sample buffer, or a voice’s output ring. Its grains go to the voice stage, which applies the voice filter and sets the dry level and effect sends.
+
+The dry signal, delay send and reverb send each pass through a separate copy of the master filter. The dry path goes straight to the master. The delay returns to the master and can also feed the reverb. The reverb returns to the master, where drift, limiting and saturation shape the final output.
+
+For cross-modulation, a modulation synth reads the voice bus and writes to a modulation bus that other voices’ synths can use.
+
 ```
 Synth source:   Voice Synth → Voice Bus → Voice Ring → Granular Processor ┐
 Buffer source:  Buffer (L/R) → Granular Processor ───────────────────────┼→ Voice Stage
