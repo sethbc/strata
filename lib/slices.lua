@@ -475,11 +475,11 @@ return function(S)
   function M.play(voice, n, note)
     local region = M.voice_region(voice, n)
     if not region or type(note) ~= "table" then return false end
-    local to_end = S.lib.notes.pass_seconds(voice, region[2])
+    local _, rate = S.lib.notes.pass_seconds(voice, region[2])
     local slot = S.lib.notes.play(voice, {owner = note.owner, key = note.key, pitch = S.lib.notes.own_pitch(voice),
       velocity = note.velocity, set_own = play_nothing, park = note.park, quiet = note.quiet,
       extra_only = note.extra_only, expression = note.expression, steals = note.steals, region = region,
-      hold_to_end = to_end ~= nil or nil, own_only = option(voice) ~= SLICES.overlap or nil})
+      hold_to_end = rate ~= nil or nil, own_only = option(voice) ~= SLICES.overlap or nil})
     return slot or false
   end
 
