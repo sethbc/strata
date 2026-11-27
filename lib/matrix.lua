@@ -374,7 +374,10 @@ return function(S)
     local last = S.lib.engine_sync.expected_value(id)
     if last == nil then return true end
     local value = S.lib.engine_sync.with_lfo_offsets(id, params:get(id))
-    return math.abs(position(id, value) - position(id, last)) >= S.lib.lfos.LFO.send_threshold
+    -- The controlspec clamps to the knob range. Compare there before the
+    -- engine factor (tempo follow may take both sends beyond that range).
+    local factor = S.lib.engine_sync.engine_factor(id)
+    return math.abs(position(id, value / factor) - position(id, last / factor)) >= S.lib.lfos.LFO.send_threshold
   end
 
   -- One step's working tables, emptied and reused every step: the sums by

@@ -231,6 +231,31 @@ test("a tempo move under a full budget waits for the next window", function()
   assert_near(last_grain(context, 0, "bufScan"), 0.75, 1e-9, "and goes in the next window")
 end)
 
+for _, disable in ipairs({false, true}) do
+  test("a deferred bar correction checks its current phase and Follow " .. tostring(disable) .. " (#1247)", function()
+    local context, S, tempos = loaded()
+    tempos[1] = 120
+    params:set("v1_buf_scan", 1)
+    params:set("v1_follow", FOLLOW.stretch)
+    lfo_step(context)
+    full_window(context, S)
+    context.clock.set_beat(clock.get_beats() + S.lib.scan.FOLLOW.bar_beats)
+    context.clear_engine_calls()
+    lfo_step(context)
+    assert_true(S.lib.engine_sync.budget_state().pending > 0)
+    assert_equal(#context.calls_named("syncScan"), 0)
+    local phase = S.lib.playheads.phase(1)
+    if disable then params:set("v1_follow", FOLLOW.off) end
+    context.clock.advance_until(S.engine_budget_clock)
+    local calls = context.calls_named("syncScan")
+    assert_equal(#calls, disable and 0 or 1)
+    if not disable then
+      assert_true(S.lib.playheads.phase(1) > phase)
+      assert_near(calls[1].args[2], S.lib.playheads.phase(1), 1e-9)
+    end
+  end)
+end
+
 test("a sync waiting for the budget is dropped when the voice restarts", function()
   local context, S, tempos = loaded()
   tempos[1] = 120

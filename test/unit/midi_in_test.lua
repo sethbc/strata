@@ -2104,6 +2104,32 @@ local function sliced_voice(option)
   return context, slice_voice_one(context, option)
 end
 
+for _, replacement in ipairs({"source", "file"}) do
+  for _, lift_first in ipairs({true, false}) do
+    test("a replaced slice cannot stop the new " .. replacement .. ", key lifted first " .. tostring(lift_first) .. " (#1248)", function()
+      local context, S = sliced_voice(3)
+      params:set("midi_note_off", 2)
+      params:set("v1_scan_mode", 3)
+      params:set("v1_buf_scan", 1)
+      note_on(context, 1, 36)
+      if lift_first then note_off(context, 1, 36) end
+      if replacement == "source" then
+        params:set("v1_source", S.constants.SOURCE_SYNTH)
+      else
+        load_buffer(1, context.audio_dir .. "replacement.wav")
+        for _, seconds in ipairs({0, 2}) do
+          context.polls.fire("bufferState", context.polls.buffer_state_value(1, S.buffers[1].loads_sent, seconds))
+        end
+      end
+      if not lift_first then note_off(context, 1, 36) end
+      context.clock.run_for(2 / 48)
+      assert_equal(S.lib.notes.find(1, "midi", key_of(1, 36)), nil, "the old note was retired")
+      context.clock.run_for(0.75)
+      assert_true(S.voices[1].active, "the replacement still plays")
+    end)
+  end
+end
+
 test("note 36 plays slice 1 at the voice's own pitch, and a note outside the slices does nothing", function()
   local context, S = sliced_voice(3)
   params:set("midi_note_off", 2)  -- release mode (a change of mode releases every note)
@@ -2307,22 +2333,17 @@ test("a held-back stop is cleared by the voice's stop and by a key down (#913)",
   assert_true(S.voices[1].active, "the slices' ends stop nothing while a key is down")
 end)
 
--- 3.9 (#909): the grain-restart hook clears the held-back stop only at a
--- start (its reason "start"): a running voice's source switch runs the
--- hook with "source" and leaves the stop held back, so the voice still
--- stops once nothing plays to its end
-test("a held-back stop outlives a running voice's source switch", function()
+test("a source switch cancels the replaced slice's held-back stop", function()
   local context, S = held_back(2)
   params:set("v1_source", 3)
-  assert_true(S.voices[1].active, "the switch stops nothing")
   context.clock.run_for(1)
-  assert_true(not S.voices[1].active, "the held-back stop is done once nothing plays to its end")
+  assert_true(S.voices[1].active, "the released slice cannot stop its replacement")
 end)
 
 -- 3.9 (#1009): the midi notes table's event "a running voice's source
 -- switch" (the grain-restart hooks' reason "source"), one test a state
 -- (docs/notes/lua/midi.md, Machines, midi notes; the table's third row is
--- "a held-back stop outlives a running voice's source switch", above).
+-- "a source switch cancels the replaced slice's held-back stop", above).
 -- no key: a voice a released key started (latch) switches source; nothing
 -- of MIDI's changes: no key, no mark, and it stays the panic's
 test("the midi notes table: no key + a running voice's source switch keeps started", function()
@@ -2567,8 +2588,8 @@ h.transition_table({
       check = midi_notes_checks({running = false, down = {36, 37}, after = stopped_under_keys})},
     {"keys down", "a reset", "no key", check = midi_notes_checks({running = false, started = false})},
     {"keys down", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
-    {"keys down", "a running voice's source switch", "keys down",
-      check = midi_notes_checks({running = true, down = {36, 37}, lists = true, started = true})},
+    {"keys down", "a running voice's source switch", "no key",
+      check = midi_notes_checks({running = true, up = {36, 37}, gone = {36, 37}, started = true})},
     {"keys down", "the LFO step, nothing plays to its end", "keys down", check = midi_notes_checks({running = true, down = {36, 37}})},
     {"keys down", "the LFO step, a note still plays to its end", "keys down", check = midi_notes_checks({running = true, down = {36, 37}})},
     {"keys down", "latch set, then the LFO step", "no key", check = midi_notes_checks({running = true, gone = {36, 37}})},
@@ -2580,10 +2601,10 @@ h.transition_table({
         assert_true(not S.voices[MIDI_NOTES.voice].active, "the next LFO step stops the voice")
       end})},
     {"stop held back", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
-    {"stop held back", "a running voice's source switch", "stop held back", check = midi_notes_checks({running = true,
+    {"stop held back", "a running voice's source switch", "no key", check = midi_notes_checks({running = true,
       after = function(context, S)
         context.clock.run_for(MIDI_NOTES.past_the_slices)
-        assert_true(not S.voices[MIDI_NOTES.voice].active, "stopped once nothing plays to its end")
+        assert_true(S.voices[MIDI_NOTES.voice].active, "the new source keeps sounding")
       end})},
     {"stop held back", "the LFO step, nothing plays to its end", "no key", check = midi_notes_checks({running = false, started = false})},
     {"stop held back", "the LFO step, a note still plays to its end", "stop held back", check = midi_notes_checks({running = true})},
@@ -2658,7 +2679,7 @@ h.transition_table({
     {"stop held back", "the voice's stop", "no key", check = midi_notes_checks({running = false})},
     {"stop held back", "a reset", "stop held back", check = midi_notes_checks({running = true})},
     {"stop held back", "a panic", "no key", check = midi_notes_checks({running = false, started = false})},
-    {"stop held back", "a running voice's source switch", "stop held back", check = midi_notes_checks({running = true})},
+    {"stop held back", "a running voice's source switch", "no key", check = midi_notes_checks({running = true})},
     {"stop held back", "the LFO step", "no key", check = midi_notes_checks({running = true})},
   },
   impossible = {
