@@ -455,6 +455,95 @@ test("overdub adds events to a playing loop, free and quantized", function()
   assert_near(params:get("v1_grain_size"), edited, 1e-9, "where it plays at beat 1")
 end)
 
+test("late hand edits keep the free loop's timing through replay and a PSET read", function()
+  local context, S, gestures = loaded()
+  record(context, gestures, 2, {{0, "delay_mix"}}, 0.25)
+  gestures.press(2)
+  record(context, gestures, 1, {{0, "reverb_mix"}, {0.1, "reverb_mix"}}, 0.15)
+  local pattern = S.gestures[1].pattern
+  gestures.overdub(1)
+  -- Both edits arrive before matron delivers the 100 ms metro callback.
+  context.set_time(util.time() + 0.125); hand_edit("delay_mix")
+  context.set_time(util.time() + 0.01); hand_edit("v1_grain_size")
+  gestures.overdub(1)
+  assert_near(pattern.time[1], 0.1, 1e-9, "the original gap ends at 100 ms")
+  assert_equal(pattern.time[2], 0, "the first late edit")
+  assert_equal(pattern.time[3], 0, "the second late edit")
+  fire(S, 1)
+  assert_near(params:get("reverb_mix"), pattern.event[4].value, 1e-9, "the queued event plays next")
+  local path = context.data_dir .. "strata-01.pset"
+  params:write(path)
+  params:read(path)
+  assert_equal(gestures.state(1), "stopped")
+  assert_equal(event_ids(S, 2), "delay_mix", "the other recorder survives recall")
+  assert_equal(event_ids(S, 1), "reverb_mix delay_mix v1_grain_size reverb_mix")
+  gestures.press(1)
+  for i, gap in ipairs({0.1, 0, 0, 0.15}) do
+    assert_near(params:get(pattern.event[i].id), pattern.event[i].value, 1e-9)
+    assert_near(pattern.metro.time, gap, 1e-9, "time until the next event")
+    fire(S, 1)
+  end
+  context.clock.run_for(0.12)
+  local live = assert(S.lib.data_files.read(context.data_dir .. "strata/gestures.data"))
+  assert_equal(#live.recorders[1].events, 4)
+  assert_equal(#live.recorders[2].events, 1)
+end)
+
+test("quantizing a late overdub at the end of a free loop keeps its moves on recall", function()
+  local context, S, gestures = loaded()
+  record(context, gestures, 1, {{0, "reverb_mix"}}, 0.25)
+  gestures.overdub(1)
+  context.set_time(util.time() + 0.3); hand_edit("delay_mix")
+  context.set_time(util.time() + 0.01); hand_edit("filter_freq")
+  params:set("gesture_1_quantize", BEAT)
+  local path = context.data_dir .. "strata-01.pset"
+  params:write(path)
+  params:read(path)
+  assert_equal(gestures.state(1), "stopped", "a beat loop with all three moves")
+  assert_equal(event_ids(S, 1), "delay_mix filter_freq reverb_mix", "the two late moves precede the first at the wrap")
+  assert_equal(S.gestures[1].length_beats, 1)
+  for _, offset in ipairs(S.gestures[1].offsets) do assert_equal(offset, 0) end
+end)
+
+test("a loop-end move still wraps when its scaled offset rounds below the beat", function()
+  local context, S = loaded()
+  local path = context.data_dir .. "strata-01.pset"
+  params:write(path)
+  assert_true(S.lib.data_files.write(context.data_dir .. "strata-01.gestures.data", {version = 1, recorders = {
+    {quantize = "free", events = {{id = "delay_mix", value = 0.2}, {id = "reverb_mix", value = 0.4}},
+      times = {0.084, 0}}}}))
+  params:read(path)
+  params:set("gesture_1_quantize", BEAT)
+  assert_equal(event_ids(S, 1), "reverb_mix delay_mix", "the terminal move is first at the wrap")
+  assert_equal(S.gestures[1].offsets[1], 0)
+end)
+
+test("a PSET with old late free overdubs recovers the loop and keeps its other gestures", function()
+  local context, S, gestures = loaded()
+  local path = context.data_dir .. "strata-01.pset"
+  local side = context.data_dir .. "strata-01.gestures.data"
+  params:write(path)
+  -- A 100 ms gap split at 125 ms, then another 10 ms before the metro ran.
+  local events = {{id = "reverb_mix", value = 0.1}, {id = "delay_mix", value = 0.2},
+    {id = "delay_mix", value = 0.3}, {id = "reverb_mix", value = 0.4}}
+  assert_true(S.lib.data_files.write(side, {version = 1, recorders = {
+    {quantize = "free", events = events, times = {0.125, 0.01, -0.035, 0.15}},
+    {quantize = "free", events = {{id = "delay_mix", value = 0.7}}, times = {0.25}}}}))
+  params:read(path)
+  assert_equal(gestures.state(1), "stopped")
+  assert_equal(gestures.state(2), "stopped")
+  gestures.press(1)
+  for i, gap in ipairs({0.1, 0, 0, 0.15}) do
+    assert_near(params:get(events[i].id), events[i].value, 1e-9, "recovered event " .. i)
+    assert_near(S.gestures[1].pattern.metro.time, gap, 1e-9)
+    fire(S, 1)
+  end
+  params:write(path)
+  local saved = assert(S.lib.data_files.read(side)).recorders
+  assert_equal(saved[1].times[3], 0, "the repaired timing is saved")
+  assert_equal(saved[2].times[1], 0.25, "the sibling keeps its timing")
+end)
+
 -- #879: an overdub records every hand edit into the loop, so the row says
 -- it, and stops saying it at each of its ends
 test("describe says dub while overdub is on (#879)", function()
@@ -716,7 +805,15 @@ test("an unreadable side file is set aside and the PSET still loads", function()
   local no_length = { version = 1, recorders = { { quantize = "free", events = { { id = "reverb_mix", value = 0.5 },
     { id = "delay_mix", value = 0.5 } }, times = { 0, 0 } } } }  -- its metro would fire without a pause
   for _, content in ipairs({ "return {\n  {1},\n", "return {\n-- Table: {1}\n{\n   [\"version\"]=2,\n},\n}\n", bad_bar,
-      no_length }) do
+      no_length,
+      {version = 1, recorders = {{quantize = "free", events = no_length.recorders[1].events,
+        times = {-0.1, 0.2}}}},  -- an overdub never moves a time before the loop's start
+      {version = 1, recorders = {{quantize = "free", events = {
+        {id = "reverb_mix", value = 0.1}, {id = "delay_mix", value = 0.2},
+        {id = "delay_mix", value = 0.3}, {id = "reverb_mix", value = 0.4}},
+        times = {0.2, 0.2, 0.03, -0.43}}}},  -- the signed sum rounds above 0, but every repaired gap is 0
+      {version = 1, recorders = {{quantize = "beat", events = no_length.recorders[1].events,
+        beats = {0.1, -0.01}, length_beats = 1}}} }) do
     local context, S, gestures = loaded()
     params:set("reverb_mix", 0.7)
     local path = context.data_dir .. "strata-04.pset"
@@ -737,6 +834,23 @@ test("an unreadable side file is set aside and the PSET still loads", function()
     assert_true(said, "a console line names it")
   end
 end)
+
+for _, sparse in ipairs({"events", "times"}) do
+  test("a legacy overdub with sparse " .. sparse .. " is set aside whole", function()
+    local context, S, gestures = loaded()
+    local path = context.data_dir .. "strata-01.pset"
+    local side = context.data_dir .. "strata-01.gestures.data"
+    params:write(path)
+    local events = {{id = "delay_mix", value = 0.2}, {id = "reverb_mix", value = 0.4}}
+    local times = {0.125, -0.025}
+    if sparse == "events" then events[17] = events[1] else times[17] = 0.25 end
+    assert_true(S.lib.data_files.write(side, {version = 1, recorders = {
+      {quantize = "free", events = events, times = times}}}))
+    params:read(path)
+    assert_true(util.file_exists(side .. ".bak"), "the entire malformed file is retained")
+    assert_equal(gestures.state(1), "empty", "no partial gesture loads")
+  end)
+end
 
 test("a gesture event naming an unknown param is kept and skipped", function()
   local context, S, gestures = loaded()
