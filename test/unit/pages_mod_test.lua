@@ -619,7 +619,7 @@ test("ALT+K2 randomizes scatter's depth and rate, and the complete routings' dep
   -- the matrix: every complete routing's depth, the others kept
   local matrix = S.lib.matrix
   matrix.set_routing(1, "lfo1", "reverb_mix"); params:set("matrix_1_depth", 10)
-  matrix.set_routing(2, "lfo2", "v1_grain_size"); params:set("matrix_2", 0); params:set("matrix_2_depth", 20)
+  matrix.set_routing(2, "lfo2", "v1_grain_size"); params:set("matrix_2", 0); params:set("matrix_2_depth", 80)
   matrix.set_routing(3, "lfo3", ""); params:set("matrix_3_depth", 33)
   place(S, "routing:5")
   alt_k2_quick()
@@ -631,7 +631,7 @@ test("ALT+K2 randomizes scatter's depth and rate, and the complete routings' dep
   assert_equal(params:get("matrix_5_depth"), 0, "an empty one too")
   alt_k2_quick()
   assert_equal(params:get("matrix_1_depth"), 10, "undone")
-  assert_equal(params:get("matrix_2_depth"), 20)
+  assert_equal(params:get("matrix_2_depth"), 80, "undo restores the disabled routing too")
   -- a quick press on a macro, morph, gesture or LFO row changes nothing
   for _, id in ipairs({ "bank", "source:macro1", "morph", "morph_a", "source:gesture1", "source:lfo1" }) do
     place(S, id)
