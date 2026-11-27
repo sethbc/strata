@@ -240,7 +240,7 @@
             carrier = this.subsonicBlock(SinOsc.ar(modFreqVal + mod));
 
             sig = carrier * LFNoise1.kr([modFreq, modFreq * 1.1]).range(0.3, 1);
-            sig = Pan2.ar(sig, pan);
+            sig = Balance2.ar(sig[0], sig[1], pan);
 
             Out.ar(out, sig * env * modAmp);
         }).add;

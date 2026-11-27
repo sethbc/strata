@@ -923,6 +923,30 @@ check.(engine.synths[\voice4].isNil, "voiceOff forgets the stopped voice's synth
     check.((freqBefore != 333.0) and: { getControl.(engine.synths[\voice1], \freq) == 333.0 },
         "voiceOn 1.5 is voiceOn 1 (#504; voice 1 at % Hz, then %)".format(freqBefore, getControl.(engine.synths[\voice1], \freq)));
 }.value;
+// At 220 Hz with the FM index and wobble speed at zero, the carrier and
+// each side's gain stay steady across the three pan settings.
+{
+    var group = Group.tail(server), audio = Bus.audio(server, 2), levels = Bus.control(server, 2);
+    var source, probe, sides, center, silent = engine.silentBus.index;
+    source = Synth(\strataFM, [\out, audio, \freq, 220, \index, 0, \modFreq, 0, \attackTime, 0.01,
+        \modBus1, silent, \modBus2, silent, \modBus3, silent], group, \addToHead);
+    probe = Synth(\strataCheckChannelPeaks, [\in, audio, \out, levels], group, \addToTail);
+    sides = [-1, 1].collect({ arg pan, channel;
+        var peaks;
+        source.set(\pan, pan); server.sync; 0.15.wait;
+        peaks = measure.(probe, levels, 0.25);
+        check.((peaks.size == 2) and: { peaks[channel] > 0.01 } and: { peaks[1 - channel] < 0.001 },
+            "voices: FM pan % sounds on one side (#1245; peaks %)".format(pan, peaks));
+        peaks[channel]
+    });
+    source.set(\pan, 0); server.sync; 0.15.wait;
+    center = measure.(probe, levels, 0.25);
+    check.((center.size == 2) and: { sides.every({ arg peak, channel;
+        (peak > 0.01) and: { (center[channel] / peak).inclusivelyBetween(0.69, 0.73) }
+    }) }, "voices: FM center plays both sides at equal-power gain (#1245; center %, hard-pan levels %)".format(center, sides));
+    group.free; server.sync; levels.free; audio.free;
+}.value;
+
 checkSubsonic.value;
 checkPulseRes.value;
 h.stopAllVoices;
