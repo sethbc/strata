@@ -41,7 +41,7 @@
         ^(2 ** ((note - areaState[\notes][\rootNotes][voice]) / 12)).clip(0.25, 4)
     }
 
-    // A ring-stream note leaving the stream (restartNotes, notesUnfrozen):
+    // A ring-stream note leaving the stream at an unfreeze (notesUnfrozen):
     // its kept rate becomes its note's (absoluteNoteRate), so a later
     // restart on a buffer or the input plays its pitch there (#682)
     leaveStream { arg voice, record;
@@ -628,16 +628,19 @@
     // every extra note of the voice is cut, and each that was live restarts
     // on the new source from its kept values (startNoteSynth by the voice's
     // state now), keeping its order, silent (ruling 45); a releasing one is
-    // not restarted. A ring-stream note restarts at its note's rate
-    // (leaveStream, ruling 53). So a slot holds a live and a cutting synth
-    // at most
+    // not restarted. A buffer or input note takes the current root, even
+    // if the root changed while its note was a voice synth (#1246). Each
+    // slot still holds at most a live and a cutting synth.
     restartNotes { arg voice;
+        var rateBased = #[\buffer, \input].includes(this.noteKindFor(voice));
         (1 .. (this.noteSlots - 1)).do({ arg slot;
             var record = this.noteRecord(voice, slot), wasLive = record[\state] == \live, order = record[\order];
             if (record[\synth].notNil) {
                 this.cutNote(voice, slot);
-                this.leaveStream(voice, record);
-                if (wasLive) { this.areaCall(\startNote, voice, slot, order, true) };
+                if (wasLive) {
+                    if (rateBased) { record[\rate] = this.absoluteNoteRate(record[\note], voice) };
+                    this.areaCall(\startNote, voice, slot, order, true);
+                };
             };
         });
     }

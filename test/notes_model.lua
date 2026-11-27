@@ -124,12 +124,6 @@ function Model:start(voice, record, order)
   return true
 end
 
--- leaveStream (ruling 53): a ring-stream note's rate becomes its note's,
--- against the voice's root
-function Model:leave_stream(voice, record)
-  if record.kind == "stream" then record.rate = self:absolute_rate(voice, record.note) end
-end
-
 -- notesFollowRoot (3.9, #958): a root that moves re-derives each live
 -- buffer or input note's rate from its note against the new root; a voice
 -- or stream note, and a releasing one, keep theirs
@@ -149,12 +143,15 @@ end
 -- streams): each note cut, each live one started again on the voice's
 -- state now, keeping its order
 function Model:restart(voice, streams_only)
+  local kind = self:kind_for(voice)
   for _, record in ipairs(self.voices[voice].extra) do
     if record.state ~= "empty" and (not streams_only or record.kind == "stream") then
       local was_live = record.state == "live"
       cut(record)
       if record.kind == "stream" then self.counts.streams_left, record.streamed = self.counts.streams_left + 1, true end
-      self:leave_stream(voice, record)
+      if streams_only or (was_live and (kind == "buffer" or kind == "input")) then
+        record.rate = self:absolute_rate(voice, record.note)
+      end
       if was_live then self:start(voice, record, record.order) end
       -- a note once a stream, now on a buffer or the input: its rate is its note's
       if was_live and record.streamed and record.kind ~= "voice" and record.kind ~= "stream" then
