@@ -9,7 +9,7 @@
 -- A page is {title, columns, rows, controls}; a control is {kind, label,
 -- param or address, [argument], [min,
 -- max], x, y, w, h} in cells of a columns by rows grid, which the generator
--- scales to the screen. kind is fader, toggle or button; a toggle's argument
+-- scales to the screen. kind is fader, toggle, readout or button; a toggle's argument
 -- "value" sends its 0 or 1, a button's number is sent as an integer.
 
 local NUM_VOICES, NUM_MACROS, NUM_SCENES = 7, 16, 16
@@ -49,7 +49,7 @@ local function voice_page(columns)
   return {title = "voices", columns = columns, rows = math.ceil(NUM_VOICES / columns) * 6, controls = controls}
 end
 
--- The scenes: a button each, then the patterns' toggle across the bottom
+-- The scenes: recall buttons, then the reported scene and the patterns toggle.
 local function scene_page(columns)
   local controls = {}
   for n = 1, NUM_SCENES do
@@ -58,8 +58,10 @@ local function scene_page(columns)
       x = column, y = row, w = 1, h = 1}
   end
   local rows = math.ceil(NUM_SCENES / columns)
+  controls[#controls + 1] = {kind = "readout", label = "current scene", address = "/strata/scene", max = NUM_SCENES,
+    x = 0, y = rows, w = columns / 2, h = 1}
   controls[#controls + 1] = {kind = "toggle", label = "patterns", address = "/strata/patterns",
-    argument = "value", x = 0, y = rows, w = columns, h = 1}
+    argument = "value", x = columns / 2, y = rows, w = columns / 2, h = 1}
   return {title = "scenes", columns = columns, rows = rows + 1, controls = controls}
 end
 

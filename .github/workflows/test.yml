@@ -238,6 +238,12 @@ jobs:
         run: ${{ matrix.lua }} test/run.lua --shard ${{ matrix.shard }}
 
       # Once a run: in the Lua 5.3 job of shard 1
+      - name: Verify the shipped TouchOSC panels
+        if: matrix.lua == 'lua5.3' && startsWith(matrix.shard, '1/')
+        run: |
+          python3 tools/touchosc/generate.py --check
+          python3 tools/touchosc/test_startup.py
+
       - name: Lua / engine command sync check
         if: matrix.lua == 'lua5.3' && startsWith(matrix.shard, '1/')
         run: lua5.3 test/sync_check.lua
