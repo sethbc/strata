@@ -554,10 +554,20 @@ return function(S)
     return false
   end
 
+  -- A page change can repaint before the tick removes its expired press.
+  local function live_press(panes)
+    if panes then
+      for _, still in pairs(panes) do
+        if still() then return true end
+      end
+    end
+    return false
+  end
+
   -- Whether a port's store is down for a voice: the voice's own store key
   -- in any pane (3.8: every layout's lines are one voice each)
   local function storing(record, voice_idx)
-    return record.store[voice_idx] ~= nil
+    return live_press(record.store[voice_idx])
   end
 
   -- A key held per pane (store, hold): `keys` is the record's table for
@@ -785,13 +795,7 @@ return function(S)
     if valid_bookmark(key) then
       if any_record(function(record)
         local pressed = record.pressed[voice_idx]
-        if pressed and pressed.key == key then
-          -- A page change redraws before the stale sweep. Another grid can
-          -- keep the same bookmark bright in the shared display signature.
-          for _, still in pairs(pressed.panes) do
-            if still() then return true end
-          end
-        end
+        return pressed and pressed.key == key and live_press(pressed.panes)
       end, port) then
         return LEVELS.stored
       end
