@@ -1310,7 +1310,10 @@ runChecks = {
 
         checkSweep.value;
         areas.do({ arg name;
-            var area = areaPath.(name).load, start = Main.elapsedTime;
+            var file = if ((name == \files) and: { thisProcess.argv.first == "save-restart" }) {
+                testDir +/+ "engine_check/fixtures/save-restart.scd"
+            } { areaPath.(name) };
+            var area = file.load, start = Main.elapsedTime;
             running = name;
             if (area.isKindOf(Function)) {
                 area.value(h);
