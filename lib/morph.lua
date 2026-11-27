@@ -325,13 +325,13 @@ return function(S)
   -- corner ("a" to "d") holds a scene the morph can use (its slot's scene
   -- populated and valid, as a plan counts it; false for any other corner),
   -- and whether MORPH.min_corners or more do. They read only the corners'
-  -- params and S.scenes, never the plan or any other state, so a draw
-  -- changes nothing the morph keeps (plan_ready() rebuilds a stale plan)
+  -- params and the scenes module's cached playability, so a draw changes
+  -- nothing the morph keeps (plan_ready() rebuilds a stale plan).
   local is_corner = {}
   for _, corner in ipairs(MORPH.corners) do is_corner[corner] = true end
   function M.corner_valid(corner)
     if not is_corner[corner] then return false end
-    return valid_slot(params:get("morph_" .. corner)) == true
+    return S.lib.scenes.playable(params:get("morph_" .. corner))
   end
 
   function M.corners_ready()

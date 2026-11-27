@@ -1284,11 +1284,35 @@ test("drawing MOD with a stale plan leaves the morph's plan, owned and flashed a
   assert_equal(state.flashed, flashed, "the flash is not reset")
 end)
 
+test("redrawing MOD's four morph corners validates only replacement scene data", function()
+  local _, S = loaded()
+  for slot = 1, 4 do capture_scene(slot) end
+  place(S, "morph")
+  local validate, calls = validate_scene, 0
+  validate_scene = function(scene)
+    calls = calls + 1
+    return validate(scene)
+  end
+  redraw()
+  local unchanged = calls
+  S.scenes[2].data = {}
+  redraw()
+  local after_replacement = calls
+  local valid = S.lib.morph.corner_valid("b")
+  redraw()
+  validate_scene = validate
+  assert_equal(unchanged, 0, "unchanged scenes need no full validation")
+  assert_equal(after_replacement, 1, "only the replaced data needs validation")
+  assert_equal(valid, false, "B immediately reflects the invalid replacement")
+  assert_equal(calls, 1, "the rejected scene is cached too")
+end)
+
 -- #896, fix round 1: the morph's own test of a corner (populated and
 -- valid), never MOD's own: a populated corner the morph refuses is empty
 test("a populated but invalid corner is marked [empty]", function()
   local context, S = loaded()
   capture_scene(1); capture_scene(2)
+  S.scenes[2].data = h.deep_copy(S.scenes[2].data)
   S.scenes[2].data.reverb_mix = "broken"                      -- populated, and no scene the morph can use
   assert_true(S.scenes[2].populated, "still populated")
   place(S, "morph_a")
