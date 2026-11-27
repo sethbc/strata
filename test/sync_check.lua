@@ -92,6 +92,7 @@ local function count_arguments(source, open_index)
   for index = open_index, #source do
     local char = source:sub(index, index)
     if char == "(" or char == "{" or char == "[" then
+      if depth == 1 then has_content = true end
       depth = depth + 1
     elseif char == ")" or char == "}" or char == "]" then
       depth = depth - 1

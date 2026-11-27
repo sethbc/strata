@@ -2333,6 +2333,20 @@ test("the sync check accepts a pending command that is not called and fails one 
   end
 end)
 
+test("the sync check counts grouped operands and table constructors (#1256)", function()
+  local sync = h.sync_check
+  local function accepts(signature, arguments)
+    local source = 'this.addCommand(\\probe, "' .. signature .. '", { });'
+    return (sync.check("engine.probe(" .. arguments .. ")", source))
+  end
+  assert_true(accepts("", ""))
+  assert_true(not accepts("", "(1)"))
+  for _, argument in ipairs({ "(1)", "(((1)))", "{}", "{1, 2}" }) do
+    assert_true(accepts("i", argument), argument .. " counts as one argument")
+  end
+  assert_true(accepts("ii", "(1), {}"))
+end)
+
 -- matron's clock_start_from_source (clock.cc): the source's beat is 0, every
 -- waiting sync's beat is reset to 0 (clock_scheduler_reset_sync_events, so it
 -- fires on the next tick and counts on from 0), then norns calls
