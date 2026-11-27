@@ -3311,6 +3311,12 @@ function stubs.install(options)
     context.polls.fire("bufferSaveResult", 0)
   end
 
+  -- Publish a complete SC receipt image without synthesizing cells or wakes.
+  function context.write_save_receipt_cells(bytes)
+    assert(save_file:seek("set", records_start))
+    assert(save_file:write(bytes))
+  end
+
   function context.save_result(value, lose_poll, bytes_written)
     local slots = options.engine_spec.num_buffers
     local code = math.floor(value / slots)
