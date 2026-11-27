@@ -498,8 +498,8 @@ return function(S)
   -- again from the file's own value, now in the default tuning (with the
   -- file's scale and root, which come before the voices), honoring the
   -- read's silent flag: a PSET loads the voice's exact saved pitch (#125). A
-  -- PSET with its tuning lines, or one read over the default tuning, sets
-  -- nothing here
+  -- voice whose missing quantize switch was defaulted also reapplies its
+  -- saved frequency, since the session's switch could have snapped it.
   S.register_pset_hook({name = "tuning", read = function(path_base, number, pset_path, silent)
     local tones_text = params:get("tuning_tones")
     if tones_text ~= current.text then
@@ -524,15 +524,16 @@ return function(S)
       M.apply_text(current.text)
     end
     local setup = S.lib.params_setup
-    if not setup.read_defaulted("tuning_tones") then return end
-    local file = io.open(pset_path, "r")
-    if not file then return end
-    local text = file:read("*a") or ""
-    file:close()
+    local tuning_defaulted = setup.read_defaulted("tuning_tones")
+    local text
     for voice_idx = 1, S.constants.NUM_VOICES do
-      local id = "v" .. voice_idx .. "_freq"
-      local value = tonumber(setup.pset_value(text, id) or "")
-      if value then params:set(id, value, silent) end
+      local prefix = "v" .. voice_idx .. "_"
+      if tuning_defaulted or setup.read_defaulted(prefix .. "quantize") then
+        text = text or S.lib.data_files.read_text(pset_path) or ""
+        local id = prefix .. "freq"
+        local value = tonumber(setup.pset_value(text, id) or "")
+        if value then params:set(id, value, silent) end
+      end
     end
   end})
 

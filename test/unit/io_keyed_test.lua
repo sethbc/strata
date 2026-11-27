@@ -42,6 +42,27 @@ local function pset_with(context, name, lines)
   return path
 end
 
+test("a keyed PSET choice uses the first active line with either line ending (#1223)", function()
+  local context, S = started()
+  local calls = probe(S)
+  for _, lines in ipairs({
+    {'"probe_pick_key": b'},
+    {'-- "probe_pick_key": a', '"probe_pick_key": b', '"probe_pick_key": off'},
+    {'"probe_pick_key": b\r'},
+  }) do
+    local path = pset_with(context, "key-lines", lines)
+    for _, silent_read in ipairs({false, true}) do
+      params:set("probe_pick", 1)
+      local before = #calls
+      params:read(path, silent_read)
+      assert_equal(table.concat(calls, " ", before + 1), silent_read and "" or "b",
+        "the routing action sees only the recalled key")
+      assert_equal(S.lib.io_keyed.key("probe_pick"), "b", table.concat(lines, " / "))
+      assert_equal(params:get("probe_pick"), 3)
+    end
+  end
+end)
+
 test("add makes an option and a hidden key after it, the first key the default", function()
   local _, S = started()
   probe(S)

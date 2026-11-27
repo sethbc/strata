@@ -706,6 +706,8 @@ return function(S)
       if params.lookup[param_id(k, "quantize")] then
         params:set(param_id(k, "quantize"), mode_index(record.quantize), true)
       end
+    else
+      recorder.quantize = GESTURES.modes[params:get(param_id(k, "quantize"))]
     end
     sync_play_param(k)
   end

@@ -126,7 +126,7 @@ Recommended settings:
 
 Lifecycle:
 - **Initialization**: its start step creates the metro at init but does not start it.
-- **Control**: the `mutation_enabled` action starts and stops the metro.
+- **Control**: the `mutation_enabled` action starts and stops the metro. A silent PSET read sets the saved interval and starts or stops the timer when its running state differs. Recalling an already running timer preserves its phase (#1226).
 - **Cleanup**: step 80 stops it (and sets `mutation_enabled` to 0), so no timer is left behind.
 
 ## Randomize and its undo

@@ -8,6 +8,66 @@ local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.as
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local engine_state_for_voice, FX_PARAM_IDS = h.engine_state_for_voice, h.FX_PARAM_IDS
 
+test("silent PSET tempo reaches the internal clock before its hooks and leaves peers in charge (#1227)", function()
+  for _, source in ipairs({"internal", "link", "midi", "crow"}) do
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    local path = context.data_dir .. "tempo.pset"
+    h.write_text(path, '"tempo": 60\n')
+    local sources = params:lookup_param("clock_source").options
+    for i, name in ipairs(sources) do if name == source then params:set("clock_source", i) end end
+    local first = S.registry.pset_hooks[1]
+    local original, observed = first.read
+    first.read = function(...)
+      observed = S.lib.params_setup.beat_seconds_now()
+      if original then return original(...) end
+    end
+    params:read(path, true)
+    first.read = original
+    assert_equal(params:get("tempo"), 60)
+    local expected = source == "internal" and 1 or 0.5
+    assert_near(observed, expected, 1e-6, source .. " first hook")
+    context.clock.run_for(0.1)
+    assert_near(clock.get_beat_sec(), expected, 1e-6, source .. " beat")
+    assert_equal(params:get("clock_tempo"), source == "internal" and 60 or 120, source)
+  end
+end)
+
+test("silent tempo recall also handles a file that explicitly carries the clock param (#1227)", function()
+  local context = load_strata()
+  finish_startup(context)
+  local path = context.data_dir .. "clock-tempo.pset"
+  h.write_text(path, '"tempo": 60\n"clock_tempo": 60\n')
+  params:read(path, true)
+  context.clock.run_for(0.1)
+  assert_near(clock.get_beat_sec(), 1, 1e-6)
+end)
+
+test("a silent preset restores the mutation timer's interval and enabled state (#1226)", function()
+  local context = load_strata()
+  finish_startup(context)
+  local timer = local_value("S").mutation_metro
+  local path = context.data_dir .. "mutation.pset"
+  for _, enabled in ipairs({0, 1}) do
+    params:set("mutation_enabled", 1 - enabled)
+    params:set("mutation_rate", 1)
+    h.write_text(path, '"mutation_enabled": ' .. enabled .. '\n"mutation_rate": 9\n"mutation_probability": 1\n"mutation_amount": 1\n')
+    params:read(path, true)
+    local before = params:get("v1_freq")
+    math.randomseed(12345)
+    if timer.running then timer.event() end  -- the stub's metros are ticked by hand
+    assert_equal(params:get("v1_freq") ~= before, enabled == 1, "a tick mutates only while enabled")
+    assert_near(timer.time, 9, 1e-9, "seconds between ticks")
+    if enabled == 1 then
+      local starts, start = 0, timer.start
+      timer.start = function(self) starts = starts + 1; start(self) end
+      params:read(path, true)
+      assert_equal(starts, 0, "rereading a running timer preserves its phase")
+    end
+  end
+end)
+
 -- The stock file parameter lists a changed selection's directory even during
 -- a silent read. Record the host boundary without ever running its scanner.
 test("all buffer file setters protect the native browser across preset and OSC input", function()

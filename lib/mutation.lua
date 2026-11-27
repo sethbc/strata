@@ -629,6 +629,20 @@ return function(S)
     S.mutation_metro.event = gentle_mutate
   end)
 
+  -- Silent PSET reads skip both mutation actions. Keep a running timer's
+  -- phase on an unchanged read, and set the interval before starting it.
+  S.register_pset_hook({name = "mutation", read = function(_, _, _, silent)
+    local timer = S.mutation_metro
+    if not silent or not timer then return end
+    local interval = params:get("mutation_rate")
+    if timer.time ~= interval then timer.time = interval end
+    if params:get("mutation_enabled") == 1 then
+      if not timer.is_running then timer:start() end
+    elseif timer.is_running then
+      timer:stop()
+    end
+  end})
+
   -- cleanup()'s steps: stop the drift, then the mutations, setting their
   -- param to off so param and metro agree, then cancel the undo's expiry clock
   -- (S.lib.clocks.cancel: a cleanup step's, at once)
