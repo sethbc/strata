@@ -1,6 +1,6 @@
 # Strata development status
 
-Last updated 2026-11-25, after the 3.9.0 release. This file is the hand-off between machines and sessions: what is open, and the limits to plan around. Keep it to that, and update it at the end of each piece of work: a pull request that closes an open item removes its line, and a release updates the first section.
+Last updated 2026-11-27, after the release review. This file is the hand-off between machines and sessions: what is open, and the limits to plan around. Keep it to that, and update it at the end of each piece of work: a pull request that closes an open item removes its line, and a release updates the first section.
 
 ## Where things are
 
@@ -10,7 +10,7 @@ Last updated 2026-11-25, after the 3.9.0 release. This file is the hand-off betw
 
 ## Open items
 
-- **Next: the pre-4.0 review** (`ROADMAP.md`, pre-4.0 and 4.0): one full code review of the whole project, every finding its own issue and fix, released as a pre-4.0 release; only #6 and the factory sounds wait for 4.0.
+- **Pre-4.0 review.** Track the remaining work in the [release board issues](https://github.com/sethbc/strata/issues?q=is%3Aopen%20label%3Areview-2026-11-27-board) and the [additional test, code quality and performance issues](https://github.com/sethbc/strata/issues?q=is%3Aopen%20label%3Areview-2026-11-27-specialists). The four release blockers covered file parameter handling, rejected slice insertions, the file being edited during a replacement and preset files whose backups failed. Hardware checks and factory sounds are scheduled for 4.0.
 - [#6](https://github.com/sethbc/strata/issues/6) **Hardware check on norns** (milestone 4.0): run once, on the 4.0 build; it gates no 3.x release. Its body is the essential list, with a section for each release's additions (3.2's sound features, then 3.3 to 3.7, 3.8's as §13, and 3.9's in three: the state machines as §14, the sequencer's rework as §15 and the reverb freeze as §16), each item saying what passing looks like. **Nothing added since 3.2 has run on a device:** every integration of 3.6 was built from its device's documents and sources (`docs/design/3.6-facts/`), and 3.7's to 3.9's features were checked against stubs and a silent scsynth.
 
 ## Limits to keep in mind
