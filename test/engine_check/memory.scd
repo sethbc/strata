@@ -183,11 +183,11 @@ var checkGrainSynthSizes = {
 
 // What one \strataRecord takes of the pool (a loop recording, with its
 // pre-roll), and the head guard's size: the small probes that fit with and
-// without twenty of each. The guard is measured as its own graph against a
+// without a batch of identical nodes. The guard is measured against a
 // check-only graph with the same inputs that returns the frame as it came
 // (slotHeadGuard is what \strataGrainBuf adds: StrataLoop.sc).
-var sizeOf = { arg start;
-    var count = 20, before = floodFit.value, synths, after;
+var sizeOf = { arg start, count = 20;
+    var before = floodFit.value, synths, after;
     synths = count.collect({ arg index; start.value(index) });
     server.sync; 0.1.wait;
     after = floodFit.value;
@@ -196,7 +196,9 @@ var sizeOf = { arg start;
 };
 var checkRecordSizes = {
     var privateBus = Bus.audio(server, 2), controlBus = Bus.control(server, 40), group = Group.after(engine.processGroup), recordKB, guardKB, plainKB;
-    var slotFrames = engine.buffersL[0].numFrames;
+    // A 16.9 KB probe over 20 nodes is a 0.84 KB step, wider than the
+    // guard's margin under 8 KB. Over 256 nodes a step is under 0.07 KB.
+    var guardCount = 256, slotFrames = engine.buffersL[0].numFrames;
     // every input of the guard a signal, as in \strataGrainBuf (constants
     // would fold its arithmetic away), in both graphs
     SynthDef(\strataCheckGuardSize, { arg frame = 1000, lowest = 0, highest = 1e7, rate = 1, durFrames = 2000, recHead;
@@ -212,13 +214,13 @@ var checkRecordSizes = {
             \level, 0, \feedback, 1, \loop, 1, \frames, slotFrames, \peakFrames, slotFrames, \peakBuf, engine.slotPeakBuffer(0).bufnum,
             \framesOut, controlBus.index + 20 + index, \headOut, controlBus.index + index, \replyID, 99], group)
     });
-    guardKB = sizeOf.({ arg index; Synth(\strataCheckGuardSize, [\recHead, engine.areaState[\record][\idleHead].index], group) });
-    plainKB = sizeOf.({ arg index; Synth(\strataCheckGuardPlain, [\recHead, engine.areaState[\record][\idleHead].index], group) });
+    guardKB = sizeOf.({ arg index; Synth(\strataCheckGuardSize, [\recHead, engine.areaState[\record][\idleHead].index], group) }, guardCount);
+    plainKB = sizeOf.({ arg index; Synth(\strataCheckGuardPlain, [\recHead, engine.areaState[\record][\idleHead].index], group) }, guardCount);
     check.((recordKB > 0) and: { recordKB <= 24 },
         "memory: a record synth takes at most 24 KB (% KB of the pool, by allocation probes)".format(recordKB.round(0.1)));
     check.(((guardKB - plainKB) > 0) and: { (guardKB - plainKB) <= 8 },
-        "memory: the head guard takes at most 8 KB per buffer grain synth (% KB: % KB against % KB without it)".format(
-            (guardKB - plainKB).round(0.1), guardKB.round(0.1), plainKB.round(0.1)));
+        "memory: the head guard takes at most 8 KB per buffer grain synth (% KB: % KB against % KB without it, % nodes of each, steps of % KB)".format(
+            (guardKB - plainKB).round(0.01), guardKB.round(0.01), plainKB.round(0.01), guardCount, (probeKB / guardCount).round(0.001)));
     group.free; privateBus.free; controlBus.free;
 };
 
