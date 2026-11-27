@@ -68,11 +68,14 @@ return function(S)
   end
 
   local function deactivate(player, key)
+    local activation = state.activations[key]
+    if activation then
+      state.activations[key] = nil
+      if player.active_routine == activation.id then player.active_routine = nil end
+      if S.lib.clocks.alive(activation) then S.lib.clocks.stop(activation) end
+    end
     if call_own(player, key, "inactive") then return end
     player.is_active = false
-    -- a clock another host's base canceled is not stopped again (#870's review)
-    if S.lib.clocks.alive(state.activations[key]) then S.lib.clocks.stop(state.activations[key]) end
-    state.activations[key] = nil
     player.active_routine = nil
   end
 

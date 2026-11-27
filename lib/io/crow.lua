@@ -64,6 +64,11 @@ return function(S)
     return params:get(id)
   end
 
+  local function owned_output()
+    local value = param_value("clock_crow_out")
+    return value and value > 1 and value - 1 or 0
+  end
+
   function M.present() return norns.crow.dev ~= nil end
 
   -- A number as a line writes it: at most four decimals, no trailing zeros
@@ -91,11 +96,14 @@ return function(S)
   end
 
   local function flush_pending()
+    -- A flush can precede the step that notices norns taking this jack.
+    local owned = owned_output()
+    local reserved = owned > 0 and "out" .. owned
     while #budget.order > 0 and budget.sent < CROW.lines_per_window do
       local key = table.remove(budget.order, 1)
       local line = budget.pending[key]
       budget.pending[key] = nil
-      deliver(line)
+      if key ~= reserved then deliver(line) end
     end
   end
 
@@ -186,10 +194,6 @@ return function(S)
   end
   local function norns_output(n)
     return param_value("clock_crow_out") == n + 1
-  end
-  local function owned_output()
-    local value = param_value("clock_crow_out")
-    return value and value > 1 and value - 1 or 0
   end
 
   local function input_mode(n) return SPEC.modes[param_value(in_id(n, "mode")) or 1] end
@@ -307,6 +311,7 @@ return function(S)
 
   -- Send output n's lines again and restart its clock
   local function apply_output(n)
+    drop_pending("out" .. n)
     state.applied_range[n] = param_value(out_id(n, "range"))
     stop_output_clock(n)
     state.last_volts[n] = nil
@@ -333,7 +338,10 @@ return function(S)
     if output ~= state.owners.output then
       local previous = state.owners.output
       state.owners.output = output
-      if output > 0 then stop_output_clock(output) end
+      if output > 0 then
+        drop_pending("out" .. output)
+        stop_output_clock(output)
+      end
       if previous > 0 then apply_output(previous) end
     end
   end
@@ -594,7 +602,10 @@ return function(S)
   end
 
   -- io_keyed has resolved the saved keys. A silent read skipped the actions.
-  S.register_pset_hook({name = "io_crow", read = function()
+  S.register_pset_hook({name = "io_crow", read = function(_, _, _, silent)
+    if silent then
+      for n = 1, SPEC.inputs do apply_input(n) end
+    end
     for n = 1, SPEC.outputs do
       local key = S.lib.io_keyed.key(out_id(n, "source"))
       if key ~= state.applied_source[n] then

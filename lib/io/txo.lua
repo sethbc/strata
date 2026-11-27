@@ -231,7 +231,7 @@ return function(S)
     if #line.notes == 0 then
       lower(output, line)
     elseif index == #line.notes + 1 then
-      bus().send("txo", "cv", output, level_of(line.notes[#line.notes]))
+      bus().restore_cv("txo", output, level_of(line.notes[#line.notes]))
     end
   end
 
@@ -256,14 +256,14 @@ return function(S)
       local line = lines[output]
       local sent_env = false
       local ok, trigger = pcall(function()
-        bus().send("txo", "cv", output, level_of(note))
+        if not bus().send_note_pitch("txo", output, level_of(note), note.envelope and 3 or 2) then return false end
         if note.envelope then sent_env = bus().send("txo", "env", output, 1) end
         return bus().send("txo", "tr", output, 1)
       end)
       if not ok then
         -- The core will get no off for this note. Restore the old CV and
         -- lower an envelope raised here, preserving the original error.
-        if line then pcall(function() bus().send("txo", "cv", output, level_of(line.notes[#line.notes])) end) end
+        if line then pcall(function() bus().restore_cv("txo", output, level_of(line.notes[#line.notes])) end) end
         if sent_env and not (line and line.env_high) then pcall(bus().send_off, "txo", "env", output, 0) end
         error(trigger, 0)
       end
