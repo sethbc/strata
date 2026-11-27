@@ -220,7 +220,9 @@ function onReceiveOSC(message, connections)
   if not connections[1] or message[1] ~= "{readout["address"]}" then return end
   local argument = message[2][1]
   local scene = argument and argument.value
-  if type(scene) == "number" and scene >= 1 and scene <= {readout["max"]} and scene == math.floor(scene) then
+  if scene == 0 then
+    display.values.text = "{readout["label"]} —"
+  elseif type(scene) == "number" and scene >= 1 and scene <= {readout["max"]} and scene == math.floor(scene) then
     display.values.text = "{readout["label"]} " .. math.floor(scene)
   end
 end''')
