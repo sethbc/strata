@@ -746,8 +746,7 @@ return function(S)
     }
 
     for slot = 1, NUM_BUFFERS do
-      params:add_file("buf" .. slot .. "_file", "buffer " .. slot .. " file", _path.audio)
-      params:set_action("buf" .. slot .. "_file", function(path) load_buffer(slot, path) end)
+      S.lib.buffers.add_file_param(slot)
       params:add_trigger("buf" .. slot .. "_record", "buffer " .. slot .. " record")
       params:set_action("buf" .. slot .. "_record", function() record_buffer(slot) end)
       params:add_trigger("buf" .. slot .. "_clear", "buffer " .. slot .. " clear")

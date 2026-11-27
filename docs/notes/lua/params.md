@@ -1,5 +1,7 @@
 ## Must not break
 
+- The eight buffer files are native file params with the buffer module's setter for direct, OSC and PSET selections. See `docs/notes/lua/buffers.md` for directory listing and navigation.
+
 - Param ids are unique and prefixed (`strata_fx`, ...). norns has built-ins such as `reverb`, and the stub's system params make a collision fail.
 - A group's size `n` equals the number of params that follow it. Groups cannot nest; the test stub errors on a group opened inside another, or one left short.
 - **A param that carries a note's pitch has step 0** (`freq`, `grain_pitch`, `buf_rate`): a step rounds the value a MIDI or sequenced note sets, so its own note would play out of tune with its chord's extra notes, which get the exact rate from `S.lib.notes.note_values` (#679). A turn's size is the spec's quantum (default 0.01 of the raw range), never its step, so a step of 0 changes no turn, fader or arc ring; the display is norns' two-decimal default.

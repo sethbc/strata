@@ -1219,7 +1219,18 @@ local function make_params(util, controlspec)
     end
     -- param objects expose the norns param methods (get/set/bang/string/delta)
     param.get = function() return ParamSet.get(paramset, param.id) end
-    param.set = function(_, value, silent) return ParamSet.set(paramset, param.id, value, silent) end
+    if param.t == tFILE then
+      param.set = function(self, value, silent)
+        if type(value) ~= "string" then error("file param needs a path string, got " .. tostring(value), 2) end
+        if self.path == value then return end
+        self.path = value
+        if value ~= "-" then load_file_dir(self)
+        else self.dir, self.dirfiles, self.dirpos = nil, nil, nil end
+        if not silent then self:bang() end
+      end
+    else
+      param.set = function(_, value, silent) return ParamSet.set(paramset, param.id, value, silent) end
+    end
     param.bang = function() bang(param) end
     param.string = function() return ParamSet.string(paramset, param.id) end
     -- core/params/*.lua: the param's own delta does the work, and
@@ -1420,18 +1431,7 @@ local function make_params(util, controlspec)
       bang(param)
       return
     elseif param.t == tFILE then
-      if type(value) ~= "string" then
-        error("params:set(" .. id .. ") file param needs a path string, got " .. tostring(value), 2)
-      end
-      if param.path ~= value then
-        param.path = value
-        if value ~= "-" then
-          load_file_dir(param)
-        else
-          param.dir, param.dirfiles, param.dirpos = nil, nil, nil
-        end
-        changed = true
-      end
+      return param:set(value, silent)
     elseif param.t == tTEXT then
       if param.text ~= value then param.text = value; changed = true end
     end
@@ -1491,6 +1491,10 @@ local function make_params(util, controlspec)
     elseif param.t == tOPTION then
       local step = delta < 0 and math.floor(delta) or math.ceil(delta)
       self:set(id, param.selected + step)
+    elseif param.t == tFILE and param.dirpos then
+      if delta > 0 and param.dirpos < #param.dirfiles then param.dirpos = param.dirpos + 1
+      elseif delta < 0 and param.dirpos > 1 then param.dirpos = param.dirpos - 1 end
+      param:set(param.dir .. param.dirfiles[param.dirpos])
     elseif param.t == tBINARY then
       if param.behavior == "momentary" then
         self:set(id, delta)

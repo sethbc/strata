@@ -8,6 +8,77 @@ local test, assert_true, assert_equal, assert_near = h.test, h.assert_true, h.as
 local load_strata, local_value, finish_startup = h.load_strata, h.local_value, h.finish_startup
 local engine_state_for_voice, FX_PARAM_IDS = h.engine_state_for_voice, h.FX_PARAM_IDS
 
+-- The stock file parameter lists a changed selection's directory even during
+-- a silent read. Record the host boundary without ever running its scanner.
+test("all buffer file setters protect the native browser across preset and OSC input", function()
+  local context = load_strata(); finish_startup(context)
+  local native_scans = {}
+  util.scandir = function(folder)
+    native_scans[#native_scans + 1] = folder
+    return {}
+  end
+  local path = context.audio_dir .. "Kit $5/take.wav"
+  local pset = context.data_dir .. "paths.pset"
+  local lines = {}
+  for slot = 1, 8 do lines[slot] = '"buf' .. slot .. '_file": ' .. path end
+  h.write_text(pset, table.concat(lines, "\n") .. "\n")
+  for _, silent in ipairs({true, false}) do
+    context.clear_engine_calls()
+    params:read(pset, silent)
+    assert_equal(#native_scans, 0, "no PSET path goes to the host scanner")
+    local loads = context.calls_named("loadBuffer")
+    assert_equal(#loads, silent and 0 or 8, "only an ordinary read plays the selected files")
+    for slot = 1, 8 do
+      local param = params:lookup_param("buf" .. slot .. "_file")
+      assert_equal(param.path, _path.audio)
+      assert_equal(param.dir, _path.audio, "PARAMETERS opens in the audio folder")
+      if not silent then assert_equal(loads[slot].args[2], path) end
+    end
+  end
+  context.clear_engine_calls()
+  context.osc.receive("/param/buf8_file", {context.audio_dir .. "Kit $7/other.wav"})
+  assert_equal(#native_scans, 0)
+  assert_equal(context.calls_named("loadBuffer")[1].args[2], context.audio_dir .. "Kit $7/other.wav")
+  assert_equal(params:lookup_param("buf8_file").dir, _path.audio)
+end)
+
+test("a buffer file selection preserves the name and navigates the files in its folder", function()
+  local context = load_strata(); finish_startup(context)
+  local folder = context.audio_dir .. "Sam's kit/"
+  util.make_dir(context.audio_dir .. "kit/sub/")
+  assert(os.rename(context.audio_dir .. "kit", folder:sub(1, -2)))
+  h.write_text(folder .. "a.wav", "")
+  h.write_text(folder .. "b's pad.wav", "")
+  local native_scans = 0
+  util.scandir = function() native_scans = native_scans + 1; return {} end
+  context.osc.receive("/param/buf4_file", {folder .. "a.wav"})
+  assert_equal(native_scans, 0, "the file list uses the quoted folder reader")
+  local param = params:lookup_param("buf4_file")
+  assert_equal(param.dir, folder)
+  assert_equal(table.concat(param.dirfiles, "|"), "a.wav|b's pad.wav")
+  assert_equal(param.dirpos, 1)
+  params:delta(param.id, 1)
+  assert_equal(params:string(param.id), "b's pad.wav")
+  assert_equal(context.calls_named("loadBuffer")[2].args[2], folder .. "b's pad.wav")
+  context.clear_engine_calls()
+  param:set(folder .. "bad" .. string.char(0) .. "name.wav")
+  param:set(42)
+  assert_equal(param.path, folder .. "b's pad.wav")
+  assert_equal(#context.calls_named("loadBuffer"), 0)
+end)
+
+test("a preset with a relative buffer path keeps its directory navigation", function()
+  local context = load_strata(); finish_startup(context)
+  local pset = context.data_dir .. "relative.pset"
+  local path = h.repo_root .. "/test/fixtures/factory/dusk/set.params"
+  h.write_text(pset, '"buf1_file": ' .. path .. "\n")
+  params:read(pset, true)
+  local param = params:lookup_param("buf1_file")
+  assert_equal(param.path, path)
+  assert_true(param.dirpos ~= nil, "the chosen file has a place among its neighbors")
+  assert_equal(param.dirfiles[param.dirpos], "set.params")
+end)
+
 -- 3.8 (package 0d): every type's synth key is a menu param of every voice,
 -- the voice's own type's in its param_order first, each default the type
 -- record's
