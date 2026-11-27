@@ -3349,6 +3349,13 @@ test("the download, retry and install use the manifest's Ubuntu sources in both 
   end
 end)
 
+-- An Ubuntu tag identifies the distribution; the manifest digest fixes its contents.
+local function pinned_ubuntu_release(dockerfile)
+  local release, digest = dockerfile:match("\nFROM ubuntu:(%d+%.%d+)@sha256:([a-f0-9]+)\n")
+  assert_true(digest and #digest == 64, "the image pins its Ubuntu tag to a full SHA256 digest")
+  return release
+end
+
 -- The SuperCollider 3.13 image (test/run_engine_check_313.sh) runs what CI
 -- runs: the same Ubuntu release and SuperCollider package
 test("the 3.13 Docker image pins CI's SuperCollider and Ubuntu", function()
@@ -3359,7 +3366,7 @@ test("the 3.13 Docker image pins CI's SuperCollider and Ubuntu", function()
   assert_true(ci_version ~= nil, "the workflow pins SC_APT_VERSION")
   assert_equal(image_version, ci_version, "test/docker/sc313/Dockerfile's SC_APT_VERSION")
   local ci_ubuntu = workflow:match("engine%-shard:.-runs%-on:%s*ubuntu%-(%S+)")
-  assert_equal(dockerfile:match("\nFROM ubuntu:(%S+)"), ci_ubuntu, "the image's Ubuntu release")
+  assert_equal(pinned_ubuntu_release(dockerfile), ci_ubuntu, "the image's Ubuntu release")
   local runner = read_repo_file("test/run_engine_check_313.sh")
   assert_true(runner:find("docker/sc313", 1, true) ~= nil, "the runner builds test/docker/sc313")
 end)
@@ -3370,7 +3377,7 @@ end)
 test("the 3.14.1 Docker image pins a 3.14.1 package, the one docs/checks.md names", function()
   local dockerfile = read_repo_file("test/docker/sc314/Dockerfile")
   local version = dockerfile:match("\nARG SC_APT_VERSION=(%S+)")
-  local release = dockerfile:match("\nFROM ubuntu:(%S+)")
+  local release = pinned_ubuntu_release(dockerfile)
   assert_true(version ~= nil and release ~= nil, "test/docker/sc314/Dockerfile pins SC_APT_VERSION on an Ubuntu release")
   assert_true(version:match("^%d+:3%.14%.1[+~]") ~= nil, "the pin is a 3.14.1 package: " .. version)
   assert_true(dockerfile:find("\"supercollider-language=$SC_APT_VERSION\" \"supercollider-server=$SC_APT_VERSION\"", 1, true) ~= nil,

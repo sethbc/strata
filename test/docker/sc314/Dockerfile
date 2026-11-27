@@ -14,7 +14,7 @@
 # with the repo at /src and a norns checkout at /norns. 26.10's jackd2
 # (1.9.22) no longer carries jack_lsp, which check.sh waits on:
 # jack-example-tools does (24.04's jackd2 still has it).
-FROM ubuntu:26.10
+FROM ubuntu:26.10@sha256:29ac5e68db830ab61b7d77c1ffdb78c73f0631de88a5d77bf4399868f64f38dd
 
 ARG SC_APT_VERSION=1:3.14.1+repack2-1build1
 

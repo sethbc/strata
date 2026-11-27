@@ -7,7 +7,7 @@
 # .github/workflows/test.yml (test/unit/docs_test.lua checks that the two
 # pins match). The container must run as a non-root user (QtWebEngine
 # refuses root), with the repo at /src and a norns checkout at /norns.
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b
 
 ARG SC_APT_VERSION=1:3.13.0+repack-1ubuntu3
 
