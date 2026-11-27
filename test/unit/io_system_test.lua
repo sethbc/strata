@@ -366,7 +366,7 @@ local function watch_ii(rig)
   local ii = S.lib.io_ii
   local seen = {accepted_full = 0, most = 0, sends = 0, offs = 0, calls = 0, owed = {}, owed_count = 0,
     most_owed = 0, offs_joined = 0}
-  local send, send_off = ii.send, ii.send_off
+  local send_off = ii.send_off
   local function note_waiting()
     local waiting = ii.queued()
     if waiting > seen.most then seen.most = waiting end
@@ -391,14 +391,19 @@ local function watch_ii(rig)
       seen.owed_count = seen.owed_count - 1
     end
   end
-  ii.send = function(device, command, ...)
-    local waiting = ii.queued()
-    seen.calls = seen.calls + 1
-    local accepted = send(device, command, ...)
-    if accepted then seen.sends = seen.sends + 1 end
-    if accepted and waiting >= ii.II.queue_max then seen.accepted_full = seen.accepted_full + 1 end
-    note_waiting()
-    return accepted
+  for _, method in ipairs({"send", "send_tracked", "send_note_pitch", "restore_cv"}) do
+    local send = ii[method]
+    ii[method] = function(...)
+      local waiting = ii.queued()
+      seen.calls = seen.calls + 1
+      local result = send(...)
+      if ii.queued() > waiting then
+        seen.sends = seen.sends + 1
+        if waiting >= ii.II.queue_max then seen.accepted_full = seen.accepted_full + 1 end
+      end
+      note_waiting()
+      return result
+    end
   end
   ii.send_off = function(device, command, first, ...)
     seen.offs = seen.offs + 1

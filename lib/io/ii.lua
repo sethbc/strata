@@ -70,7 +70,7 @@ return function(S)
   -- until the queue next empties. handlers_wait: nil, or the LFO steps
   -- left before Teletype's handlers follow a leave (#751)
   local state = {started = false, stopped = false, leading = false, queue = {}, lines = {}, pairs = {}, dropped = 0,
-    errors = {}, owed = {order = {}, by_key = {}}, owing = false, leave_room = nil,
+    restores = {}, errors = {}, owed = {order = {}, by_key = {}}, owing = false, leave_room = nil,
     step = 0, turns = {}, asking = 0, wanting = {}, refusals = 0, pressed = false, handlers_wait = nil}
 
   local function bus() return S.lib.io_rig.get(SPEC.bus_key) end
@@ -94,13 +94,6 @@ return function(S)
     local args = {}
     for index = 1, select("#", ...) do args[index] = S.lib.io_crow.number((select(index, ...))) end
     return "ii." .. device .. "." .. command .. "(" .. table.concat(args, ", ") .. ")"
-  end
-
-  -- A refused send, counted for IO's title until the next lead starts the
-  -- count again (#937): the drops of the last lead, kept after it ends
-  local function count_drop()
-    state.dropped = state.dropped + 1
-    request_redraw()
   end
 
   -- A queued entry: its text, whether it is an off, and its line's key
@@ -193,6 +186,7 @@ return function(S)
   end
 
   local function forget_turns()
+    state.restores = {}
     state.turns, state.asking, state.wanting, state.pressed = {}, 0, {}, false
   end
 
@@ -267,14 +261,16 @@ return function(S)
     return true
   end
 
-  local function refuse(turn)
+  local function refuse(turn, count)
     if not turn.wanting then
       state.refusals = state.refusals + 1
       turn.wanting = state.refusals
       state.wanting[turn] = true
     end
     state.pressed = true
-    count_drop()
+    if count == 0 then return end  -- A pending CV still wants its turn. It was counted on its first refusal.
+    state.dropped = state.dropped + (count or 1)
+    request_redraw()
   end
 
   -- A sent entry's turn is served; at each step the turns that have not
@@ -304,16 +300,15 @@ return function(S)
   -- step, or while pressed as a later note of the line in the step;
   -- false and nothing unless Strata leads. A line queued here is never
   -- taken out again while Strata leads
-  local function enqueue(on_sent, device, command, ...)
-    if not state.leading then return false end
-    local entry = entry_for(false, device, command, ...)
+  local function enqueue(entry, on_sent, note_lines, retry)
     local turn = turn_for(entry)
     ask(turn)
-    if not admits(turn, command) then
-      refuse(turn)
+    if (note_lines and #state.queue + note_lines > II.queue_max) or not admits(turn, entry.command) then
+      refuse(turn, retry and 0 or note_lines)
       return false
     end
-    if command == SPEC.note_trigger or turn.id == entry.pair then turn.closed = true end
+    state.restores[entry.key] = nil
+    if entry.command == SPEC.note_trigger or turn.id == entry.pair then turn.closed = true end
     entry.turn, entry.on_sent = turn, on_sent
     turn.waiting = turn.waiting + 1
     table.insert(state.queue, entry)
@@ -325,12 +320,29 @@ return function(S)
   end
 
   function M.send(device, command, ...)
-    return enqueue(nil, device, command, ...)
+    if not state.leading then return false end
+    return enqueue(entry_for(false, device, command, ...))
+  end
+
+  -- A note's first CV reserves enough space for all its synchronous sends.
+  -- Its envelope and trigger follow the same turn before anything else runs.
+  function M.send_note_pitch(device, port, volts, note_lines)
+    if not state.leading then return false end
+    return enqueue(entry_for(false, device, SPEC.note_pitch, port, volts), nil, note_lines)
+  end
+
+  -- Releasing the top note owes one CV to the newest note still held.
+  -- Keep only the latest refused CV for each port until it can be queued.
+  function M.restore_cv(device, port, volts)
+    if not state.leading then return end
+    local entry = entry_for(false, device, SPEC.note_pitch, port, volts)
+    if not enqueue(entry) then state.restores[entry.key] = entry end
   end
 
   -- Same admission and ordering as send. Queue discard never calls on_sent.
   function M.send_tracked(on_sent, device, command, ...)
-    return enqueue(on_sent, device, command, ...)
+    if not state.leading then return false end
+    return enqueue(entry_for(false, device, command, ...), on_sent)
   end
 
   -- An off (a gate low or a note's release) is queued exactly when its
@@ -380,6 +392,9 @@ return function(S)
       return false
     end
     local entry = entry_for(true, device, command, ...)
+    if command == SPEC.note_trigger then
+      state.restores[device .. "\n" .. SPEC.note_pitch .. "\n" .. entry.first] = nil
+    end
     if known_low(entry) then return false end
     queue_off(entry)
     return true
@@ -440,6 +455,7 @@ return function(S)
     end
     if #state.queue == 0 then state.pressed = false end
     age_turns()
+    for _, entry in pairs(state.restores) do enqueue(entry, nil, nil, true) end
   end)
 
   ---------------------------------------------------------------------------

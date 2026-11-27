@@ -800,7 +800,7 @@ end)
 for _, mode in ipairs({"er301", "txo", "txo envelope"}) do
   local envelope = mode == "txo envelope"
   local device = envelope and "txo" or mode
-  for _, room in ipairs({0, 1}) do
+  for _, room in ipairs(envelope and {0, 1, 2} or {0, 1}) do
     test(mode .. " releases the sounding note when the next gate is refused with " .. room .. " slots free", function()
       local context = load_strata(); finish_startup(context)
       local S = local_value("S")
@@ -821,9 +821,13 @@ for _, mode in ipairs({"er301", "txo", "txo envelope"}) do
       local port = "ii." .. device .. "."
       local cv = envelope and "cv(3, 5)|ii.txo.env(3, 1)" or "cv(3, 0)"
       assert_equal(table.concat(ii_lines(context), "|"), port .. cv .. "|" .. port .. "tr(3, 1)")
+      context.crow.clear()
       fill(ii, ii.II.queue_max - room)
       key(72, true)
       drain(step, ii)
+      for _, line in ipairs(ii_lines(context)) do
+        assert_true(line:sub(1, #port) ~= port, "a refused note emitted " .. line)
+      end
       context.crow.clear()
       key(60, false)
       drain(step, ii)
@@ -837,34 +841,33 @@ for _, mode in ipairs({"er301", "txo", "txo envelope"}) do
   end
 end
 
-test("a TELEXo envelope note owes a low for each gate admitted at the queue boundary", function()
-  local context = load_strata(); finish_startup(context)
-  local S = local_value("S")
-  local ii = S.lib.io_ii
-  local step = stepper(context, S)
-  lead(context, S)
-  params:set("midi_note_off", 2)
-  params:set("v3_out_txo", 3)
-  params:set("v3_out_txo_cv", 2)
-  drain(step, ii)
-  context.crow.clear()
-  fill(ii, ii.II.queue_max - 2)
-  context.midi.send(1, {type = "note_on", ch = 3, note = 60, vel = 127})
-  drain(step, ii)
-  local raised = {}
-  for _, line in ipairs(ii_lines(context)) do
-    local gate = line:match("^ii%.txo%.(%w+)%(3, 1%)$")
-    if gate then raised[gate] = true end
-  end
-  context.crow.clear()
-  context.midi.send(1, {type = "note_off", ch = 3, note = 60, vel = 0})
-  drain(step, ii)
-  local lows = {}
-  for _, gate in ipairs({"tr", "env"}) do
-    if raised[gate] then lows[#lows + 1] = "ii.txo." .. gate .. "(3, 0)" end
-  end
-  assert_equal(table.concat(ii_lines(context), "|"), table.concat(lows, "|"), "lower exactly the gates crow received")
-end)
+for _, device in ipairs({"er301", "txo"}) do
+  test(device .. " admits a complete note when exactly enough slots remain", function()
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    local ii, step = S.lib.io_ii, stepper(context, S)
+    lead(context, S)
+    params:set("midi_note_off", 2)
+    params:set("v3_out_" .. device, 3)
+    if device == "txo" then params:set("v3_out_txo_cv", 2) end
+    drain(step, ii)
+    context.crow.clear()
+    local room = device == "txo" and 3 or 2
+    local expected = fill(ii, ii.II.queue_max - room)
+    local port = "ii." .. device .. "."
+    expected[#expected + 1] = port .. (device == "txo" and "cv(3, 5)" or "cv(3, 0)")
+    if device == "txo" then expected[#expected + 1] = port .. "env(3, 1)" end
+    expected[#expected + 1] = port .. "tr(3, 1)"
+    context.midi.send(1, {type = "note_on", ch = 3, note = 60, vel = 127})
+    drain(step, ii)
+    assert_equal(table.concat(ii_lines(context), "|"), table.concat(expected, "|"))
+    context.crow.clear()
+    context.midi.send(1, {type = "note_off", ch = 3, note = 60, vel = 0})
+    drain(step, ii)
+    assert_equal(table.concat(ii_lines(context), "|"), port .. "tr(3, 0)" .. (device == "txo" and "|ii.txo.env(3, 0)" or ""))
+  end)
+end
 
 test("a TELEXo envelope note through a full queue gets the offs of the ons it sent", function()
   -- the 2e brief: on cv(n, v), env(n, 1), tr(n, 1); offs tr(n, 0), env(n, 0)
@@ -1633,5 +1636,48 @@ test("the dropped count starts again at a lead", function()
   assert_true(ii.leads(), "the lead taken again")
   assert_equal(ii.dropped(), 0, "and its count started again")
 end)
+
+for _, device in ipairs({"er301", "txo"}) do
+  for _, next_event in ipairs({"hold", "release", "new note"}) do
+    test(device .. " restores the held pitch after congestion: " .. next_event, function()
+      local context = load_strata()
+      finish_startup(context)
+      local S = local_value("S")
+      local ii, step = S.lib.io_ii, stepper(context, S)
+      lead(context, S)
+      params:set("midi_note_off", 2)
+      params:set("v3_out_" .. device, 3)
+      local function key(pitch, down)
+        context.midi.send(1, {type = down and "note_on" or "note_off", ch = 3, note = pitch, vel = down and 127 or 0})
+      end
+      key(60, true)
+      key(72, true)
+      drain(step, ii)
+      local port = "ii." .. device .. "."
+      assert_true(table.concat(ii_lines(context), "|"):find(port .. "cv(3, 1)|" .. port .. "tr(3, 1)", 1, true) ~= nil)
+      context.crow.clear()
+      if next_event == "new note" then
+        fill(ii, 3)
+        -- Four slots reopen before the first retry, as the fourth line reaches crow.
+        assert_true(ii.send_tracked(function() key(84, true) end, "other", "cv", 4, 1))
+        fill(ii, ii.II.queue_max - 4, 5)
+      else
+        fill(ii, ii.II.queue_max)
+      end
+      key(72, false)
+      if next_event == "release" then key(60, false) end
+      context.clock.run_for(0.5)
+      local sent = {}
+      for _, line in ipairs(ii_lines(context)) do
+        if line:sub(1, #port) == port then sent[#sent + 1] = line end
+      end
+      if next_event == "new note" then
+        assert_equal(table.concat(sent, "|"), port .. "cv(3, 2)|" .. port .. "tr(3, 1)")
+      else
+        assert_equal(table.concat(sent, "|"), port .. (next_event == "release" and "tr(3, 0)" or "cv(3, 0)"))
+      end
+    end)
+  end
+end
 
 end

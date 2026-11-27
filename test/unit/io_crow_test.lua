@@ -799,4 +799,48 @@ test("the crow invariant names a set_up value that is neither true nor false", f
   assert_true(invariant.check() ~= nil, "a value that is neither true nor false is reported")
 end)
 
+test("silent recall reinstalls both crow input streams and their voltage ranges", function()
+  local context, S = started()
+  context.crow.plug()
+  for n = 1, 2 do
+    params:set("crow_in" .. n .. "_mode", 2)
+    params:set("crow_in" .. n .. "_range", 3)
+  end
+  local path = h.data_root .. "crow-inputs.pset"
+  params:write(path)
+  for n = 1, 2 do
+    params:set("crow_in" .. n .. "_mode", 3)
+    params:set("crow_in" .. n .. "_range", 1)
+  end
+  context.crow.clear()
+  params:read(path, true)
+  for n = 1, 2 do
+    assert_true(any_line_with(context, "input[" .. n .. "].mode('stream'") ~= nil)
+    context.crow.fire("strata_in", n, 2.5)
+    assert_equal(S.lib.mod_sources.fraction("crow" .. n), 0.25)
+  end
+end)
+
+for _, taken in ipairs({false, true}) do
+  test("a deferred crow voltage is discarded when the jack is " .. (taken and "taken by norns" or "disabled"), function()
+    local context, _, io = started()
+    context.crow.plug()
+    context.clock.run_for(0.201 - util.time() % 0.1)
+    params:set("macro_1", 1)
+    params:set("crow_out2_source_key", "macro1")
+    for _ = 1, io.CROW.lines_per_window do io.send_now("-- filler") end
+    step(context)
+    assert_equal(io.budget_state().pending, 1)
+    context.crow.clear()
+    if taken then
+      context.clock.advance_until(io.clocks().flush, function() params:set("clock_crow_out", 3) end)
+    else
+      params:set("crow_out2_source_key", "off")
+    end
+    context.clock.run_for(0.3)
+    assert_equal(count_lines(context, "output[2].volts = 5"), 0)
+    assert_equal(count_lines(context, "output[2].volts = 0"), taken and 0 or 1)
+  end)
+end
+
 end

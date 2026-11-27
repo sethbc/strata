@@ -28,6 +28,8 @@ local function install_ii(state)
   end
   S.lib.io_ii = {
     leads = function() return state.leading end,
+    send_note_pitch = function(device, port, volts) return recorder("send", true)(device, "cv", port, volts) end,
+    restore_cv = function(device, port, volts) return recorder("send", true)(device, "cv", port, volts) end,
     send = recorder("send", true), send_off = recorder("send_off", true), send_direct = recorder("send_direct"),
     add_params = function()
       local total = 0

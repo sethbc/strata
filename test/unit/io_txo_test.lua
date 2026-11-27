@@ -30,6 +30,8 @@ local function install_ii(state)
   end
   S.lib.io_ii = {
     leads = function() return state.leading end,
+    send_note_pitch = function(device, port, volts) return recorder("send", true)(device, "cv", port, volts) end,
+    restore_cv = function(device, port, volts) return recorder("send", true)(device, "cv", port, volts) end,
     II = {queue_max = 48}, queued = function() return 0 end,
     send_tracked = function(on_sent, ...)
       recorder("send", true)(...)

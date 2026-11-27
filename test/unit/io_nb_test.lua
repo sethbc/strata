@@ -791,4 +791,19 @@ test("the nb invariant names a count that is not a number", function()
   assert_true(answer ~= nil and answer:find("alpha", 1, true) ~= nil, "alpha is named: " .. tostring(answer))
 end)
 
+test("a player's inactive hook runs safely after the activation wake is posted", function()
+  local context, _, players = started({ { "late", { "delayed_active" } } })
+  local player, deactivations = players.late, 0
+  function player:inactive()
+    deactivations = deactivations + 1
+    self.is_active = false
+    if self.active_routine then clock.cancel(self.active_routine) end
+  end
+  choose(2, "late")
+  context.clock.advance_until(player.active_routine, function() choose(2, "none") end)
+  assert_equal(#context.clock.take_errors(), 0)
+  assert_equal(deactivations, 1)
+  assert_equal(count(player, "delayed_active"), 0)
+end)
+
 end

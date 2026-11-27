@@ -43,8 +43,8 @@ return function(S)
     return math.max(ER301.volts.min, math.min(ER301.volts.max, volts))
   end
 
-  local function send_pitch(port, pitch)
-    bus().send("er301", "cv", port, clamp_volts(S.lib.io_targets.volts(pitch)))
+  local function restore_pitch(port, pitch)
+    bus().restore_cv("er301", port, clamp_volts(S.lib.io_targets.volts(pitch)))
   end
 
   -- The line and index of voice's note id, or nil
@@ -72,7 +72,7 @@ return function(S)
       lines[port] = nil
       bus().send_off("er301", "tr", port, 0)
     elseif index == #notes + 1 then
-      send_pitch(port, notes[#notes].pitch)
+      restore_pitch(port, notes[#notes].pitch)
     end
   end
 
@@ -87,13 +87,13 @@ return function(S)
       end_note(voice, id)
       local notes = lines[port]
       local ok, trigger = pcall(function()
-        send_pitch(port, pitch)
+        if not bus().send_note_pitch("er301", port, clamp_volts(S.lib.io_targets.volts(pitch)), 2) then return false end
         return bus().send("er301", "tr", port, 1)
       end)
       if not ok then
         -- The core will get no off for this note. Restore the old CV best
         -- effort and propagate the original send error.
-        if notes then pcall(send_pitch, port, notes[#notes].pitch) end
+        if notes then pcall(restore_pitch, port, notes[#notes].pitch) end
         error(trigger, 0)
       end
       if trigger then
