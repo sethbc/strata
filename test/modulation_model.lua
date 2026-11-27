@@ -512,12 +512,12 @@ end
 -- The envelopes as the engine runs them (docs/notes/engine/envelopes.md,
 -- \strataEnvelope): with the loop off, one that has ended stays ended until
 -- the next hit, whatever its times are set to since (an EnvGen reads a
--- segment's time as the segment starts). Seen ended once the time since its
--- hit (as the feed stamped it) passed its run at the settings of that moment
--- (attack, decay and, with a sustain, the release: a voice that is not
--- gated holds 0), then Lua's model (S.lib.envelopes.value) must read 0 until
--- the next hit, a time raised since included (#969); a loop turned on starts
--- it again, so its end is not judged until the next hit
+-- segment's time as it starts). The walk can change several times during
+-- one fade, between samples. A level still above zero after the latest
+-- settings' nominal end may be finishing a segment latched before that
+-- edit (#1233). Check for a rise after a sampled end and enforce a hard
+-- deadline independently: even the longest attack, decay and release
+-- must have ended by then (the walk's voices have no gate hold).
 function Model:compare_envelopes(S, problems)
   local now = util.time()
   for voice = 1, self.voice_count do
@@ -526,16 +526,18 @@ function Model:compare_envelopes(S, problems)
       self.hits[voice], self.ended[voice] = nil, false
     elseif self.hits[voice] then
       local run = env("attack") + env("decay") + (env("sustain") > 0 and env("release") or 0)
-      if not self.ended[voice] and now - self.hits[voice] >= run then
+      local level = S.lib.envelopes.value(voice)
+      local elapsed = now - self.hits[voice]
+      if not self.ended[voice] and ((elapsed >= run and level == 0) or elapsed >= 3 * self.times[2]) then
         self.ended[voice], self.ended_runs[voice] = true, run
         self.counts.envelopes_ended = self.counts.envelopes_ended + 1
       end
-      if self.ended[voice] and S.lib.envelopes.value(voice) > 0 then
+      if self.ended[voice] and level > 0 then
         -- Lua's own record of the hit, for the line only (upvalue of value)
         local lua_hit = (upvalue(S.lib.envelopes.value, "hits") or {})[voice]
         problems[#problems + 1] = string.format("voice %d's envelope ended and runs again (%g) with no hit since:"
           .. " hit at %.3f s (Lua's at %s), now %.3f s, a run of %.3f s now (%.3f s when it ended)",
-          voice, S.lib.envelopes.value(voice), self.hits[voice],
+          voice, level, self.hits[voice],
           lua_hit and string.format("%.3f s", lua_hit.time) or "none", now, run, self.ended_runs[voice])
       end
     end

@@ -120,6 +120,35 @@ test("sustain 0 is attack and decay; a new hit starts from the level it is at; l
   assert_near(envelopes.value(3), shape(looped, 0.05, 0, 0), 1e-9, "and it loops on")
 end)
 
+test("an edited attack stays latched and the next hit takes the new time", function()
+  local context, S, envelopes = loaded()
+  set_envelope(3, 1, 0.1, 0, 1, 0, false)
+  context.set_time(400)
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  context.set_time(400.5)
+  params:set("v3_env_attack", 8)
+  context.set_time(400.75)
+  assert_near(envelopes.value(3), 0.75, 1e-9, "the original one-second attack")
+  context.set_time(401.25)
+  S.lib.engine_sync.retrigger(3, 1, "step")
+  context.set_time(401.75)
+  assert_near(envelopes.value(3), 0.0625, 1e-9, "half a second into the new eight-second attack")
+end)
+
+test("the decay and hold latch their own sustain targets at their boundaries", function()
+  local context, S, envelopes = loaded()
+  set_envelope(3, 1, 1, 0.5, 1, 0, false)
+  context.set_time(400)
+  S.lib.engine_sync.retrigger(3, 1, "step", 1)
+  context.set_time(400.5)
+  params:set("v3_env_decay", 2)
+  context.set_time(402)
+  params:set("v3_env_sustain", 1)
+  assert_near(envelopes.value(3), 0.75, 1e-9, "decay latched two seconds and a target of one half")
+  context.set_time(403.5)
+  assert_near(envelopes.value(3), 0.75, 1e-9, "hold travels from the old sustain to the new one")
+end)
+
 test("a hit on a gated voice holds for its gate length, and on an ungated one for none", function()
   local context, S, envelopes = loaded()
   set_envelope(2, 0.01, 0.01, 0.5, 0.1, 0, false)
@@ -656,10 +685,8 @@ h.transition_table({
     local hit = model_hit()
     if hit == nil then return "no hit" end
     if values.env_loop == 2 then return "looping" end
-    if hit.ended then return "ended" end
-    local held = values.env_sustain > 0
-    local run = values.env_attack + values.env_decay + (held and (hit.hold + values.env_release) or 0)
-    return util.time() - hit.time < run and "running" or "ended"
+    model_value()  -- advance the model to the clock's current time
+    return hit.ended and "ended" or "running"
   end,
   rows = {
     { "no hit", "a hit", "running", check = hit_now_from(0) },
@@ -680,7 +707,7 @@ h.transition_table({
     end },
     { "running", "the loop off", "running" },
     { "running", "a longer decay", "running", check = function()
-      assert_near(model_value(), model_level(0.1, 5), 1e-9, "the level follows the longer decay")
+      assert_near(model_value(), model_level(0.1), 1e-9, "the current decay keeps its original duration")
     end },
     { "ended", "a hit", "running", check = hit_now_from(0) },
     { "ended", "time passes", "ended", check = function()
@@ -709,7 +736,7 @@ h.transition_table({
       assert_near(model_hit().time, 500.41, 1e-9, "the hit moved to the third cycle's start")
     end },
     { "looping", "a longer decay", "looping", check = function()
-      assert_near(model_value(), model_level(0.5, 5, true), 1e-9, "the cycle follows the longer decay")
+      assert_near(model_value(), model_level(0.5, nil, true), 1e-9, "this cycle keeps its original decay")
     end },
   },
 })
