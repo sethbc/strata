@@ -790,9 +790,9 @@ test("a pending set the index no longer lists loads nothing and is left", functi
 end)
 
 test("a first run whose marker cannot be written starts no load", function()
-  local restore = h.watch_writes("factory.data.part", { at = "write", after = 0 })
-  local context = session({ first_run = true, unstarted = true })
-  restore()
+  local context = load_strata({script_dir = script_copy(), before_init = function(session)
+    util.make_dir(session.data_dir .. "strata/factory.data.part")
+  end})
   assert_true(not factory().loading(), "no load: pending could not be written first")
   assert_equal(#lines_with(context, "error: factory file not saved"), 1, "one line")
   assert_equal(marker(context), nil, "no factory.data")
@@ -884,6 +884,50 @@ test("an unusable marker is set aside and counts as found", function()
   assert_equal(#lines_with(context, "error loading factory file"), 1, "one line")
   assert_equal(next(marker(context).loaded), nil, "written afresh: loaded = {}")
 end)
+
+for _, stage in ipairs({"startup", "completion"}) do
+  for _, occupied in ipairs({8, 9}) do
+    test("factory marker at " .. stage .. " with " .. occupied .. " occupied backup names", function()
+      local context
+      if stage == "startup" then
+        context = load_strata()
+      else
+        context = session()
+        assert_true(factory().load("dusk"), "the set load starts")
+      end
+      local path = context.data_dir .. "strata/factory.data"
+      util.make_dir(context.data_dir .. "strata/")
+      local bytes = h.tabutil_text({version = 999, loaded = {dusk = 7, dawn = 4}})
+      write_text(path, bytes)
+      local backups = {}
+      for number = 1, occupied do
+        local backup = path .. ".bak" .. (number > 1 and "." .. number or "")
+        backups[backup] = "previous backup " .. number
+        write_text(backup, backups[backup])
+      end
+
+      if stage == "startup" then
+        context = session({first_run = true, unstarted = true, data_subdir = folder_of(context)})
+        assert_true(not factory().loading(), "a found marker suppresses the first run")
+      else
+        run_load(context)
+        assert_near(params:get("v1_grain_size"), 0.31, 1e-9, "the set loaded")
+      end
+      for backup, original in pairs(backups) do
+        assert_equal(file_text(backup), original, "existing backup " .. backup)
+      end
+      if occupied == 9 then
+        assert_equal(file_text(path), bytes, "keep the incompatible marker in place")
+      else
+        assert_equal(file_text(path .. ".bak.9"), bytes, "back up the whole marker")
+        local held = marker(context)
+        assert_equal(held.version, 1)
+        assert_equal(held.pending, nil)
+        assert_equal(held.loaded.dusk, stage == "completion" and 1 or nil)
+      end
+    end)
+  end
+end
 
 test("cleanup cancels the load clock", function()
   local context = session({ first_run = true, unstarted = true })
