@@ -349,6 +349,9 @@ end
 -- the hint row
 function redraw()
   if not S.started then return end
+  -- A page hint can authorize a confirmation only after its frame reaches
+  -- the screen. Clear the previous receipt even if this draw raises.
+  S.displayed_hint_token = nil
   -- the open file selector owns the screen: norns' own redraw() calls (as
   -- the norns menu closes) and Strata's draw the file list, never the page
   if S.BUFFER_PAGE.file_selector_open then
@@ -360,14 +363,15 @@ function redraw()
   local record = S.registry.pages[S.ui_page]
   screen.clear()
   draw_header()
-  local hints
+  local hints, hint_token
   local drawn = S.lib.ui_frame.contained_call(UI_PAGES.draw_errors, "page", "page draw", function()
     if owner then
       owner.draw()
       hints = owner.hints and owner.hints(S.alt_held) or ""
     else
       record.draw()
-      hints = S.lib.ui_flash.text("hints") or record.hints(S.alt_held)
+      hints = S.lib.ui_flash.text("hints")
+      if hints == nil then hints, hint_token = record.hints(S.alt_held) end
     end
   end)
   if drawn then
@@ -378,6 +382,7 @@ function redraw()
     draw_hints("draw error")
   end
   screen.update()
+  if drawn then S.displayed_hint_token = hint_token end
 end
 
 -- Each module registers its own cleanup steps with S.register_cleanup;

@@ -228,6 +228,58 @@ test("a player can take fifteen seconds to confirm a scene overwrite", function(
   assert_true(scene_data(S, 1) ~= first, "second press saves in the selected interval")
 end)
 
+test("a scene overwrite needs a frame showing the prompt after a covering flash", function()
+  local context, S = started_on_scenes()
+  capture_scene(1)
+  local first = scene_data(S, 1)
+  context.set_time(100)
+  S.lib.ui_flash.start("hints", "tempo 120", 1)
+  redraw(); alt_tap(3)
+  context.set_time(101.1)
+  assert_equal(hint_text(context), "tempo 120", "the last frame still shows the flash")
+  alt_tap(3)
+  assert_equal(scene_data(S, 1), first, "expiry alone cannot confirm")
+  redraw(); alt_tap(3)
+  assert_true(scene_data(S, 1) ~= first, "the displayed confirmation works")
+end)
+
+test("a failed SCENES frame withdraws its displayed confirmation", function()
+  local context, S = started_on_scenes()
+  capture_scene(1)
+  local first = scene_data(S, 1)
+  alt_tap(3); redraw()
+  assert_equal(hint_text(context), prompt(1))
+  local record = S.registry.pages[S.ui_page]
+  local draw = record.draw
+  record.draw = function() error("injected SCENES draw error") end
+  redraw(); alt_tap(3); redraw(); alt_tap(3)
+  h.claim_script_errors(context, 1, "strata: page draw failed: ", "injected SCENES draw error")
+  assert_equal(hint_text(context), "draw error")
+  assert_equal(scene_data(S, 1), first, "presses on a draw error never overwrite")
+  record.draw = draw
+  redraw(); alt_tap(3)
+  assert_true(scene_data(S, 1) ~= first, "the recovered frame shows the new prompt")
+end)
+
+test("a grid save requires a fresh on-screen confirmation for that revision", function()
+  local context, S = started_on_scenes()
+  local pane = h.grid_pane(context, "128h")
+  pane.show(S.constants.GRID_PAGES.scenes)
+  capture_scene(1)
+  local original = scene_data(S, 1)
+  alt_tap(3); redraw()
+  assert_equal(hint_text(context), prompt(1))
+  pane.press(2, 7, 1); pane.tap(1, 1); pane.press(2, 7, 0)
+  local replacement = scene_data(S, 1)
+  assert_true(replacement ~= original, "the grid replaced the slot")
+  alt_tap(3)
+  assert_equal(scene_data(S, 1), replacement, "the old prompt cannot confirm a replacement")
+  alt_tap(3)
+  assert_equal(scene_data(S, 1), replacement, "its new prompt must reach the screen first")
+  redraw(); alt_tap(3)
+  assert_true(scene_data(S, 1) ~= replacement, "the new revision can be confirmed")
+end)
+
 test("moving the cursor disarms the overwrite", function()
   local context, S = started_on_scenes()
   capture_scene(3); capture_scene(4)
@@ -316,8 +368,8 @@ test("the overwrite prompt is the page's hint while armed and lapses after 2 s",
   assert_true(S.scenes_page.armed_slot == nil, "and disarms")
   local record = S.registry.pages[S.constants.UI_PAGES.index.SCENES]
   assert_equal(record.animates(), false, "the call after the disarming frame stops the animation")
-  alt_tap(3); alt_tap(3)
-  assert_true(scene_data(S, 1) ~= first, "two presses within 2 s save")
+  alt_tap(3); next_frame(context); alt_tap(3)
+  assert_true(scene_data(S, 1) ~= first, "the visible prompt confirms within 2 s")
   assert_equal(S.lib.ui_flash.text("header"), "saved S1", "the header flashes saved")
 end)
 
@@ -338,7 +390,7 @@ test("a flash from another page neither erases the prompt nor confirms through i
   assert_true(S.lib.ui_flash.text("hints") == nil, "the flash has ended")
   alt_tap(3)
   assert_equal(scene_data(S, 1), first, "the first press after it only arms")
-  alt_tap(3)
+  next_frame(context); alt_tap(3)
   assert_true(scene_data(S, 1) ~= first, "the second saves")
 end)
 
@@ -721,7 +773,7 @@ h.transition_table({
   notes = {"docs/notes/lua/pages/scenes.md", "scenes prompt"},
   states = {
     ["idle"] = prompt_script,
-    ["armed"] = function(context) prompt_script(context); alt_tap(3) end,
+    ["armed"] = function(context) prompt_script(context); alt_tap(3); redraw() end,
     ["lapsed"] = function(context)
       prompt_script(context); alt_tap(3); context.set_time(100 + PROMPT_PAST_ARMING)
     end,

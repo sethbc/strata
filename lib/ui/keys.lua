@@ -46,6 +46,7 @@ return function(S)
   -- ALT itself stays (K1 may still be down). A page change and a modal
   -- push (S.lib.ui_modal.push) forget them so
   local function forget_presses()
+    S.displayed_hint_token = nil  -- another page, modal or the menu takes the screen
     for n in pairs(S.key_press_page) do S.key_press_page[n] = nil end
     for n in pairs(S.key_press_at) do S.key_press_at[n] = nil end
     for n in pairs(S.key_press_alt) do S.key_press_alt[n] = nil end
