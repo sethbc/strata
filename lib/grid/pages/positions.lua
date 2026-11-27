@@ -91,7 +91,8 @@ return function(S)
         return
       end
       for voice_idx = 1, NUM_VOICES do
-        for cell = 1, CELLS do led(cell, voice_idx, S.lib.positions.grid_level(voice_idx, cell, CELLS, pane.port)) end
+        local level = S.lib.positions.row_levels(voice_idx, CELLS, pane.port)
+        for cell = 1, CELLS do led(cell, voice_idx, level(cell)) end
       end
     end,
   }
