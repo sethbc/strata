@@ -413,6 +413,9 @@ return function(S)
   -- slot, analyzes it
   S.lib.samples.on_bind(function(slot)
     pending_equal[slot] = nil
+    for voice = 1, NUM_VOICES do
+      if voice_buffer_slot(voice) == slot then S.lib.notes.retire_regions(voice) end
+    end
     generations[slot] = generations[slot] + 1
     candidates[slot] = nil
     awaited[slot] = nil
@@ -430,7 +433,7 @@ return function(S)
     for slot = 1, NUM_BUFFERS do
       if binds[slot] then
         for voice = 1, NUM_VOICES do
-          if voice_buffer_slot(voice) == slot then S.lib.notes.end_regions(voice) end
+          if voice_buffer_slot(voice) == slot then S.lib.notes.end_regions(voice, true) end
         end
         if binds[slot].analyze then M.analyze(slot) end
       end
@@ -466,7 +469,7 @@ return function(S)
   -- Play slice n of the voice's slot as note (S.lib.notes.play's owner,
   -- key, velocity, and park, quiet, extra_only, expression and steals when
   -- given) at the voice's own pitch, with the slice's region; in one shot
-  -- with a moving scan it plays to its end (to_end, hold_to_end). With the
+  -- with a moving scan it plays to its end (hold_to_end). With the
   -- option one, or off (a step's), it is the own note. The slot it took;
   -- false for a slice that does not exist (and nothing is sent)
   function M.play(voice, n, note)
@@ -476,7 +479,7 @@ return function(S)
     local slot = S.lib.notes.play(voice, {owner = note.owner, key = note.key, pitch = S.lib.notes.own_pitch(voice),
       velocity = note.velocity, set_own = play_nothing, park = note.park, quiet = note.quiet,
       extra_only = note.extra_only, expression = note.expression, steals = note.steals, region = region,
-      to_end = to_end, hold_to_end = to_end ~= nil or nil, own_only = option(voice) ~= SLICES.overlap or nil})
+      hold_to_end = to_end ~= nil or nil, own_only = option(voice) ~= SLICES.overlap or nil})
     return slot or false
   end
 

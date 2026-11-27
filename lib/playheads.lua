@@ -68,14 +68,8 @@ return function(S)
   -- a speed (1 crosses the span in its own length of audio), stopped by
   -- freeze and the hold; the glide adds its rate in spans a second
   local function scan_effective(voice_idx)
-    local scan = engine_param_value(param_id(voice_idx, "buf_scan"))
-    local frozen = S.lib.freeze.is_frozen(voice_idx) and 1 or 0
-    local held = S.lib.positions.scan_held(voice_idx) and 1 or 0
-    local slot = voice_buffer_slot(voice_idx)
     local _, length = span(voice_idx)
-    local span_seconds = length * (S.buffers[slot] and S.buffers[slot].seconds or 0)
-    local speed = span_seconds > 0 and 1 / span_seconds or 0
-    return scan * speed * (1 - frozen) * (1 - held) + S.lib.positions.scrub_rate(voice_idx)
+    return S.lib.scan.span_rate(voice_idx, length)
   end
 
   -- A phase kept in its mode's range: 0-1 in wrap, 0-2 in bounce (two

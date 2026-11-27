@@ -43,7 +43,9 @@ return function(S)
     note_voice = {},          -- per channel: note -> the list of voices its note on played
     started = {},             -- voice -> true: a MIDI note started it (a panic CC stops these)
   }
+  local slice_keys = {}  -- physically held MIDI keys played against the current audio
   for i = 1, NUM_VOICES do
+    slice_keys[i] = {}
     S.midi_state.bend[i] = 1
     S.midi_state.held[i] = {}
   end
@@ -260,6 +262,7 @@ return function(S)
         S.lib.notes.forget_owner(i, MIDI.owner)
       end
       S.midi_state.held[i] = {}
+      slice_keys[i] = {}
     end
     S.midi_state.note_voice = {}
     plain_pressure.channel, plain_pressure.key = {}, {}
@@ -351,8 +354,29 @@ return function(S)
   -- voice plays to its end, whichever owner's ended last
   local stop_pending = {}
 
+  -- Replacement audio has no claim from the old slices, including keys
+  -- whose note already ran to its end and a last release waiting for it.
+  function M.retire_slice_keys(voice)
+    stop_pending[voice] = nil
+    for key in pairs(slice_keys[voice]) do
+      S.midi_state.held[voice][key] = nil
+      local channel, note = math.floor(key / MIDI.notes_per_channel), key % MIDI.notes_per_channel
+      local notes = S.midi_state.note_voice[channel]
+      local voices = notes and notes[note]
+      if voices then
+        for i, target in ipairs(voices) do
+          if target == voice then table.remove(voices, i); break end
+        end
+        if #voices == 0 then notes[note] = nil end
+        if next(notes) == nil then S.midi_state.note_voice[channel] = nil end
+      end
+    end
+    slice_keys[voice] = {}
+  end
+
   local function end_key(voice_idx, key)
     local current = S.midi_state.held[voice_idx][key] == true
+    slice_keys[voice_idx][key] = nil
     S.midi_state.held[voice_idx][key] = nil
     if not current then return end
     local last = not has_current_key(voice_idx) and S.voices[voice_idx].active
@@ -462,6 +486,7 @@ return function(S)
     for _, voice_idx in ipairs(targets) do
       if not has_current_key(voice_idx) then S.lib.notes.release_owner(voice_idx, MIDI.owner) end
       S.midi_state.held[voice_idx][key] = true
+      slice_keys[voice_idx][key] = S.lib.slices.takes_notes(voice_idx) or nil
       stop_pending[voice_idx] = nil  -- a key down: its own lift decides again
       midi_note_on(voice_idx, note, velocity, channel, raw)
     end

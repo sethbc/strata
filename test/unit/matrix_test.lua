@@ -62,6 +62,25 @@ local function grain_calls(context, voice, name)
   return found
 end
 
+test("tempo-follow sends matrix scan movement over the knob limit (#1231)", function()
+  for _, factor in ipairs({1, 2}) do
+    local context, S = loaded()
+    local source = seeded(S, "scanprobe", {-1, 1}, 0.125)
+    params:set("v1_source", S.constants.SOURCE_SYNTH + 1)
+    S.lib.samples.tempo = function() return 120 / factor end
+    params:set("v1_follow", 2)
+    params:set("v1_buf_scan", 1)
+    route(S, 1, "scanprobe", "v1_buf_scan", 100)
+    lfo_step(context, 3)
+    local calls = grain_calls(context, 0, "bufScan")
+    assert_near(calls[#calls].args[3], 1.25 * factor, 1e-6)
+    source.value = 0.375
+    lfo_step(context, 3)
+    calls = grain_calls(context, 0, "bufScan")
+    assert_near(calls[#calls].args[3], 1.75 * factor, 1e-6, "follow factor " .. factor)
+  end
+end)
+
 -- The last reverb mix the engine got (setReverb's first argument)
 local function sent_reverb(context)
   local calls = context.calls_named("setReverb")

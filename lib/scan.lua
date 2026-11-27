@@ -94,18 +94,25 @@ return function(S)
     return util.clamp(M.ratio(voice_idx), FOLLOW.rate_min, FOLLOW.rate_max)
   end
 
-  -- The seconds a one-shot voice takes to cross fraction of its slot's
-  -- valid region: fraction x the slot's seconds / |scan|, the scan as the
-  -- engine has it (engine_param_value: its follow factor included). nil
-  -- unless the voice reads a buffer in one shot with a scan that is not 0
+  -- Signed passes per second, matching slotScanPhase: freeze and hold stop
+  -- the automatic scan, while scrub moves in spans per second.
+  function M.span_rate(voice_idx, fraction)
+    local slot = voice_buffer_slot(voice_idx)
+    local seconds = fraction * (S.buffers[slot] and S.buffers[slot].seconds or 0)
+    local rate = S.lib.positions.scrub_rate(voice_idx)
+    if seconds > 0 and not S.lib.freeze.is_frozen(voice_idx) and not S.lib.positions.scan_held(voice_idx) then
+      rate = rate + engine_param_value(param_id(voice_idx, "buf_scan")) / seconds
+    end
+    return rate
+  end
+
+  -- Seconds to cross one span at the current speed, or nil while stationary.
   function M.pass_seconds(voice_idx, fraction)
     if not valid_voice(voice_idx) or not voice_uses_buffer(voice_idx) or type(fraction) ~= "number" then return nil end
     if M.mode(voice_idx) ~= MODE.one_shot then return nil end
-    local scan = engine_param_value(param_id(voice_idx, "buf_scan"))
-    if type(scan) ~= "number" or scan == 0 then return nil end
-    local slot = voice_buffer_slot(voice_idx)
-    local seconds = S.buffers[slot] and S.buffers[slot].seconds or 0
-    return fraction * seconds / math.abs(scan)
+    local rate = M.span_rate(voice_idx, fraction)
+    if rate ~= 0 then return 1 / math.abs(rate), rate end
+    return nil, 0
   end
 
   -- What each voice's engine was last given: its scan factor and its rate
@@ -150,8 +157,8 @@ return function(S)
   end
 
   local function send_sync(voice_idx)
-    local phase = S.lib.playheads.phase(voice_idx)
-    if phase then S.lib.engine_sync.send_engine_value(sync_key(voice_idx), phase) end
+    -- Queue the correction itself. Its phase belongs to the delivery tick.
+    S.lib.engine_sync.send_engine_value(sync_key(voice_idx), true)
   end
 
   -- The bar the beat was in at the last step (nil before the first)
@@ -199,9 +206,9 @@ return function(S)
     S.lib.engine_sync.add_voice_sender(voice_idx, rate_key(voice_idx), function(rate)
       engine.setGrainParam(voice_idx - 1, SCAN.rate_engine, rate)
     end)
-    S.lib.engine_sync.add_voice_sender(voice_idx, sync_key(voice_idx), function(phase)
-      engine.syncScan(voice_idx - 1, phase)
-    end)
+    S.lib.engine_sync.add_voice_sender(voice_idx, sync_key(voice_idx), function()
+      engine.syncScan(voice_idx - 1, S.lib.playheads.phase(voice_idx))
+    end, function() return syncable(voice_idx) end)
   end
 
   local function buffer_voice(voice_idx) return valid_voice(voice_idx) and voice_uses_buffer(voice_idx) end
