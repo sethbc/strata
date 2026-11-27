@@ -99,7 +99,7 @@ return function(S)
 
   -- The slot's markers, {0} when it has none
   local function markers(slot)
-    local list = valid_slot(slot) and S.lib.slices.markers(slot)
+    local list = valid_slot(slot) and S.lib.slices.playable_markers(slot)
     if type(list) ~= "table" or #list == 0 then return {0} end
     return list
   end
@@ -127,8 +127,7 @@ return function(S)
     return editor.marker
   end
 
-  -- Select the marker nearest frame (a nudge or an add the slices refused
-  -- or moved keeps the selection on the marker it meant)
+  -- Pick the newly added marker.
   local function select_frame(frame)
     local list = markers(editor.slot)
     local nearest = math.huge
@@ -208,7 +207,6 @@ return function(S)
     local by = round(d * (fine and EDITOR.fine_nudge_seconds or EDITOR.nudge_seconds) * rate(slot))
     if by == 0 then return end
     S.lib.slices.nudge_marker(slot, index, by)
-    select_frame(list[index] + by)
     request_redraw()
   end
 
@@ -230,9 +228,9 @@ return function(S)
       frame = math.floor((before[index] + (before[index + 1] or total)) / 2)
     end
     frame = util.clamp(frame, 0, total - 1)
-    S.lib.slices.add_marker(slot, frame)
-    if #markers(slot) <= #before then
-      flash(#before >= S.lib.slices.SLICES.max and EDITOR.flashes.full or EDITOR.flashes.close)
+    if not S.lib.slices.add_marker(slot, frame) then
+      local stored = S.lib.slices.markers(slot)
+      flash(stored and #stored >= S.lib.slices.SLICES.max and EDITOR.flashes.full or EDITOR.flashes.close)
       return
     end
     select_frame(frame)
@@ -325,7 +323,10 @@ return function(S)
   local TURNS = {
     mode = function(slot, record, d)
       local mode = util.clamp(record.mode + d, 1, #S.lib.samples.SAMPLES.modes)
-      if mode ~= record.mode then remake(slot, record, "mode", mode) end
+      if mode ~= record.mode then
+        forget_arc_ticks("slice_editor:3")
+        remake(slot, record, "mode", mode)
+      end
     end,
     -- in off the count is kept for when equal is picked, and nothing is made
     amount = function(slot, record, d)

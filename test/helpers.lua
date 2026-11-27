@@ -563,6 +563,7 @@ local function slice_editor_doubles(S, doubles)
   local function edited(slot) samples.settings(slot).edited = true end
   function slices.count(slot) return doubles.markers[slot] and #doubles.markers[slot] or 0 end
   function slices.markers(slot) return copy(doubles.markers[slot]) end
+  slices.playable_markers = slices.markers
   function slices.add_marker(slot, frame)
     log("add " .. slot .. " " .. frame)
     local list = doubles.markers[slot] or {0}
