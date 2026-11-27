@@ -33,9 +33,9 @@ return function(S)
   M.TXO = TXO
 
   -- lines[output] = {notes = the notes sounding on it, oldest first, each
-  -- {voice, id, pitch, velocity, envelope}; env_high = its envelope's gate
-  -- was raised}. A note stays on the output and in the mode it started in
-  -- until it ends, whatever its voice's params say by then.
+  -- {voice, id, pitch, velocity, envelope}; tr_high and env_high record
+  -- the gate commands the queue admitted}. A note keeps its output and
+  -- mode until it ends, whatever its voice's params say by then.
   local lines = {}
   -- A complete setup in active holds its attack and decay at the queue tail.
   -- delivered holds just the envelopes whose last env_act handed to crow
@@ -214,7 +214,7 @@ return function(S)
   end
 
   local function lower(output, line)
-    bus().send_off("txo", "tr", output, 0)
+    if line.tr_high then bus().send_off("txo", "tr", output, 0) end
     if line.env_high then bus().send_off("txo", "env", output, 0) end
   end
 
@@ -254,35 +254,25 @@ return function(S)
       local note = {voice = voice, id = id, pitch = pitch, envelope = envelope_of(voice),
         velocity = type(velocity) == "number" and velocity or 1}
       local line = lines[output]
-      local created = line == nil
-      if created then line = {notes = {}, env_high = false}; lines[output] = line end
-      local was_high = line.env_high
-      table.insert(line.notes, note)
-      -- the core records a target for a note only when this returned, so a
-      -- send that raises must leave the line as it was
       local sent_env = false
-      local ok, err = pcall(function()
+      local ok, trigger = pcall(function()
         bus().send("txo", "cv", output, level_of(note))
-        if note.envelope then
-          bus().send("txo", "env", output, 1)
-          sent_env = true
-          line.env_high = true
-        end
-        bus().send("txo", "tr", output, 1)
+        if note.envelope then sent_env = bus().send("txo", "env", output, 1) end
+        return bus().send("txo", "tr", output, 1)
       end)
       if not ok then
-        table.remove(line.notes)
-        line.env_high = was_high
-        if created then lines[output] = nil end
-        -- best effort, each send protected (the first error is the one
-        -- raised again), repairing only what reached the device: the newest
-        -- left gets its cv back, and an envelope gate this note's env 1
-        -- raised is lowered. No trigger repair exists: the trigger is sent
-        -- last, and one whose own send raised was not sent
-        local newest = line.notes[#line.notes]
-        if newest then pcall(function() bus().send("txo", "cv", output, level_of(newest)) end) end
-        if sent_env and not was_high then pcall(bus().send_off, "txo", "env", output, 0) end
-        error(err, 0)
+        -- The core will get no off for this note. Restore the old CV and
+        -- lower an envelope raised here, preserving the original error.
+        if line then pcall(function() bus().send("txo", "cv", output, level_of(line.notes[#line.notes])) end) end
+        if sent_env and not (line and line.env_high) then pcall(bus().send_off, "txo", "env", output, 0) end
+        error(trigger, 0)
+      end
+      if trigger or sent_env then
+        line = line or {notes = {}}
+        table.insert(line.notes, note)
+        line.tr_high = line.tr_high or trigger
+        line.env_high = line.env_high or sent_env
+        lines[output] = line
       end
     end,
     note_off = function(voice, id)

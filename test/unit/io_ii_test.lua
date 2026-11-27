@@ -796,6 +796,76 @@ test("a send is refused when 48 lines wait, offs included", function()
   assert_equal(ii.send("other", "cv", 99, 1), true, "39 sends and 8 offs: accepted")
 end)
 
+-- The MIDI keys, both note adapters and the queue all run as on norns.
+for _, mode in ipairs({"er301", "txo", "txo envelope"}) do
+  local envelope = mode == "txo envelope"
+  local device = envelope and "txo" or mode
+  for _, room in ipairs({0, 1}) do
+    test(mode .. " releases the sounding note when the next gate is refused with " .. room .. " slots free", function()
+      local context = load_strata(); finish_startup(context)
+      local S = local_value("S")
+      local ii = S.lib.io_ii
+      local step = stepper(context, S)
+      lead(context, S)
+      params:set("midi_note_off", 2)
+      params:set("v3_out_" .. device, 3)
+      if envelope then params:set("v3_out_txo_cv", 2) end
+      local function key(pitch, down)
+        context.midi.send(1, {type = down and "note_on" or "note_off", ch = 3, note = pitch, vel = down and 127 or 0})
+      end
+
+      drain(step, ii)
+      context.crow.clear()
+      key(60, true)
+      drain(step, ii)
+      local port = "ii." .. device .. "."
+      local cv = envelope and "cv(3, 5)|ii.txo.env(3, 1)" or "cv(3, 0)"
+      assert_equal(table.concat(ii_lines(context), "|"), port .. cv .. "|" .. port .. "tr(3, 1)")
+      fill(ii, ii.II.queue_max - room)
+      key(72, true)
+      drain(step, ii)
+      context.crow.clear()
+      key(60, false)
+      drain(step, ii)
+      assert_equal(table.concat(ii_lines(context), "|"), port .. "tr(3, 0)" .. (envelope and "|ii.txo.env(3, 0)" or ""),
+        "last sounding key released")
+      context.crow.clear()
+      key(72, false)
+      drain(step, ii)
+      assert_equal(#ii_lines(context), 0, "key-up of the refused note is silent")
+    end)
+  end
+end
+
+test("a TELEXo envelope note owes a low for each gate admitted at the queue boundary", function()
+  local context = load_strata(); finish_startup(context)
+  local S = local_value("S")
+  local ii = S.lib.io_ii
+  local step = stepper(context, S)
+  lead(context, S)
+  params:set("midi_note_off", 2)
+  params:set("v3_out_txo", 3)
+  params:set("v3_out_txo_cv", 2)
+  drain(step, ii)
+  context.crow.clear()
+  fill(ii, ii.II.queue_max - 2)
+  context.midi.send(1, {type = "note_on", ch = 3, note = 60, vel = 127})
+  drain(step, ii)
+  local raised = {}
+  for _, line in ipairs(ii_lines(context)) do
+    local gate = line:match("^ii%.txo%.(%w+)%(3, 1%)$")
+    if gate then raised[gate] = true end
+  end
+  context.crow.clear()
+  context.midi.send(1, {type = "note_off", ch = 3, note = 60, vel = 0})
+  drain(step, ii)
+  local lows = {}
+  for _, gate in ipairs({"tr", "env"}) do
+    if raised[gate] then lows[#lows + 1] = "ii.txo." .. gate .. "(3, 0)" end
+  end
+  assert_equal(table.concat(ii_lines(context), "|"), table.concat(lows, "|"), "lower exactly the gates crow received")
+end)
+
 test("a TELEXo envelope note through a full queue gets the offs of the ons it sent", function()
   -- the 2e brief: on cv(n, v), env(n, 1), tr(n, 1); offs tr(n, 0), env(n, 0)
   local context, S, ii = started()
