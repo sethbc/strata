@@ -743,11 +743,26 @@ checkLongSave.value;
         result
     };
     var run = { arg label, carriers = 1, reload = false;
-        var first, second, expected, observed, seen, calls, n = saveResults.value.size;
+        var first, second, expected, observed, seen, calls, n;
+        var tagged = label == "late", token, receipt;
         var entered = { (path ++ ".barrier/in.*").pathMatch.size };
         var exited = { (path ++ ".barrier/out.*").pathMatch.size };
         path = dir +/+ ("held-" ++ label ++ ".wav");
-        h.commandTo(delayed, \saveBuffer, 0, path, 0, 1);
+        if (tagged) {
+            token = delayed.areaState[\files][\wavTag].copyRange(0, 23);
+            receipt = delayed.saveReceiptRoot +/+ ("strata-save-" ++ token);
+            File.use(receipt, "wb", { arg f;
+                f.write("strata-save-v1 " ++ token ++ "\n"); f.write(Int8Array.newClear(4 + (8 * 4 * 8)));
+            });
+            n = saveResults.value.size;
+            h.commandTo(delayed, \bindSaveResults, token);
+            waitFor.({ saveResults.value.size > n });
+            File.delete(receipt);
+        };
+        n = saveResults.value.size;
+        if (tagged) { h.commandTo(delayed, \saveBufferRequest, 0, path, 0, 1, 1, token) } {
+            h.commandTo(delayed, \saveBuffer, 0, path, 0, 1)
+        };
         first = delayed.bufferSaves[0];
         check.(waitFor.({ entered.value == carriers }, 3), "files: % reaches % real OS carriers".format(label, carriers));
         if (reload) {
@@ -771,6 +786,7 @@ checkLongSave.value;
         expected = if (reload) { 4410 } { 5513 };
         seen = saveReportsAfter.(n);
         calls = if (["early", "ack"].includesEqual(label)) { [[0, first, false], [0, second, false]] } { [[0, second, false]] };
+        if (tagged) { calls = [[0, first, true], [0, second, false]] };
         check.(observed.notNil and: { observed[0] == expected } and: {
             var reference = if (reload) { h.repeating(expected * 2, [0.4, 0.4]) } { h.repeating(expected * 2, [0.5, -0.25]) };
             (observed[1] - reference).peak < 0.00004
@@ -1178,6 +1194,25 @@ checkLongSave.value;
     ask.(0, 11); ask.(0, 12);
     check.(waitFor.({ saveReportsAfter.(n) == [[0, 13, false]] }) and: { e.bufferSaves[0] == 13 },
         "files: stale session and duplicate cannot write; exact request replays its true legacy report");
+    // Both sends arrive before the first preparation's server sync returns.
+    // The tagged caller must be able to retire request 13 while the legacy
+    // caller keeps its full-length WAV at the shared destination.
+    n = saveResults.value.size;
+    save.(dst, 0.5);
+    h.commandTo(e, \saveBuffer, 0, dst, 0, 1);
+    3.do({ save.(dst ++ "-empty", 0) });
+    check.(waitFor.({ cell.(13) == [27, 27] and: { saveReportsAfter.(n).size == 5 } })
+        and: { saveReportsAfter.(n).count({ arg row; row == [0, 14, true] }) == 1 },
+        "files: superseded tagged save has one failed receipt alongside the four other initial reports (#1243)");
+    n = saveResults.value.size; ask.(0, 13);
+    check.(waitFor.({ saveReportsAfter.(n) == [[0, 14, true]] }) and: { cell.(13) == [27, 27] },
+        "files: superseded tagged failure replays by its exact request number (#1243)");
+    save.(dst ++ "-next.wav", 1);
+    check.(waitFor.({ cell.(17) == [34, 34] }) and: {
+        var wav = SoundFile.openRead(dst), match;
+        if (wav.notNil) { match = h.sameFrames(wav, stereoPath); wav.close };
+        match == [0, e.bufferFrames[0]]
+    }, "files: the fifth tagged request completes and the legacy winner keeps every source frame (#1243)");
     h.freeEngine(e);
     check.(held.isOpen.not and: { File.exists(path).not }, "files: teardown closes the engine's anonymous receipt");
     reader.close;

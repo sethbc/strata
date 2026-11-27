@@ -49,10 +49,9 @@
         // How a save ended: one message per saveBuffer whose write ends,
         // written or failed (bufferSaveResultValue: the slot, that slot's save
         // number and failed), so Lua confirms a save only once its file is in
-        // place and a late report never speaks for a newer save. A write
-        // abandoned for a newer write to the same path reports nothing (the
-        // newer one reports). Not periodic; a value request resends the last
-        // report (Lua ignores a repeat).
+        // place and a late report never speaks for a newer save. A superseded
+        // tagged request reports failure; a legacy save abandons silently.
+        // A value request resends the last report (Lua ignores a repeat).
         areaState[\files][\saveResultPoll] = this.addPoll(\bufferSaveResult, {
             this.bufferSaveResultPoll.value ? 0.0
         }, false);
@@ -317,7 +316,7 @@
     }
 
     // saveBuffer: count the save and write the slot, reporting how the write
-    // ended on bufferSaveResult (an abandoned write reports nothing)
+    // ended on bufferSaveResult (a superseded tagged request reports failure)
     saveSlot { arg index, path, start = 0, length = 1, request, token;
         var state = areaState[\files], save, entry, cell, previous;
         if (this.validBuffer(index).not or: { state[\retired] == true }) { ^this };
@@ -342,7 +341,7 @@
                     this.bufferSaveResultPoll.update(this.bufferSaveResultValue(index, save, written.not));
                 };
             };
-        }, start, length);
+        }, start, length, request.notNil);
     }
 
 
@@ -575,11 +574,12 @@
     // a function of written, a Boolean) is called once when the write ends:
     // true once the file is in place, false when nothing was written (an
     // empty slot, at once; a folder that cannot be made, a short write or a
-    // failed rename); never for a write a newer one abandoned.
+    // failed rename). A superseded tagged request reports false too, so its
+    // bounded receipt window can advance. Legacy writes abandon silently.
     // start and length are fractions of the valid region (V frames): the
     // write takes frames [start * V, (start + length) * V). A region of less
     // than one frame writes nothing, posts why and calls done with false.
-    writeSlot { arg index, path, done, start = 0, length = 1;
+    writeSlot { arg index, path, done, start = 0, length = 1, reportSuperseded = false;
         var valid = bufferFrames[index];
         var sampleRate = bufferSampleRates[index];
         var firstFrame, frames, generation, token, tempPaths, partPath, parent, sent;
@@ -651,8 +651,8 @@
                 // no yield between this check and the rename's start. The
                 // newest write forgets its generation whether it succeeded or
                 // failed, and reports how it ended (finish); an abandoned one
-                // leaves the newer write's entry alone and reports nothing. A
-                // folder at the path fails the write: mv -f would move the
+                // leaves the newer write's entry alone. A folder at the
+                // path fails the write: mv -f would move the
                 // file into it. The rename goes to the mover (no fork of
                 // sclang, #217) and finish runs once it has ended.
                 if (current.value) {
@@ -663,6 +663,7 @@
                     if (written and: { folder.not }) {
                         record = this.claimWavPublication(path, token, finish);
                         if (record.notNil) {
+                            if (reportSuperseded) { record[\superseded] = { finish.(false) } };
                             this.areaCall(\renameIntoPlace, partPath, path, { arg moved;
                                 this.areaCall(\finishWavPublication, path, record, moved);
                             }, true);
@@ -695,6 +696,9 @@
                 };
             };
             wavPreparations = wavPreparations - 1;
+            // The successor invalidated this generation before handoff.
+            // Its own WAV and publication record belong to it exclusively.
+            if (reportSuperseded and: { newest.not }) { finish.(false) };
         }, SystemClock);
     }
 
