@@ -787,11 +787,11 @@ return function(S)
   -- order (synth, grain, crossmod, bend, then each registered record), its
   -- voice-level entries, then its kept ones, then the modulated params
   -- again. A start sends the same messages in its own order (M.start_voice)
-  function sync_voice_values_to_engine(voice_idx)
+  function sync_voice_values_to_engine(voice_idx, reason)
     -- the engine now gets this voice's stored values (LFOs re-apply theirs
     -- on their next step)
     forget_sent_voice_values(voice_idx)
-    for _, part in ipairs(S.lib.params_setup.voice_engine_parts(voice_idx)) do
+    for _, part in ipairs(S.lib.params_setup.voice_engine_parts(voice_idx, reason)) do
       for _, entry in ipairs(part.voice_level) do send_part_entry(voice_idx, entry) end
       for _, entry in ipairs(part.kept) do send_part_entry(voice_idx, entry) end
     end

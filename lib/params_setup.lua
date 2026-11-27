@@ -1260,7 +1260,8 @@ return function(S)
   -- records come first, so the parts begin synth (the synth keys, sorted),
   -- grain (the nine, in their fixed order), crossmod (per slot its source
   -- and amounts, then the speed), bend. Every call builds fresh tables, so
-  -- a caller may change what it gets
+  -- a caller may change what it gets. A type-only sync passes "type"
+  -- to each record's sync so the slices record can preserve the scan.
 
   -- the MIDI pitchbend wheel's current position (voiceOn resets the engine's to 1)
   local function send_bend(voice_idx)
@@ -1288,7 +1289,7 @@ return function(S)
     return {key = key, [kind] = spec.name, value = spec.value, carry = spec.carry}
   end
 
-  function M.voice_engine_parts(voice_idx)
+  function M.voice_engine_parts(voice_idx, reason)
     if type(voice_idx) ~= "number" or voice_idx < 1 or voice_idx > NUM_VOICES or voice_idx % 1 ~= 0 then
       error("voice_engine_parts: voice " .. tostring(voice_idx) .. " is not 1.." .. NUM_VOICES, 2)
     end
@@ -1302,7 +1303,7 @@ return function(S)
       for _, key in ipairs(in_send_order(record, grain_keys)) do
         if reaches(key) then kept[#kept + 1] = part_entry("grain", key, grain_keys[key]) end
       end
-      if record.sync then kept[#kept + 1] = {send = function(index) record.sync(index) end} end
+      if record.sync then kept[#kept + 1] = {send = function(index) record.sync(index, reason) end} end
       for _, key in ipairs(in_send_order(record, voice_keys)) do
         if reaches(key) then voice_level[#voice_level + 1] = part_entry("voice", key, voice_keys[key]) end
       end
