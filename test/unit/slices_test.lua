@@ -644,6 +644,24 @@ test("a slice hit restarts the scan once and the playhead once, in every mode", 
   end
 end)
 
+test("editing synth type preserves the playing slice and buffer scan phase", function()
+  local context, S = sliced(2, 4, 2)
+  S.lib.slices.play(1, 3, note(1))
+  params:set("v1_buf_scan", 1)
+  context.clock.run_for(0.125)
+  assert_near(S.lib.playheads.phase(1), 0.25, 1e-6, "the scan has advanced")
+  context.clear_engine_calls()
+  params:set("v1_type", 2)
+  assert_equal(#context.calls_named("setVoiceType"), 1)
+  for _, call in ipairs(context.calls_named("setGrainParam")) do
+    assert_true(call.args[2] ~= "regionLength" and call.args[2] ~= "t_scanReset",
+      "type edit reset the audio scan via " .. call.args[2])
+  end
+  assert_near(S.lib.playheads.phase(1), 0.25, 1e-6, "the screen keeps the same phase")
+  assert_equal(list_text(S.lib.notes.own_region(1)), "{0.5, 0.25}")
+  cleanup()
+end)
+
 test("overlap: each note takes a slot with its own region", function()
   local context, S = sliced(2, 4, 3)
   params:set("v1_note_cap", 3)  -- slots 1-3: the next note takes the slot let go

@@ -401,8 +401,8 @@ return function(S)
   end
 
   -- Send the own region as it is (setGrainParam regionStart, then
-  -- regionLength: 0 and 0 for none): set_own_region's send, and every voice
-  -- sync's (the slices record's sync, before voiceOn at a start), so this
+  -- regionLength: 0 and 0 for none): set_own_region's send, and the slices
+  -- record's sync on starts, source changes and recalls, so this
   -- module is the own region's one sender (the final review's M-5)
   function M.sync_own_region(voice)
     if not whole_in(voice, 1, NUM_VOICES) then return end

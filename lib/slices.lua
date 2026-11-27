@@ -547,10 +547,11 @@ return function(S)
         action = function() S.lib.notes.set_own_region(voice, nil) end,
       })
     end,
-    -- every voice sync sends the own region as it is (a clear for none),
-    -- before voiceOn at a start, so a step's first slice plays; S.lib.notes
-    -- sends it, the own region's one sender (design §3.4)
-    sync = function(voice) S.lib.notes.sync_own_region(voice) end,
+    -- A type edit keeps the running scan. Other syncs send the own region
+    -- (a clear for none), before voiceOn at a start so the first slice plays.
+    sync = function(voice, reason)
+      if reason ~= "type" then S.lib.notes.sync_own_region(voice) end
+    end,
     scene_defaults = {[SLICES.key] = SLICES.off},
     discrete = {[SLICES.key] = {1, #SLICES.options}},
     voice_rows = {section = SLICES.section, rows = {SLICES.key}, when = function(voice) return voice_uses_buffer(voice) end},
