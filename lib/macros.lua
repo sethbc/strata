@@ -229,10 +229,13 @@ return function(S)
       local id = resolve(row.id)
       seen.ids[k] = id or false
       local held = extras[m][k]
-      if held and held.id ~= id then clear_extra(m, k) end  -- a main entry that resolves elsewhere now
-      if value == stored or not id or lfo_skips(id) then
-        clear_extra(m, k)
-      else
+      if held and (held.id ~= id or value == stored) then clear_extra(m, k) end
+    end
+    -- Rows share the macro's offset key. Clear every departing row before
+    -- writing any that still resolve to its old destination (#1232).
+    for k, row in ipairs(S.macros[m].targets) do
+      local id = seen.ids[k]
+      if value ~= stored and id and not lfo_skips(id) then
         local spec = params:lookup_param(id).controlspec
         local at_stored = spec:map(row.min + stored * (row.max - row.min))
         local at_value = spec:map(row.min + value * (row.max - row.min))
