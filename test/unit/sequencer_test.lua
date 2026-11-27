@@ -6676,4 +6676,35 @@ test("an empty chain creates no undo for the live order's first bar", function()
   assert_equal(S.lib.mutation.undo(), false, "no scene replaced the live patterns")
 end)
 
+for _, action in ipairs({"disable chain", "stop patterns"}) do
+  test("the start's bar hook runs once when it chooses to " .. action, function()
+    local context = load_strata()
+    finish_startup(context)
+    local S = local_value("S")
+    local seq = S.lib.sequencer
+    seq.set_level(1, 1, 9)
+    capture_scene(1)
+    seq.set_level(1, 1, 15)
+    params:set("seq_chain", 1)
+    local first_bars = 0
+    seq.on_bar(function(first)
+      if first then
+        first_bars = first_bars + 1
+        if action == "disable chain" then params:set("seq_chain", 0) else pattern_clock_stop() end
+      end
+    end)
+    pattern_clock_start()
+    assert_equal(first_bars, 1)
+    assert_equal(S.patterns[1][1], 9, "the first link loaded its pattern")
+    assert_equal(seq.chain_place(), nil, "there is no next link queued")
+    if action == "disable chain" then
+      assert_true(S.pattern_playing and S.pattern_clock ~= nil, "the unchained pattern keeps playing")
+    else
+      assert_equal(S.pattern_playing, false)
+      assert_equal(S.pattern_clock, nil, "the stop leaves no transport clock")
+      for voice = 1, h.voice_count() do assert_equal(S.pattern_clocks[voice], nil) end
+    end
+  end)
+end
+
 end

@@ -2182,17 +2182,24 @@ return function(S)
     -- the steps before the clocks run fail as a clock's step does (4b's
     -- review round 1): an error stops the patterns (guarded) and is raised
     -- again, never leaving them marked playing with no clock
+    local transport = play.transport
     guarded(function() end, function()
       play.next_bar = beat + SEQ.bar_beats
+      local first_slot
       if params:get("seq_chain") == 1 then
-        S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, function()
-          chain_link()
-          chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
-          if chain.current then play.run_bar_hooks(true, 1) end  -- the linked order's first letter
-        end)
+        first_slot = next_chain_scene(nil)
+        chain.next_beat = beat + params:get("seq_chain_bars") * SEQ.bar_beats
       end
-      if not chain.current then play.run_bar_hooks(true, 1) end  -- the live order, no link to undo
+      if first_slot then
+        S.lib.mutation.hold_patterns({page = S.constants.UI_PAGES.index.SEQ, section = "pattern"}, function()
+          load_chain_scene(first_slot)
+          play.run_bar_hooks(true, 1)  -- the linked order's first letter
+        end)
+      else
+        play.run_bar_hooks(true, 1)  -- the live order, no link to undo
+      end
     end)
+    if play.transport ~= transport then return end  -- a bar hook stopped or restarted playback
     for voice_idx = 1, NUM_VOICES do M.restart_voice(voice_idx, beat) end
     S.pattern_clock = clock.run(transport_clock, beat)
   end
