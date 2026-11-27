@@ -683,6 +683,18 @@ test("lost successes and failures retain their own send-time settings (#1091)", 
   c.save_result(save_result_value(1, 5)); assert_equal(copies[retry], 62)
 end)
 
+test("a missed supersession failure releases the oldest save for a fifth admission (#1243)", function()
+  local c = load_strata(); finish_startup(c)
+  load_buffer(1, "/tmp/source.wav"); state_report(c, 1, 1, 4)
+  for _ = 1, 4 do assert_true(save_buffer(1)) end
+  for number = 2, 4 do c.save_result(save_result_value(1, number)) end
+  assert_equal(save_buffer(1), false, "the oldest request still holds the window")
+  c.save_result(save_result_value(1, 1, true), true)  -- terminal receipt, lost wake
+  c.clock.run_for(1.01)
+  assert_true(save_buffer(1))
+  assert_equal(c.calls_named("saveBufferRequest")[5].args[5], 5)
+end)
+
 test("four accepted whole saves each copy their own settings across a missing oldest result (#1091)", function()
   local c = load_strata(); finish_startup(c)
   local S = local_value("S")
