@@ -741,17 +741,17 @@ return function(S)
   end
 
   -- 3.6's scene-recalled hooks (S.registry.scene_recalled, read at each
-  -- call), each contained, with (scene_num): once per recall, when the
+  -- call), each contained, with (scene_num, midi_input_port): once per recall, when the
   -- scene becomes current and applied (an instant recall, not a fade's
   -- landing) or at a fade's first step once it ran
   local recalled_errors = {}
-  local function tell_recalled(scene_num)
+  local function tell_recalled(scene_num, midi_input_port)
     for index, hook in ipairs(S.registry.scene_recalled) do
-      S.lib.ui_frame.contained_call(recalled_errors, index, "scene recalled hook " .. index, hook, scene_num)
+      S.lib.ui_frame.contained_call(recalled_errors, index, "scene recalled hook " .. index, hook, scene_num, midi_input_port)
     end
   end
 
-  function recall_scene(scene_num, transition_time)
+  function recall_scene(scene_num, transition_time, midi_input_port)
     if scene_num < 1 or scene_num > NUM_SCENES then return end
     if not S.scenes[scene_num].populated then
       print("scene " .. scene_num .. " is empty")
@@ -830,7 +830,7 @@ return function(S)
             end_scene_transition("failed")
             error(step_error, 0)
           end
-          if step == 1 then tell_recalled(scene_num) end
+          if step == 1 then tell_recalled(scene_num, midi_input_port) end
           S.SCENE_TRANSITION.next_step_due = util.time() + step_time
           -- stopped (a recall superseded it, a cancel): it ends here
           if not handle.sleep(step_time) then return end
@@ -848,7 +848,7 @@ return function(S)
       -- its first step has run and drawn the target as current
     else
       -- Instant recall: it makes the scene current when it is applied
-      recall_scene_instant(scene_num)
+      recall_scene_instant(scene_num, nil, nil, nil, nil, midi_input_port)
     end
   end
 
@@ -867,7 +867,7 @@ return function(S)
   -- scene-recalled hooks already, so they are not told again.
   -- released (3.8, a fade's landing passes the fade's set): the voices a
   -- load let go of during the fade, left out of the landing (skip_voices)
-  function recall_scene_instant(scene_num, scene_data, current_if_failed, landing, released)
+  function recall_scene_instant(scene_num, scene_data, current_if_failed, landing, released, midi_input_port)
     scene_data = scene_data or S.scenes[scene_num].data
     clear_undo()  -- a recall ends the randomize undo (a fade's end too)
     local recalled, recall_error = xpcall(function()
@@ -886,7 +886,7 @@ return function(S)
 
     -- the scene is applied: the grid's scene page lights it in this redraw
     S.current_scene = scene_num
-    if not landing then tell_recalled(scene_num) end
+    if not landing then tell_recalled(scene_num, midi_input_port) end
     update_voice_list()
     request_redraw()  -- freeze and running states, and the end of a fade
     grid_redraw()

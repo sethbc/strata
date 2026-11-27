@@ -2799,4 +2799,25 @@ test("a port the player plays from that another owner holds is marked", function
   assert_equal(in_rows()[1].shown, "midi in 5 (remote grid)", "the input moved to the held port")
 end)
 
+for _, transition in ipairs({0, 1}) do
+  test("a local recall of the pending MIDI scene sends its own program change, fade " .. transition, function()
+    local context, S = started()
+    local device = context.midi.plug(2, "keys")
+    capture_scene(5)
+    params:set("scene_transition_time", transition)
+    params:set("midi_device", 2)
+    params:set("midi_pc_in", 1)
+    params:set("midi_pc_out", 1)
+    params:set("midi_pc_out_port", 2)
+    params:set("quantize_actions", 3)
+    context.midi.send(2, {type = "program_change", val = 4, ch = 1})
+    recall_scene(5, 0)
+    assert_equal(sent(device), "program_change 4 1", "local recall sends immediately")
+    clear(device)
+    context.clock.run_for(3.5)
+    assert_equal(S.current_scene, 5)
+    assert_equal(sent(device), "", "MIDI-originated recall suppresses its own echo")
+  end)
+end
+
 end

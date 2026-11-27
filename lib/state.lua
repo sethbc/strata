@@ -54,7 +54,7 @@ return function()
     freeze_change = {},     -- fn(voice_idx, frozen), run by every v<i>_freeze action
     -- 3.6's (design §0.1), read at each use
     note_hooks = {},        -- {name, started, ended, moved, expressed, heard}, run by lib/notes.lua (heard: lib/midi_in.lua)
-    scene_recalled = {},    -- fn(scene_num), run once per scene recall (lib/scenes.lua)
+    scene_recalled = {},    -- fn(scene_num, midi_input_port), run once per scene recall (lib/scenes.lua)
     silence_change = {},    -- fn(voice_idx, silenced), run as a mute or solo changes silenced(voice)
     note_targets = {},      -- {name, routed, note_on, note_off, express, stop_all, rows, status}
     ii_devices = {},        -- {name, ports, ready, release, param_count, add_params}
