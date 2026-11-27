@@ -2627,6 +2627,7 @@ end)
 -- that side; a waiting freeze (FZ, side 1) only while one shows side 1.
 -- The ticks are the core's own, run by hand, so no other repaint comes in
 test("a waiting letter blinks only on the voices page's side 2, a waiting freeze only on its side 1", function()
+  local context = load_strata(); finish_startup(context)
   local S = local_value("S")
   local core, voices = grid_core(), PAGES().voices
   local function repaints_over(device, ticks)
@@ -2636,9 +2637,6 @@ test("a waiting letter blinks only on the voices page's side 2, a waiting freeze
   end
   local phase = 2 * core.LEVELS.waiting_ticks
   -- a letter waits for its bar while the patterns play
-  local context = load_strata(); finish_startup(context)
-  S = local_value("S")
-  core = grid_core()
   local device = context.grid.plug(1, 16, 8)
   pattern_clock_start()
   S.lib.pattern_letters.switch(2, "B")
