@@ -49,6 +49,8 @@
 
 ## Parameter system
 
+The scenes menu’s `scene_confirm_seconds` sets the SCENES page’s overwrite window (2–20 seconds, default 2). The page reads it when it arms the prompt. PSETs save it.
+
 Every adjustable value is a norns param:
 1. Defined in its `S.registry.params` record with `params:add{}`, run from `init()`.
 2. With an `action` function that updates the engine.

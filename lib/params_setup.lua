@@ -529,6 +529,8 @@ return function(S)
       }
     end
 
+    params:add_number("scene_confirm_seconds", "overwrite confirm (s)", 2, 20, 2)
+
     params:add{
       type = "trigger",
       id = "save_scenes",

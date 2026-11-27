@@ -11,8 +11,8 @@
 -- at once (both, and the arc button, through S.lib.quantize), ALT+K2's
 -- release names the slot (norns'
 -- textentry), ALT+K3 saves (a populated slot asks for a second ALT+K3
--- within 2 s: the hint row shows the page's own prompt meanwhile, and the
--- page animates until it lapses).
+-- within the chosen confirmation time. The hint row shows the page's
+-- prompt, and the page animates until it lapses).
 -- M.move_cursor (S.lib.pages_scenes) moves the cursor for E2 and arc ring 1.
 -- Registers its S.registry.pages record (every field but the arc fields,
 -- which are lib/arc/scenes.lua's) and a menu-close hook for the name entry.
@@ -38,7 +38,6 @@ return function(S)
     cursor_width = 18,           -- the cursor box, from the column edge, around number and box
     fields_y = {48, 55},         -- the field rows' text baselines (two rows in view)
     fields_per_row = 2,          -- a field row's fields, one per column
-    arm_seconds = 2,             -- the second ALT+K3 must come within this
   }
 
   -- The field rows: SCENES_FIELDS' stops, fields_per_row a row
@@ -309,8 +308,8 @@ return function(S)
   S.register_menu_close(function() M.reconcile_name_entry() end)
 
   -- ALT+K3: save the cursor slot. A populated slot needs a second ALT+K3
-  -- within arm_seconds on the same slot while its prompt shows on the hint
-  -- row: a "hints" flash showing on SCENES covers it and leaves the press
+  -- within the chosen interval on the same slot while its prompt shows.
+  -- A "hints" flash showing on SCENES covers it and leaves the press
   -- only arming again; any cursor move disarms. ALT+K2 acts on its release
   -- (scenes_alt_key_release)
   local function scenes_alt_key(n)
@@ -319,7 +318,7 @@ return function(S)
     local state = S.scenes_page
     if S.scenes[slot].populated and not (armed() and S.lib.ui_flash.text("hints") == nil) then
       state.armed_slot = slot
-      state.armed_until = util.time() + SCENES_PAGE.arm_seconds
+      state.armed_until = util.time() + params:get("scene_confirm_seconds")
       request_redraw()
       return
     end
@@ -360,8 +359,7 @@ return function(S)
     local function arm_last_slot()
       populate_all()
       S.cursors.scene = NUM_SCENES
-      S.scenes_page.armed_slot = NUM_SCENES
-      S.scenes_page.armed_until = util.time() + SCENES_PAGE.arm_seconds
+      scenes_alt_key(3)
     end
     table.insert(states, state("armed", arm_last_slot))
     -- the renders draw each state with ALT up: this one holds it
