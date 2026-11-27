@@ -366,6 +366,49 @@ test("write goes to a .part file and replaces the file only when every step work
   assert_equal(saved, false, "an unwritable folder says so"); assert_equal(type(detail), "string")
 end)
 
+test("a PSET save bounds the comparison with the existing side file (#1204)", function()
+  local context = load_strata(); h.finish_startup(context)
+  local base = context.data_dir .. "strata-01"
+  local side = base .. ".macros.data"
+  params:write(base .. ".pset")
+  local expected = file_text(side)
+  local function save(existing, grow)
+    write_text(side, existing)
+    local reads, open = {}, io.open
+    io.open = function(path, mode)
+      local file, why, errno = open(path, mode)
+      if path ~= side or mode ~= "rb" or not file then return file, why, errno end
+      return {
+        seek = function(_, ...) return file:seek(...) end,
+        close = function() return file:close() end,
+        read = function(_, count)
+          reads[#reads + 1] = count
+          if grow then
+            local writer = assert(open(path, "ab"))
+            writer:write("extra bytes")
+            writer:close()
+            grow = false
+          end
+          return file:read(count)
+        end,
+      }
+    end
+    local ok, err = pcall(params.write, params, base .. ".pset")
+    io.open = open
+    assert_true(ok, tostring(err))
+    assert_equal(file_text(side), expected, "the saved side file contains exactly the encoded bytes")
+    return reads
+  end
+  assert_equal(#save(expected .. string.rep("x", 4096)), 0, "no content read when the size differs")
+  for _, grow in ipairs({false, true}) do
+    local reads = save(expected, grow)
+    assert_true(#reads > 0, "matching size is checked for content")
+    for _, count in ipairs(reads) do
+      assert_true(type(count) == "number" and count <= #expected + 1, "every read has a byte limit")
+    end
+  end
+end)
+
 test("a backup never replaces an earlier one", function()
   local context = load_strata()
   local data_files = local_value("S").lib.data_files
