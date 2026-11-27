@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write Strata's two TouchOSC layouts from tools/touchosc/lib/layout.lua.
 
-Run on demand from the repository root (never by the tests):
+Regenerate from the repository root:
 
     python3 tools/touchosc/generate.py
 
@@ -155,14 +155,14 @@ def node(parent, kind, name, frame, color, path, interactive=True):
     return element, props, values, messages
 
 
-def label(parent, text, frame, path):
+def label(parent, text, frame, path, initial=None):
     element, props, values, _ = node(parent, "LABEL", "label " + text, frame, COLORS["label"], path + "/label", interactive=False)
     props.find("property[key='background']/value").text = "0"
     props.find("property[key='outline']/value").text = "0"
     prop(props, "i", "textSize", 14)
     prop(props, "i", "textAlignH", 2)
     prop(props, "s", "font", "0")
-    holder = value(values, "text", text)
+    holder = value(values, "text", initial or text)
     value(values, "touch", "false")
     return holder
 
@@ -170,6 +170,10 @@ def label(parent, text, frame, path):
 def control(parent, spec, cell_w, cell_h, count, path):
     frame = (spec["x"] * cell_w, spec["y"] * cell_h, spec["w"] * cell_w, spec["h"] * cell_h)
     kind = spec["kind"]
+    if kind == "readout":
+        label(parent, spec["label"], frame, path, spec["label"] + " —")
+        count[0] += 1
+        return
     tosc_type = "FADER" if kind == "fader" else "BUTTON"
     element, props, values, messages = node(parent, tosc_type, spec["label"], frame, COLORS[kind], path)
     if tosc_type == "FADER":
@@ -204,8 +208,22 @@ def build(layout):
     name = layout["name"]
     root = ET.Element("lexml", {"version": "3"})
     top, props, values, messages = node(root, "GROUP", name, (0.0, 0.0, width, height), COLORS["background"], name)
-    # Use the same OSC connection as the controls (00001).
-    prop(props, "s", "script", 'function init()\n  sendOSC("%s", {true})\nend' % layout["on_open"])
+    readout = next(spec for page in layout["pages"] for spec in page["controls"] if spec["kind"] == "readout")
+    prop(props, "s", "script", f'''local display
+function init()
+  display = self:findByName("label {readout["label"]}", true)
+  display.values.text = "{readout["label"]} —"
+  sendOSC("{layout["on_open"]}", {{true}})
+end
+
+function onReceiveOSC(message, connections)
+  if not connections[1] or message[1] ~= "{readout["address"]}" then return end
+  local argument = message[2][1]
+  local scene = argument and argument.value
+  if type(scene) == "number" and scene >= 1 and scene <= {readout["max"]} and scene == math.floor(scene) then
+    display.values.text = "{readout["label"]} " .. math.floor(scene)
+  end
+end''')
     children = ET.SubElement(top, "children")
     pager, pager_props, _, _ = node(children, "PAGER", "pages", (0.0, 0.0, width, height), COLORS["background"],
                                     name + "/pages")
@@ -246,14 +264,13 @@ def main():
     for key in ("tablet", "phone"):
         compressed, raw_size, nodes = render(data[key])
         path = OUT_DIR / (data[key]["name"] + ".tosc")
-        controls = (nodes - 2 - len(data[key]["pages"])) // 2
         if check:
             if not path.exists() or path.read_bytes() != compressed:
                 differs.append(str(path.relative_to(ROOT)))
             continue
         path.write_bytes(compressed)
-        print("%s: %d bytes written, %d bytes decompressed, %d nodes (%d controls and as many labels)" % (
-            path.relative_to(ROOT), len(compressed), raw_size, nodes, controls))
+        print("%s: %d bytes written, %d bytes decompressed, %d nodes" % (
+            path.relative_to(ROOT), len(compressed), raw_size, nodes))
     if check:
         if differs:
             sys.exit("generate.py --check: differs from %s: " % LAYOUT.relative_to(ROOT) + ", ".join(differs)
