@@ -1316,6 +1316,23 @@ test("assert_near rejects nonfinite operands and tolerances", function()
   end
 end)
 
+test("assert_near compares integer distances across the full range (#1192)", function()
+  local low, high = math.mininteger, math.maxinteger
+  if not low then return end  -- LuaJIT has only floating-point numbers
+  assert_true(not pcall(assert_near, high, low, 1), "opposite limits passed")
+  assert_true(not pcall(assert_near, low, high, 1), "opposite limits passed in reverse")
+  assert_near(high, high - 1, 1)
+  assert_true(not pcall(assert_near, high, high - 1, 0), "distinct high integers passed")
+  assert_near(low + 1, low, 1)
+  assert_true(not pcall(assert_near, low, low + 1, 0), "distinct low integers passed")
+
+  local half_range = -1.0 * low
+  assert_near(low, 0, half_range)
+  assert_true(not pcall(assert_near, low, 0, high), "distance one above maxinteger passed")
+  assert_true(not pcall(assert_near, low, 1, half_range), "distance one above the float tolerance passed")
+  assert_near(high, low, 2 * half_range)
+end)
+
 -- test/run.lua loads the unit files load_unit_files lists: every
 -- *_test.lua in test/unit, sorted, or those whose name contains the filter
 test("the runner finds unit files and filters them", function()
