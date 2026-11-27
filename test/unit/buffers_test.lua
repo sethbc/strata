@@ -683,6 +683,41 @@ test("lost successes and failures retain their own send-time settings (#1091)", 
   c.save_result(save_result_value(1, 5)); assert_equal(copies[retry], 62)
 end)
 
+test("the device save benchmark reports partial measurements on a receipt timeout (#1276)", function()
+  local c = load_strata(); finish_startup(c)
+  for slot = 1, 2 do
+    load_buffer(slot, c.audio_dir .. "sample.wav"); state_report(c, slot, 1, 4)
+  end
+  local now, probe, lines = 0, nil, {}
+  local previous = function() end
+  local observer = {event = previous, send = function(_, _, args) probe = args end}
+  local env = setmetatable({
+    util = {time = function() return now end}, osc = observer,
+    _norns = {audio_get_xrun_count = function() return now > 0 and 3 or 0 end},
+    print = function(line) lines[#lines + 1] = line end,
+    clock = {run = function(fn) fn() end, sleep = function(dt)
+      if now == 0 then
+        now = dt
+        observer.event("/strata/check/save/pong", probe)
+        c.save_result(save_result_value(1, 1))
+      else
+        now = now + 120  -- the second slot stays pending and its echo is lost
+      end
+    end},
+  }, {__index = _G})
+  local trial = assert(loadfile(h.repo_root .. "/test/hardware/save_latency.lua", "t", env))()
+  local ok, why = pcall(trial, 2)
+  assert_true(not ok and tostring(why):find("receipt timed out", 1, true))
+  assert_equal(observer.event, previous, "the script's OSC handler is restored")
+  local output = table.concat(lines, "\n")
+  local saves = c.calls_named("saveBufferRequest")
+  for _, measurement in ipairs({"xruns=3", "sent=2 lost=1", "p99_ms=10.00", "osc_rtt_ms=10.00",
+    "slot=1 receipt_ms=10.00 path=" .. saves[1].args[2],
+    "slot=2 receipt=pending waited_ms=120010.00 path=" .. saves[2].args[2]}) do
+    assert_true(output:find(measurement, 1, true), "timeout reports " .. measurement)
+  end
+end)
+
 test("a missed supersession failure releases the oldest save for a fifth admission (#1243)", function()
   local c = load_strata(); finish_startup(c)
   load_buffer(1, "/tmp/source.wav"); state_report(c, 1, 1, 4)
