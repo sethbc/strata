@@ -228,33 +228,43 @@ return function(S)
     return type(path) == "string" and path ~= "" and path ~= "-" and path:sub(-1) ~= "/"
   end
 
-  -- Show path in the slot's buf<n>_file param without running its action.
-  -- norns' file param runs the action only when the path changes, so a
-  -- record or clear puts it back at its starting folder (_path.audio, which
-  -- loads nothing): picking the same file again then loads it.
-  -- Each new path makes norns list its folder (File:loaddir: util.scandir,
-  -- a blocking ls with the folder between double quotes, #480). A file's
-  -- folder is listed, since PARAMETERS' E3 steps through it from the file.
-  -- A folder itself (the audio folder: a clear, a take, a dub's end) names
-  -- no file to step from: it is shown as File:set would leave it, without
-  -- the listing (the folder PARAMETERS' file selector opens in, nothing for
-  -- E3 to step through). A folder the shell still reads inside double
-  -- quotes ($, `, \ or ") never enters the param at all (#559): norns
-  -- would run what its name says when it lists it (File:loaddir), when
-  -- PARAMETERS' file selector opens in the param's dir (fs.pushd) and when
-  -- a PSET that saved it is read. The param shows an empty slot's value
-  -- (the audio folder) instead; the slot's file is in S.buffers and
-  -- buffers.data, which restores it
-  function set_buffer_file_param(slot, path)
-    local id = "buf" .. slot .. "_file"
-    local folder = type(path) == "string" and path:match("^(.*/)") or nil
-    if folder ~= nil and folder:find('["$`\\]') then path, folder = _path.audio, _path.audio end
-    if folder ~= nil and folder == path then
-      local param = params:lookup_param(id)
-      param.path, param.dir, param.dirfiles, param.dirpos = path, folder, nil, nil
-      return
+  -- PSET reads and native OSC set the File object before its action runs.
+  -- Keep the native File's shape for PARAMETERS' picker and E3 navigation,
+  -- but build the list through the same quoted directory reader as BUFFER.
+  local function set_file_selection(param, path, silent)
+    if type(path) ~= "string" or path:find("[%z\r\n]") or path == param.path then return end
+    local folder = path:match("^(.*/)")
+    local shown = path
+    -- PARAMETERS also passes dir to norns' own file browser, which lists
+    -- it with double quotes. Keep such a folder out of both dir and PSETs.
+    if folder and folder:find('["$`\\]') then shown, folder = _path.audio, _path.audio end
+    param.path, param.dir, param.dirfiles, param.dirpos = shown, folder, nil, nil
+    if folder and shown ~= folder then
+      local name = shown:match("[^/]*$")
+      param.dirfiles = {}
+      for _, entry in ipairs(S.lib.files.list_folder(folder, true) or {}) do
+        if not entry:find("/", 1, true) then
+          param.dirfiles[#param.dirfiles + 1] = entry
+          if entry == name then param.dirpos = #param.dirfiles end
+        end
+      end
     end
-    params:set(id, path, true)
+    if not silent then param.action(path) end
+  end
+
+  function M.add_file_param(slot)
+    local id = "buf" .. slot .. "_file"
+    -- File.new lists its initial path. Install the setter before selecting
+    -- the audio folder so creation also needs no host directory scan.
+    params:add_file(id, "buffer " .. slot .. " file", "-")
+    local param = params:lookup_param(id)
+    param.set = set_file_selection
+    param:set(_path.audio, true)
+    params:set_action(id, function(path) load_buffer(slot, path) end)
+  end
+
+  function set_buffer_file_param(slot, path)
+    params:set("buf" .. slot .. "_file", path, true)
   end
 
   -- An empty slot's shown state and file param, for buffer_load_failed.

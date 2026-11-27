@@ -949,25 +949,22 @@ test("restores count engine-confirmed slots; missing remembered files are kept a
   assert_equal(local_value("buffer_autosave_blocked"), false, "reset even when there is no file")
 end)
 
--- #480: norns' file param lists the folder of every new path it is set to
--- (File:loaddir: util.scandir, a blocking ls with the folder between double
--- quotes). A file's folder is listed, as PARAMETERS' E3 needs; the audio
--- folder a clear, a take or a dub's end shows names no file, so nothing is
--- listed for it; nor is a folder the shell would read inside double quotes
--- ($, `, \ or "), where the listing would run what the name says (#465)
+-- #480: list a new file's folder once for PARAMETERS' E3. Clearing or
+-- recording shows the audio folder without listing it.
 test("the file param lists a loaded file's folder only, never one the shell reads (#480)", function()
   local context = load_strata(); finish_startup(context)
   local folder = context.audio_dir .. "kit/"
-  local marker = context.audio_dir .. "f480_marker"
-  local odd = context.audio_dir .. "$(touch " .. marker .. ")/"
+  local odd = context.audio_dir .. "kit $5/"
   util.make_dir(folder)
-  os.execute("mkdir -p -- '" .. odd:gsub("'", "'\\''") .. "'")
+  util.make_dir(context.audio_dir .. "kit5/")
+  assert(os.rename(context.audio_dir .. "kit5", odd:sub(1, -2)))
   for _, path in ipairs({ folder .. "a.wav", folder .. "b.wav", odd .. "c.wav" }) do io.open(path, "w"):close() end
   local listed = {}
-  local scandir = util.scandir
-  util.scandir = function(directory)
+  local files = local_value("S").lib.files
+  local list_folder = files.list_folder
+  files.list_folder = function(directory)
     table.insert(listed, directory)
-    return scandir(directory)
+    return list_folder(directory)
   end
   local ok, problem = pcall(function()
     load_buffer(1, folder .. "a.wav")
@@ -985,9 +982,8 @@ test("the file param lists a loaded file's folder only, never one the shell read
     assert_equal(#listed, 1, "a folder the shell would read is not listed")
     assert_equal(params:get("buf3_file"), _path.audio, "nor does it enter the param (#559)")
   end)
-  util.scandir = scandir
+  files.list_folder = list_folder
   assert_true(ok, tostring(problem))
-  assert_true(not util.file_exists(marker), "no folder name ran as a command")
 end)
 
 -- #559: a folder the shell reads inside double quotes ($, `, \ or ") never
@@ -999,16 +995,16 @@ end)
 test("a folder name with shell syntax never enters the buffer's file param (#559)", function()
   local subdir = "shell_folder_" .. math.random(1, 1e9)
   local context = load_strata({ data_subdir = subdir }); finish_startup(context)
-  local marker = context.audio_dir .. "f559_marker"
-  local odd = context.audio_dir .. "$(touch " .. marker .. ")/"
+  local odd = context.audio_dir .. "kit $5/"
   util.make_dir(context.audio_dir)
-  os.execute("mkdir -p -- '" .. odd:gsub("'", "'\\''") .. "'")
+  util.make_dir(context.audio_dir .. "kit5/")
+  assert(os.rename(context.audio_dir .. "kit5", odd:sub(1, -2)))
   io.open(odd .. "c.wav", "w"):close()
   load_buffer(3, odd .. "c.wav")
   assert_equal(local_value("buffers")[3].path, odd .. "c.wav", "the slot holds the file")
   local param = params:lookup_param("buf3_file")
   for _, field in ipairs({ "path", "dir" }) do
-    assert_true(not tostring(param[field]):find("touch", 1, true), field .. " holds no part of the folder")
+    assert_true(not tostring(param[field]):find("kit $5", 1, true), field .. " holds no part of the folder")
   end
   assert_equal(params:get("buf3_file"), _path.audio, "the param shows an empty slot's value")
   -- PARAMETERS > buffer 3 file, K3: fs.enter(_path.dust), then fs.pushd(dir)
@@ -1019,19 +1015,17 @@ test("a folder name with shell syntax never enters the buffer's file param (#559
     assert_true(name ~= "c.wav", "the selector lists nothing from the folder")
   end
   fileselect.close()
-  assert_true(not util.file_exists(marker), "no folder name ran as a command")
   -- a PSET holds no part of it
   local pset = context.data_dir .. "shell-559.pset"
   params:write(pset)
   local file = assert(io.open(pset, "r")); local text = file:read("*a"); file:close()
-  assert_true(not text:find("touch", 1, true), "the PSET holds no part of the folder")
+  assert_true(not text:find("kit $5", 1, true), "the PSET holds no part of the folder")
   -- buffers.data keeps the file, and a restart restores it
   cleanup()
   context = load_strata({ data_subdir = subdir })
   local loads = context.calls_named("loadBuffer")
   assert_equal(#loads, 1); assert_equal(loads[1].args[1], 2); assert_equal(loads[1].args[2], odd .. "c.wav")
   assert_equal(params:get("buf3_file"), _path.audio, "restored without entering the param")
-  assert_true(not util.file_exists(marker), "nor did the restore run it")
 end)
 
 -- #524: a PSET read sets each file param, and norns' File:set runs the

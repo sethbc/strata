@@ -52,8 +52,10 @@ return function(S)
   -- listed nothing and $(...) in a name ran as a command (#465). Here the
   -- folder is one single-quoted word after --: no name is read as a
   -- command or an option
-  function M.list_folder(folder)
-    if type(folder) ~= "string" or folder:sub(1, 1) ~= "/" or folder:find("\0", 1, true)
+  -- A file parameter can also step through a relative folder stored in a
+  -- PSET. Other callers require an absolute library folder.
+  function M.list_folder(folder, allow_relative)
+    if type(folder) ~= "string" or (not allow_relative and folder:sub(1, 1) ~= "/") or folder:find("\0", 1, true)
       or not util.file_exists(folder) then
       return nil
     end
