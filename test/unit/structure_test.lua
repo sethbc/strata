@@ -3105,10 +3105,10 @@ end
 test("the engine runner resolves a relative norns checkout before starting sclang (#1257)", function()
   local checkout = runner_checkout("relative-norns")
   os.execute("mkdir -p " .. h.shell_quote(checkout .. "/norns/sc/core"))
-  for i, norns_dir in ipairs({ checkout .. "/norns", "./norns" }) do
+  for i, norns_dir in ipairs({ checkout .. "/norns", "./norns", "norns" }) do
     local output = run_fake_runner("norns-path-" .. i, { checkout = checkout, norns_dir = norns_dir,
-      environment = "STRATA_ENGINE_CHECK_AREAS=structure", body = function()
-        return { [[core=$(awk '/\/sc\/core$/ { sub(/^ *- /, ""); print }' "$2")]],
+      environment = "CDPATH=. STRATA_ENGINE_CHECK_AREAS=structure", body = function()
+        return { [[core=$(awk '/^ *- .*\/sc\/core$/ { sub(/^ *- /, ""); print }' "$2")]],
           [[if [ -d "$core" ]; then echo "ENGINE CHECK PASSED"; else echo "FAIL missing $core"; exit 1; fi]] }
       end })
     assert_true(output:find("exit=0", 1, true), output)
@@ -3694,6 +3694,17 @@ test("the Docker runner flags overlapping layouts in unmarked logs (#1189)", fun
   h.remove_tree(root)
 end)
 
+test("the Docker runner resolves relative checkouts and log folders with CDPATH set (#1257)", function()
+  local root = data_root .. "sc313-cdpath"
+  local mount = h.shell_quote(root .. "/norns:/norns:ro")
+  fake_313_checkout(root, { "structure" }, '    for arg do [ "$arg" != ' .. mount .. ' ] || exit 0; done; exit 1')
+  local output = run_fake_313(root, "-o logs norns", "CDPATH=.")
+  assert_true(output:find("exit=0\n", 1, true), output)
+  local replay = run_fake_313(root, "-c -o logs", "CDPATH=.")
+  assert_true(replay:find("run 1: passed\n", 1, true) and replay:find("exit=0\n", 1, true), replay)
+  h.remove_tree(root)
+end)
+
 test("the 3.13 script's -n and -j require positive decimal counts (#1084)", function()
   local root = data_root .. "sc313-counts"
   write_shard_fixtures(root, {{1, 0, "ENGINE CHECK PASSED\n"}})
@@ -3823,6 +3834,7 @@ local COLLECTOR_LINE = "gr" .. "ey count error"
 test("the Docker runner checks the log for failures even at status zero (#1193)", function()
   local root = data_root .. "sc313-zero-status"
   local fail = "FAIL waveform: a 300 s load"
+  local server_error = "*** ERROR: SynthDef strataGrainRing not found"
   local startup = "ENGINE CHECK FAILED: JACK did not start"
   local cap = "strata cgroup oom_kill: 1"
   local signal = "sclang ended on signal 11 after 9 s"
@@ -3830,6 +3842,7 @@ test("the Docker runner checks the log for failures even at status zero (#1193)"
     { line = "ok a regression probe expects " .. signal, verdict = "passed", status = 0 },
     { line = "ok a regression probe expects " .. startup, verdict = "passed", status = 0 },
     { line = fail, verdict = "failed (" .. fail .. ")", status = 1 },
+    { line = server_error, verdict = "failed (" .. server_error .. ")", status = 1 },
     { line = "ERROR: check failed", verdict = "failed (ERROR: check failed)", status = 1 },
     { line = "Strata invariant broken: slot state", verdict = "failed (Strata invariant broken: slot state)", status = 1 },
     { line = startup, verdict = "failed (" .. startup .. ")", status = 1 },
@@ -3850,6 +3863,7 @@ test("the native engine runner requires a whole pass line and no failure diagnos
   for _, case in ipairs({
     { "clean", "ok   a check", "ENGINE CHECK PASSED", 0 },
     { "fail", "FAIL waveform: a 300 s load", "ENGINE CHECK PASSED", 1 },
+    { "server", "*** ERROR: SynthDef strataGrainRing not found", "ENGINE CHECK PASSED", 1 },
     { "startup", "ENGINE CHECK FAILED: JACK did not start", "ENGINE CHECK PASSED", 1 },
     { "quoted", "ok   a check", "ok   expected ENGINE CHECK PASSED", 1 },
   }) do

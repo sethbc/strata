@@ -37,8 +37,8 @@
 #   scsynth needs a running JACK server on Linux (see README, Development).
 set -eu
 
-script_dir=$(cd "$(dirname "$0")" && pwd)
-repo_root=$(cd "$script_dir/.." && pwd)
+script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 norns_dir=${1:-${NORNS_DIR:-$HOME/src/norns}}
 mac_sclang=/Applications/SuperCollider.app/Contents/MacOS/sclang
 if [ -n "${SCLANG:-}" ]; then
@@ -63,7 +63,7 @@ if [ ! -d "$norns_dir/sc/core" ]; then
   exit 2
 fi
 
-norns_dir=$(cd "$norns_dir" && pwd)
+norns_dir=$(CDPATH= cd -- "$norns_dir" && pwd)
 
 case ${STRATA_ENGINE_CHECK_ONE_SCLANG:-} in
   ''|1) ;;
@@ -362,7 +362,7 @@ grep -E "^(ok |FAIL|ERROR|WARNING|\*\*\* ERROR|ENGINE CHECK|compiled|area |batch
 # running after its stop (exit 3: a full run starts no shard after it).
 # lifecycle.scd checks real warnings against the quoted expression below.
 if grep -Fxq "ENGINE CHECK PASSED" "$output" && [ "$status" -eq 0 ] && [ -z "$server_left" ] \
-  && ! grep -qE "^FAIL|^ENGINE CHECK FAILED:|^ERROR|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error" "$output"; then
+  && ! grep -qE "^FAIL|^ENGINE CHECK FAILED:|^ERROR|^[*]{3} ERROR:|^WARNING|FAILURE|alloc failed|Too many grains|Strata invariant broken|gr[e]y count error" "$output"; then
   exit 0
 fi
 echo "--- full sclang output ---"

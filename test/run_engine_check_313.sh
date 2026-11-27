@@ -64,7 +64,7 @@
 # collector failure (the log holds the collector's count-error lines, the
 # collector failure of #211, whatever else it shows and at exit status 0
 # too; sclang spells the word with an e, so the pattern is written gr[e]y
-# for the US spelling check); failed (any FAIL, ERROR or "Strata invariant
+# for the US spelling check); failed (any FAIL, ERROR, *** ERROR: or "Strata invariant
 # broken" line, whatever ended it); capped (the memory cap killed a process
 # in the container: oom_kill above 0, #544); killed (exit 137 with no cap
 # kill: stopped from outside); crashed (a signal with none of those: #131);
@@ -80,8 +80,8 @@
 # only when every run passed.
 set -eu
 
-script_dir=$(cd "$(dirname "$0")" && pwd)
-repo_root=$(cd "$script_dir/.." && pwd)
+script_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 workflow=$repo_root/.github/workflows/test.yml
 usage="usage: $0 [-s version] [-n runs] [-j parallel] [-o log_dir] [-1] [-l] [-c] [path/to/norns]"
 
@@ -210,7 +210,7 @@ launch_runs() {
     echo "norns source not found at $norns_dir (pass it as the last argument)" >&2
     exit 2
   fi
-  norns_dir=$(cd "$norns_dir" && pwd)
+  norns_dir=$(CDPATH= cd -- "$norns_dir" && pwd)
   if ! command -v docker > /dev/null 2>&1; then
     echo "docker is not on PATH" >&2
     exit 2
@@ -321,12 +321,12 @@ if [ -n "$classify_only" ]; then
     echo "-c needs -o <the folder holding run-<i>.log and run-<i>.status, or run-<i>-<shard>.log and .status>" >&2
     exit 2
   fi
-  log_dir=$(cd "$log_dir" && pwd)
+  log_dir=$(CDPATH= cd -- "$log_dir" && pwd)
 elif [ -z "$log_dir" ]; then
   log_dir=$(mktemp -d "${TMPDIR:-/tmp}/strata-$version_name-logs.XXXXXX")
 else
   mkdir -p -- "$log_dir"
-  log_dir=$(cd "$log_dir" && pwd)
+  log_dir=$(CDPATH= cd -- "$log_dir" && pwd)
 fi
 echo "logs: $log_dir"
 
@@ -359,7 +359,7 @@ classify() {
   signal=$(grep -m 1 -oE "^ENGINE CHECK FAILED: sclang ended on signal [0-9]+ after [0-9]+ s" "$1" 2> /dev/null || true)
   signal=${signal#ENGINE CHECK FAILED: }
   engine_failure=$(grep -m 1 "^ENGINE CHECK FAILED:" "$1" 2> /dev/null || true)
-  failure=$(grep -m 1 -E "^FAIL|^ERROR|Strata invariant broken" "$1" 2> /dev/null || true)
+  failure=$(grep -m 1 -E "^FAIL|^ERROR|^[*]{3} ERROR:|Strata invariant broken" "$1" 2> /dev/null || true)
   cap_note=
   grep -qE "^strata cgroup oom_kill: [1-9]" "$1" 2> /dev/null && cap_note="; the memory cap killed a process (#544)"
   detail=
