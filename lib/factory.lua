@@ -171,7 +171,7 @@ return function(S)
   -- The marker: {pending, loaded}, and whether a file was found (an
   -- unusable one is set aside, one line, and counts as found, with nothing
   -- loaded and nothing pending: a damaged marker never loads a set over a
-  -- player)
+  -- player). If the backup fails, nil means the original must stay in place.
   local function read_marker()
     local marker, problem, detail = S.lib.data_files.read(marker_path())
     if marker == nil and problem == "missing" then return {loaded = {}}, false end
@@ -180,7 +180,8 @@ return function(S)
       local backup, failure = S.lib.data_files.set_aside(marker_path(), FACTORY.backup_suffix)
       print("error loading factory file " .. marker_path() .. ": " .. why .. "; "
         .. (backup and ("kept as " .. backup) or ("not moved: " .. tostring(failure))))
-      return {loaded = {}, unusable = true}, true
+      if not backup then return nil, true end
+      return {loaded = {}, backed_up = true}, true
     end
     return {pending = marker.pending, loaded = marker.loaded}, true
   end
@@ -397,9 +398,11 @@ return function(S)
   -- cleared), the name flashed
   local function finish(set)
     local marker = read_marker()
-    marker.loaded[set.key] = set.version
-    marker.pending = nil
-    write_marker(marker)
+    if marker then
+      marker.loaded[set.key] = set.version
+      marker.pending = nil
+      write_marker(marker)
+    end
     header_flash(set.name)
     request_redraw()
     grid_redraw()
@@ -493,12 +496,13 @@ return function(S)
     local index = read_index()
     if not index then return end
     local marker, found = read_marker()
+    if not marker then return end
     if marker.pending and find_set(index, marker.pending) then
       if not M.load(marker.pending) then write_marker({loaded = marker.loaded}) end
       return
     end
     if found then
-      if marker.unusable then write_marker({loaded = {}}) end
+      if marker.backed_up then write_marker(marker) end
       return
     end
     if S.scene_file.start_outcome == "missing" and index.first_run then
