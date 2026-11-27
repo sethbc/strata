@@ -64,9 +64,10 @@ return function(S)
   -- "canceled" report until the engine's next report of the slot's length:
   -- audio means the take had not prepared the slot, which is as it was, so
   -- buffer_state_changed puts it back; 0 s drops it (nil otherwise).
-  -- take_unsaved: the engine could not write the newest recording's scratch
-  -- take (takeWriteFailed) before the take settled, so it settles with no
-  -- path (false otherwise; a load, clear or recording resets it).
+  -- take_number identifies audio made by this session's recording, even in
+  -- a load's rollback state. A file loaded from the scratch path has none.
+  -- take_unsaved: this take has no scratch file. A failure before it
+  -- settles leaves it with no path when its audio arrives.
   -- awaiting_zero: a load sent over audio waits for the 0 s the engine
   -- reports when the load takes effect; until then a report of audio is
   -- the old audio's (one sent before the load reached the engine) and
@@ -200,6 +201,7 @@ return function(S)
     buffer.confirm_since = nil
     buffer.awaiting_zero = false
     if is_take then
+      buffer.take_number = buffer.records_sent
       S.lib.record.end_take(slot)
       buffer.finishing = false
       buffer.recording = false
@@ -257,8 +259,9 @@ return function(S)
   -- An empty slot's shown state and file param, for buffer_load_failed.
   -- settled_empty is "take" after a canceled recording whose take may have
   -- completed (a later report of audio adopts it), else false.
-  function empty_buffer_state(settled_empty)
-    return {name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
+  function empty_buffer_state(settled_empty, take_number, take_unsaved)
+    return {take_number = take_number, take_unsaved = take_unsaved,
+      name = "empty", loaded = false, restoring = false, settled_empty = settled_empty,
       confirm_since = nil, path = nil, missing_path = nil, file_param = _path.audio, checking_from = nil,
       checking_load = nil, start = 0, sent_start = 0, sample_rate = nil, file_seconds = nil}
   end
@@ -283,9 +286,10 @@ return function(S)
     local playable = record_state ~= nil and record_state.kind == "playable"
     if (buffer.recording or buffer.finishing) and not playable then
       if record_state and record_state.phase == "armed" and record_state.previous then
-        return {after_cancel = true, kept = record_state.previous}
+        return {after_cancel = true, kept = record_state.previous,
+          take_number = buffer.records_sent, take_unsaved = buffer.take_unsaved}
       end
-      return empty_buffer_state("take")
+      return empty_buffer_state("take", buffer.records_sent, buffer.take_unsaved)
     end
     return M.shown_state(slot)
   end
@@ -293,7 +297,10 @@ return function(S)
   -- The slot's shown state and file param, as apply_buffer_state takes it
   function M.shown_state(slot)
     local buffer = S.buffers[slot]
-    return {name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
+    -- While a dub records, its unsaved flag belongs to the dub in progress.
+    -- A rejected load can give back the file the dub was playing.
+    return {take_number = buffer.take_number, take_unsaved = not buffer.recording and buffer.take_unsaved,
+      name = buffer.name, loaded = buffer.loaded, restoring = buffer.restoring,
       settled_empty = buffer.settled_empty, confirm_since = buffer.confirm_since, path = buffer.path,
       missing_path = buffer.missing_path, file_param = params:get("buf" .. slot .. "_file"),
       checking_from = buffer.checking_from, checking_load = buffer.checking_load,
@@ -308,7 +315,7 @@ return function(S)
   local function resolve_previous(slot, previous)
     if not previous.after_cancel then return previous end
     if S.buffers[slot].seconds > 0 then return previous.kept end
-    return empty_buffer_state("take")
+    return empty_buffer_state("take", previous.take_number, previous.take_unsaved)
   end
 
   -- What a replace take replaces, put back if it is canceled before the
@@ -335,6 +342,7 @@ return function(S)
   -- including its file param, silently
   local function apply_buffer_state(slot, state)
     local buffer = S.buffers[slot]
+    buffer.take_number, buffer.take_unsaved = state.take_number, state.take_unsaved or false
     buffer.name = state.name
     buffer.loaded = state.loaded
     buffer.restoring = state.restoring
@@ -534,7 +542,7 @@ return function(S)
     buffer.restoring = false
     buffer.settled_empty = false
     buffer.kept_state = nil
-    buffer.take_unsaved = false
+    buffer.take_number, buffer.take_unsaved = nil, false
     buffer.confirm_since = util.time()
     buffer.path = path
     buffer.missing_path = nil
@@ -570,7 +578,7 @@ return function(S)
     buffer.restoring = false
     buffer.settled_empty = false
     buffer.kept_state = nil
-    buffer.take_unsaved = false
+    buffer.take_number, buffer.take_unsaved = nil, false
     buffer.awaiting_zero = false
     buffer.seconds = 0
     buffer.confirm_since = nil
@@ -849,15 +857,20 @@ return function(S)
     sweep_save_results(math.floor(value % NUM_BUFFERS) + 1)
   end
 
+  -- A recording and an explicit load can name the same scratch WAV. Only
+  -- the recording that made the RAM audio owns its write result.
+  local function forget_take_path(state, number)
+    if not state or state.take_number ~= number or state.take_unsaved then return false end
+    state.path, state.take_unsaved = nil, true
+    return true
+  end
+
   -- takeWriteFailed poll (#312): the engine could not write the scratch
   -- take of one of the slot's recordings (a full card, a folder it cannot
   -- make). value = record number * NUM_BUFFERS + slot index; the engine and
   -- record_buffer count a slot's recordings alike, from 1 (records_sent).
-  -- Only the slot's newest recording acts, and only while the slot still
-  -- holds its take: the take stays in the buffer and plays, but no file
-  -- holds it, so its path is forgotten (now, or when the take settles:
-  -- take_unsaved) and buffers.data never names the file of an older take
-  -- for it. A loaded file, a clear or a newer recording since: nothing.
+  -- Match the recording that owns each copy of the RAM audio. An armed
+  -- recording can still be canceled, giving an older take back.
   local function take_write_failed(value)
     if type(value) ~= "number" or value ~= value or value < 0 or value == math.huge
       or value ~= math.floor(value) then return end
@@ -865,16 +878,26 @@ return function(S)
     local number = math.floor(value / NUM_BUFFERS)
     if not valid_buffer_slot(slot) then return end
     local buffer = S.buffers[slot]
-    if number < 1 or number ~= buffer.records_sent then return end
-    -- (while the take has not settled, or settled empty, path is still what
-    -- the slot held before it: the take settles with no path instead)
+    if number < 1 or number > buffer.records_sent then return end
+    local active = S.lib.record.state(slot)
+    if active then forget_take_path(active.previous, number) end
+    forget_take_path(buffer.kept_state, number)
+    for _, load in ipairs(buffer.pending_loads) do
+      forget_take_path(load.previous, number)
+      forget_take_path(load.previous.kept, number)
+    end
     if buffer.recording then
+      if number ~= buffer.records_sent then
+        -- The new recording owns take_unsaved. It may still display the
+        -- previous recording's path until it ends.
+        if buffer.take_number == number and buffer.path then
+          buffer.path = nil
+          buffer_display_changed()
+        end
+        return
+      end
       buffer.take_unsaved = true
-    elseif buffer.path == scratch_take_path(slot) then
-      buffer.path = nil
-    elseif buffer.settled_empty == "take" then
-      buffer.take_unsaved = true
-    else
+    elseif not forget_take_path(buffer, number) then
       return
     end
     print("buffer " .. slot .. ": cannot write its take to " .. scratch_take_path(slot)

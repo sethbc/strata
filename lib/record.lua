@@ -219,6 +219,7 @@ return function(S)
     takes[slot] = nil
     buffer.recording = false
     buffer.name = "take " .. slot
+    buffer.take_number = buffer.records_sent
     buffer.path = (not buffer.take_unsaved) and scratch_take_path(slot) or nil
     -- the take is the scratch file at the server rate, read from its start
     buffer.start, buffer.sent_start, buffer.sample_rate, buffer.file_seconds = 0, 0, nil, nil
@@ -247,6 +248,7 @@ return function(S)
       -- after this one) shows audio: the take had not prepared the slot,
       -- and buffer_state_changed puts back what it replaced
       buffer.name, buffer.path, buffer.loaded, buffer.seconds = "empty", nil, false, 0
+      buffer.take_number = nil
       buffer.settled_empty = false
       buffer.kept_state = take.previous
       -- 0 s until that report: no mark of the replaced audio stays (#976;
