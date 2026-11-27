@@ -93,9 +93,9 @@ local function assert_equal(actual, expected, message)
 end
 
 local function assert_near(actual, expected, tolerance, message)
-  if type(actual) ~= "number" or math.abs(actual - expected) > (tolerance or 1e-9) then
-    fail(string.format("%s: expected %s, got %s", message or "values differ", tostring(expected), tostring(actual)), 2)
-  end
+  tolerance = tolerance or 1e-9
+  if type(actual) == "number" and tolerance < math.huge and math.abs(actual - expected) <= tolerance then return end
+  fail(string.format("%s: expected %s, got %s", message or "values differ", tostring(expected), tostring(actual)), 2)
 end
 
 -- Load strata.lua (or options.source, a patched copy of it) into fresh

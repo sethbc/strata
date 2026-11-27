@@ -1298,6 +1298,24 @@ test("stub util.time, clock.get_tempo and clock.get_beats return floats, as on a
   assert_equal(number_type(clock.get_beats()), "float", "the beat is a float")
 end)
 
+test("assert_near compares finite values within an inclusive tolerance", function()
+  assert_near(1, 1, 0)
+  assert_near(0.75, 1, 0.25)
+  assert_near(1e-10, 0)
+  local passed, message = pcall(assert_near, 1.5, 1, 0.25, "sample")
+  assert_true(not passed, "a value outside the tolerance passed")
+  assert_true(message:find("sample: expected 1, got 1.5", 1, true), message)
+end)
+
+test("assert_near rejects nonfinite operands and tolerances", function()
+  for _, value in ipairs({ 0 / 0, math.huge, -math.huge }) do
+    assert_true(not pcall(assert_near, value, 1, 0.01), "actual " .. tostring(value))
+    assert_true(not pcall(assert_near, 1, value, 0.01), "expected " .. tostring(value))
+    assert_true(not pcall(assert_near, value, value, 0), "both " .. tostring(value))
+    assert_true(not pcall(assert_near, 1, 1, value), "tolerance " .. tostring(value))
+  end
+end)
+
 -- test/run.lua loads the unit files load_unit_files lists: every
 -- *_test.lua in test/unit, sorted, or those whose name contains the filter
 test("the runner finds unit files and filters them", function()
