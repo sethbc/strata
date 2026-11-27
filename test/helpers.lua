@@ -1235,10 +1235,11 @@ end
 local function watch_writes(part, fail)
   local real_open, opened = io.open, {}
   io.open = function(name, mode)
-    local file, problem = real_open(name, mode)
-    if not file or not tostring(mode):find("w") then return file, problem end
+    if not tostring(mode):find("w") then return real_open(name, mode) end
+    local file, problem, errno = real_open(name, mode)
+    if not file then return nil, problem, errno end
     table.insert(opened, name)
-    if fail == nil or not name:find(part, 1, true) then return file, problem end
+    if fail == nil or not name:find(part, 1, true) then return file end
     local written, proxy = 0, {}
     function proxy:write(text)
       if fail.at == "write" and written + #text > fail.after then

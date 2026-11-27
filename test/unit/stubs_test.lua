@@ -47,6 +47,16 @@ local function stub_state_source(extra_registry)
     .. " register_voice_type = function() end } end"
 end
 
+test("watch_writes preserves errors opening missing files for reading and writing", function()
+  local path = data_root .. "missing-watch-writes-folder/file"
+  local restore = h.watch_writes(".part", {at = "write", after = 0})
+  local _, read_problem, read_errno = io.open(path, "rb")
+  local _, write_problem, write_errno = io.open(path, "wb")
+  restore()
+  assert_equal(read_errno, 2, read_problem)
+  assert_equal(write_errno, 2, write_problem)
+end)
+
 test("each load gets its own data directory, even after the same random seed (#50)", function()
   math.randomseed(1); local first = load_strata()
   math.randomseed(1); local second = load_strata()
