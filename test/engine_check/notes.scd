@@ -1695,6 +1695,16 @@ checkRestartPitches = {
     switchTo.(0);
     record.("then to the synth source", \freq, freqs, 0.01);
     h.stopAllVoices;
+    // The root changes while the held notes are voice synths. A source
+    // switch back to a rate-based source must use that destination's root.
+    startBufferVoice.(voice);
+    command.(\setGrainParam, voice, \rootNote, 48.0);
+    playChord.(pitches.collect({ arg pitch; 2 ** ((pitch - 48) / 12) }));
+    switchTo.(0);
+    command.(\setGrainParam, voice, \rootNote, 60.0);
+    switchTo.(engine.inputSource);
+    record.("a keyed buffer chord switched through synth to input (#1246)", \pitchShift, absolute);
+    h.stopAllVoices;
     results.do({ arg each; report.(each[0]) });
 };
 

@@ -475,6 +475,9 @@ test("the notes model's held buffer and input notes follow a moved root", functi
   call("setGrainParam", 0, "rootNote", 69)
   model:feed(calls)
   assert_equal(model.counts.rerooted, 2, "the same root: nothing re-derived")
+  call("setGrainSource", 2, input)
+  model:feed(calls)
+  assert_near(model.voices[2].extra[1].rate, 2 ^ (-5 / 12), 1e-9, "restart on input uses the root set while on synth")
   assert_equal(#model.errors, 0, "nothing refused")
 end)
 
